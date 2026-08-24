@@ -18,6 +18,40 @@ import type {
 
 const API_PREFIX = '/api/grimmlink/v1';
 
+type GrimmoryShelfBookResponse = Partial<GrimmLinkShelfBook> & {
+  fileName?: unknown;
+  originalFileName?: unknown;
+  fileFormat?: unknown;
+  fileSize?: unknown;
+  fileSizeKb?: unknown;
+  extension?: unknown;
+};
+
+const nonEmptyString = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+/** Normalize the field names used by Grimmory's shelf-book DTO to Readest's provider model. */
+const normalizeShelfBook = (value: GrimmoryShelfBookResponse): GrimmLinkShelfBook | null => {
+  if (!Number.isFinite(value.bookId) || !nonEmptyString(value.bookHash)) return null;
+  const extension = nonEmptyString(value.extension);
+  const filename = nonEmptyString(value.filename)
+    ?? nonEmptyString(value.fileName)
+    ?? nonEmptyString(value.originalFileName)
+    ?? (extension ? `book-${value.bookId}.${extension}` : `book-${value.bookId}`);
+  const fileSize = Number.isFinite(value.fileSize) ? Number(value.fileSize)
+    : Number.isFinite(value.fileSizeKb) ? Number(value.fileSizeKb) * 1024
+      : undefined;
+  return {
+    bookId: value.bookId!,
+    bookHash: nonEmptyString(value.bookHash)!,
+    filename,
+    format: nonEmptyString(value.format) ?? nonEmptyString(value.fileFormat) ?? extension ?? '',
+    size: fileSize,
+    title: nonEmptyString(value.title),
+    author: nonEmptyString(value.author),
+  };
+};
+
 const errorKindForStatus = (status: number): GrimmLinkRequestError['kind'] => {
   if (status === 401 || status === 403) return 'authentication';
   if (status === 400 || status === 422) return 'validation';
@@ -175,9 +209,9 @@ export class GrimmLinkClient {
   }
 
   async getShelfBooks(type: GrimmLinkShelfType, shelfId: number): Promise<GrimmLinkShelfBook[]> {
-    const data = await this.requestJson<{ books?: GrimmLinkShelfBook[] } | GrimmLinkShelfBook[]>(`/shelves/${type}/${shelfId}/books`);
+    const data = await this.requestJson<{ books?: GrimmoryShelfBookResponse[] } | GrimmoryShelfBookResponse[]>(`/shelves/${type}/${shelfId}/books`);
     const books = Array.isArray(data) ? data : data.books;
-    return Array.isArray(books) ? books.filter((book) => Number.isFinite(book.bookId) && typeof book.bookHash === 'string') : [];
+    return Array.isArray(books) ? books.map(normalizeShelfBook).filter((book): book is GrimmLinkShelfBook => book !== null) : [];
   }
 
   async downloadShelfBook(bookId: number, onProgress?: ProgressHandler, signal?: AbortSignal): Promise<ArrayBuffer> {

@@ -7,6 +7,7 @@ import { GrimmLinkShelfProvider } from '@/services/grimmlink/shelfSync';
 import type { GrimmLinkShelf } from '@/services/grimmlink/types';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import { eventDispatcher } from '@/utils/event';
 import { SectionTitle, Tips } from '../primitives';
 
 /** Subscription selection and an explicit shelf sync command. */
@@ -57,17 +58,36 @@ const GrimmLinkShelfPanel = () => {
     abortController.current = new AbortController();
     try {
       const provider = new GrimmLinkShelfProvider(client, store);
-      for (const subscription of await store.getShelfSubscriptions()) {
+      const subscriptions = await store.getShelfSubscriptions();
+      if (subscriptions.length === 0) {
+        eventDispatcher.dispatch('toast', { message: _('Select at least one Grimmory shelf first.'), type: 'info' });
+        return;
+      }
+      let downloaded = 0;
+      let reused = 0;
+      for (const subscription of subscriptions) {
         if (subscription.shelfType !== 'regular' && subscription.shelfType !== 'magic') continue;
         const policy = subscription.cleanupPolicy === 'remove_managed_copy' || subscription.cleanupPolicy === 'ask'
           ? subscription.cleanupPolicy : 'keep_local';
-        await provider.sync(subscription.shelfType, subscription.shelfId, policy, useLibraryStore.getState().library, async (book) => {
+        const result = await provider.sync(subscription.shelfType, subscription.shelfId, policy, useLibraryStore.getState().library, async (book) => {
           setLibrary([...useLibraryStore.getState().library, book]);
         }, appService, 'grimmlink', {
           signal: abortController.current.signal,
           onProgress: ({ progress: done, total }) => setProgress(total > 0 ? Math.round((done / total) * 100) : null),
         });
+        downloaded += result.downloaded;
+        reused += result.reused;
       }
+      if (downloaded > 0) {
+        eventDispatcher.dispatch('toast', { message: _('Imported {{count}} books.', { count: downloaded }), type: 'success' });
+      } else if (reused > 0) {
+        eventDispatcher.dispatch('toast', { message: _('All selected shelf books are already in your library.'), type: 'info' });
+      } else {
+        eventDispatcher.dispatch('toast', { message: _('No books found in selected shelves.'), type: 'info' });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : _('Connection error');
+      eventDispatcher.dispatch('toast', { message: `${_('Shelf sync failed')}: ${message}`, type: 'error' });
     } finally {
       abortController.current = null;
       setProgress(null);

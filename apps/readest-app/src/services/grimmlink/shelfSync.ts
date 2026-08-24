@@ -7,6 +7,12 @@ import type { ProgressHandler } from '@/utils/transfer';
 
 type ShelfEntry = { bookId: number; bookHash: string; localPath: string | null; managedByGrimmLink: boolean };
 
+export interface GrimmLinkShelfSyncResult {
+  reused: number;
+  downloaded: number;
+  removed: number;
+}
+
 export const mayRemoveManagedCopy = (
   entry: Pick<ShelfEntry, 'managedByGrimmLink' | 'localPath'>,
   managedRoot: string,
@@ -43,7 +49,7 @@ export class GrimmLinkShelfProvider {
     appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'importBook'>,
     managedRoot = 'grimmlink',
     transfer?: { onProgress?: ProgressHandler; signal?: AbortSignal },
-  ): Promise<void> {
+  ): Promise<GrimmLinkShelfSyncResult> {
     const remote = await this.client.getShelfBooks(type, shelfId);
     const existing = await this.store.getShelfEntries(type, shelfId);
     const plan = planShelfSync(remote, existing, new Set(library.map((book) => book.hash)));
@@ -54,13 +60,16 @@ export class GrimmLinkShelfProvider {
     for (const remoteBook of plan.download) {
       await this.downloadAndImport(type, shelfId, remoteBook, library, onImported, appService, managedRoot, transfer);
     }
+    let removed = 0;
     if (cleanupPolicy === 'remove_managed_copy') {
       for (const entry of plan.absent) {
         if (!mayRemoveManagedCopy(entry, managedRoot)) continue;
         await appService.deleteFile(entry.localPath!, 'Books');
         await this.store.removeShelfEntry(type, shelfId, entry.bookId);
+        removed += 1;
       }
     }
+    return { reused: plan.reuse.length, downloaded: plan.download.length, removed };
   }
 
   /** This is deliberately separate from local cleanup and cannot queue without confirmation. */

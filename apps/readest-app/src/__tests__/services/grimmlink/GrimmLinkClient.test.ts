@@ -129,4 +129,25 @@ describe('GrimmLinkClient', () => {
       ['http://192.168.1.50:3000/api/grimmlink/v1/syncs/metadata?bookHash=a%2Fb&type=rating&limit=1', 'GET'],
     ]);
   });
+
+  it('normalizes Grimmory shelf-book fields before downloading or importing', async () => {
+    setFetch(async () => jsonResponse(200, [{
+      bookId: 42,
+      bookHash: 'server-hash',
+      fileName: 'Ocean 5.epub',
+      fileFormat: 'EPUB',
+      fileSize: 1024,
+      title: 'Ocean 5',
+    }]));
+
+    await expect(new GrimmLinkClient(makeConfig()).getShelfBooks('regular', 7)).resolves.toEqual([{
+      bookId: 42,
+      bookHash: 'server-hash',
+      filename: 'Ocean 5.epub',
+      format: 'EPUB',
+      size: 1024,
+      title: 'Ocean 5',
+      author: undefined,
+    }]);
+  });
 });
