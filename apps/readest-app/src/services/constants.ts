@@ -20,6 +20,7 @@ import {
 import {
   HardcoverSettings,
   BookOrbitSettings,
+  GrimmLinkSettings,
   KOSyncSettings,
   LibraryGroupByType,
   LibrarySortByType,
@@ -94,6 +95,20 @@ export const DEFAULT_BOOKORBIT_SETTINGS = {
   syncStats: true,
   syncBookStates: true,
 } as BookOrbitSettings;
+
+export const DEFAULT_GRIMMLINK_SETTINGS = {
+  enabled: false,
+  serverUrl: '',
+  username: '',
+  userkey: '',
+  deviceId: '',
+  deviceName: '',
+  strategy: 'prompt',
+  syncProgress: false,
+  syncMetadata: false,
+  syncSessions: false,
+  syncReadStatus: false,
+} as GrimmLinkSettings;
 
 export const READWISE_API_BASE_URL = 'https://readwise.io/api/v2';
 
@@ -228,6 +243,7 @@ export const DEFAULT_SYSTEM_SETTINGS: Partial<SystemSettings> = {
 
   kosync: DEFAULT_KOSYNC_SETTINGS,
   bookorbit: DEFAULT_BOOKORBIT_SETTINGS,
+  grimmlink: DEFAULT_GRIMMLINK_SETTINGS,
   readwise: DEFAULT_READWISE_SETTINGS,
   hardcover: DEFAULT_HARDCOVER_SETTINGS,
   webdav: DEFAULT_WEBDAV_SETTINGS,

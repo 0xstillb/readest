@@ -26,6 +26,8 @@ docker/.env
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+/.codex-tmp-*.log
+/.pnpm-store/
 
 # local env files
 .env*.local

@@ -113,6 +113,25 @@ export interface BookOrbitSettings {
   customHeaders?: Record<string, string>;
 }
 
+export interface GrimmLinkSettings {
+  enabled: boolean;
+  /** Base server origin, e.g. https://books.example.com (no API path). */
+  serverUrl: string;
+  /** Optional transport-only fallback origin. */
+  fallbackUrl?: string;
+  username: string;
+  /** MD5(password), supplied by the user or derived only while connecting. */
+  userkey: string;
+  deviceId: string;
+  deviceName: string;
+  strategy: KOSyncStrategy;
+  syncProgress: boolean;
+  syncMetadata: boolean;
+  syncSessions: boolean;
+  syncReadStatus: boolean;
+  customHeaders?: Record<string, string>;
+}
+
 export interface ReadwiseSettings {
   enabled: boolean;
   accessToken: string;
@@ -495,6 +514,7 @@ export interface SystemSettings {
 
   kosync: KOSyncSettings;
   bookorbit: BookOrbitSettings;
+  grimmlink: GrimmLinkSettings;
   readwise: ReadwiseSettings;
   hardcover: HardcoverSettings;
   /** Optional by design — see {@link ReadestCloudSettings}. Never defaulted. */

@@ -66,6 +66,11 @@ export const SETTINGS_WHITELIST = [
   'bookorbit.userkey',
   'bookorbit.password',
   'bookorbit.customHeaders',
+  'grimmlink.serverUrl',
+  'grimmlink.fallbackUrl',
+  'grimmlink.username',
+  'grimmlink.userkey',
+  'grimmlink.customHeaders',
   'readwise.baseUrl',
   'readwise.accessToken',
   'hardcover.accessToken',
@@ -142,6 +147,9 @@ export const SETTINGS_ENCRYPTED_FIELDS = [
   'bookorbit.userkey',
   'bookorbit.password',
   'bookorbit.customHeaders',
+  'grimmlink.username',
+  'grimmlink.userkey',
+  'grimmlink.customHeaders',
   'readwise.accessToken',
   'hardcover.accessToken',
   'webdav.username',
@@ -160,7 +168,11 @@ export type SettingsWhitelistKey = (typeof SETTINGS_WHITELIST)[number];
  * to/from a JSON string at this boundary so the crypto middleware only
  * ever sees a string.
  */
-const OBJECT_VALUED_ENCRYPTED_PATHS = ['kosync.customHeaders', 'bookorbit.customHeaders'] as const;
+const OBJECT_VALUED_ENCRYPTED_PATHS = [
+  'kosync.customHeaders',
+  'bookorbit.customHeaders',
+  'grimmlink.customHeaders',
+] as const;
 
 // In practice every path comes from the compile-time SETTINGS_WHITELIST so
 // these never appear, but readPath/writePath are exported helpers and the

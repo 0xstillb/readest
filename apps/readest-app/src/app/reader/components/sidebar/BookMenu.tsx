@@ -111,6 +111,14 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
     eventDispatcher.dispatch('push-kosync', { bookKey: sideBarBookKey });
     setIsDropdownOpen?.(false);
   };
+  const handlePullGrimmLink = () => {
+    eventDispatcher.dispatch('pull-grimmlink', { bookKey: sideBarBookKey });
+    setIsDropdownOpen?.(false);
+  };
+  const handlePushGrimmLink = () => {
+    eventDispatcher.dispatch('push-grimmlink', { bookKey: sideBarBookKey });
+    setIsDropdownOpen?.(false);
+  };
   const handlePushReadwise = () => {
     eventDispatcher.dispatch('readwise-push-all', { bookKey: sideBarBookKey });
     setIsDropdownOpen?.(false);
@@ -178,7 +186,7 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
         ) : (
           <MenuItem label={_('Enter Parallel Read')} onClick={handleSetParallel} />
         ))}
-      {(settings.kosync.enabled || settings.readwise.enabled || settings.hardcover.enabled) && (
+      {(settings.kosync.enabled || settings.grimmlink.enabled || settings.readwise.enabled || settings.hardcover.enabled) && (
         <hr aria-hidden='true' className='border-base-200 my-1' />
       )}
       {settings.kosync.enabled && (
@@ -186,6 +194,14 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
           <ul className='flex flex-col ps-1'>
             <MenuItem label={_('Push Progress')} noIcon onClick={handlePushKOSync} />
             <MenuItem label={_('Pull Progress')} noIcon onClick={handlePullKOSync} />
+          </ul>
+        </MenuItem>
+      )}
+      {settings.grimmlink.enabled && settings.grimmlink.syncProgress && (
+        <MenuItem label={_('GrimmLink')} detailsOpen={false} buttonClass='py-2'>
+          <ul className='flex flex-col ps-1'>
+            <MenuItem label={_('Push Progress')} noIcon onClick={handlePushGrimmLink} />
+            <MenuItem label={_('Pull Progress')} noIcon onClick={handlePullGrimmLink} />
           </ul>
         </MenuItem>
       )}
