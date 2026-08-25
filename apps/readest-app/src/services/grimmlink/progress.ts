@@ -2,6 +2,7 @@ import type { Book } from '@/types/book';
 import type { KOSyncStrategy } from '@/types/settings';
 import type { GrimmLinkBookLink, GrimmLinkProgress } from './types';
 import type { GrimmLinkCachedBookLink } from './bookLinks';
+import { getLocalBookFilename } from '@/utils/book';
 
 export interface GrimmLinkProgressPosition {
   location?: string;
@@ -29,8 +30,10 @@ export const toGrimmLinkProgressPayload = (
       : 0
     : Math.max(0, Math.min(1, position.fraction ?? 0)) * 100;
   return {
-    bookHash: book.hash,
-    document: book.hash,
+    // Shelf imports are assigned a Readest content hash, which can differ
+    // from Grimmory's hash. The server must receive its own book identity.
+    bookHash: link.bookHash,
+    document: link.bookHash,
     bookId: link.bookId,
     bookFileId: link.bookFileId,
     fileFormat: book.format,
@@ -64,6 +67,10 @@ type Links = {
   markUnmatched(bookHash: string): Promise<void>;
 };
 
+type ShelfEntries = {
+  getShelfEntryByLocalPath(localPath: string): Promise<{ bookId: number; bookHash: string } | null>;
+};
+
 const UNMATCHED_CACHE_MS = 5 * 60 * 1000;
 
 export class GrimmLinkProgressProvider {
@@ -71,9 +78,12 @@ export class GrimmLinkProgressProvider {
     private readonly client: Client,
     private readonly links: Links,
     private readonly config: GrimmLinkProgressConfig,
+    private readonly shelfEntries?: ShelfEntries,
   ) {}
 
   async resolveLink(book: Book, retryUnmatched = false): Promise<GrimmLinkBookLink | null> {
+    const shelfEntry = await this.shelfEntries?.getShelfEntryByLocalPath(getLocalBookFilename(book));
+    if (shelfEntry) return { bookId: shelfEntry.bookId, bookHash: shelfEntry.bookHash, format: book.format };
     const cached = await this.links.get(book.hash);
     if (cached && 'unmatchedAt' in cached) {
       if (!retryUnmatched && Date.now() - cached.unmatchedAt < UNMATCHED_CACHE_MS) return null;
@@ -90,7 +100,8 @@ export class GrimmLinkProgressProvider {
   }
 
   async pull(book: Book, retryUnmatched = false): Promise<GrimmLinkProgress | null> {
-    return (await this.resolveLink(book, retryUnmatched)) ? this.client.getProgress(book.hash) : null;
+    const link = await this.resolveLink(book, retryUnmatched);
+    return link ? this.client.getProgress(link.bookHash) : null;
   }
 
   async push(book: Book, position: GrimmLinkProgressPosition): Promise<boolean> {

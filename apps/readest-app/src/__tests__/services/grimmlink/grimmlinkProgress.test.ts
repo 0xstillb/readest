@@ -55,6 +55,26 @@ describe('GrimmLink progress', () => {
     expect(client.matchBook).toHaveBeenCalledWith(epub.hash);
   });
 
+  it('uses the persisted Grimmory identity for a shelf-imported book', async () => {
+    const shelfLink = { bookHash: 'grimory-hash', bookId: 77 };
+    const links = { get: vi.fn(), set: vi.fn(), markUnmatched: vi.fn() };
+    const client = { matchBook: vi.fn(), getProgress: vi.fn().mockResolvedValue({ percentage: 40 }), updateProgress: vi.fn() };
+    const provider = new GrimmLinkProgressProvider(client, links, {
+      deviceId: 'device-1', deviceName: 'Readest Test', strategy: 'prompt',
+    }, { getShelfEntryByLocalPath: vi.fn().mockResolvedValue(shelfLink) });
+
+    await expect(provider.resolveLink(epub)).resolves.toMatchObject(shelfLink);
+    await expect(provider.pull(epub)).resolves.toEqual({ percentage: 40 });
+
+    expect(client.matchBook).not.toHaveBeenCalled();
+    expect(client.getProgress).toHaveBeenCalledWith('grimory-hash');
+    expect(toGrimmLinkProgressPayload(epub, { ...shelfLink, format: 'EPUB' }, {
+      location: '/body/DocFragment[2]', fraction: 0.5,
+    }, { deviceId: 'device-1', deviceName: 'Readest Test' })).toMatchObject({
+      bookHash: 'grimory-hash', document: 'grimory-hash', bookId: 77,
+    });
+  });
+
   it('serializes reflowable locations as XPointer-compatible progress', () => {
     expect(toGrimmLinkProgressPayload(epub, link, {
       location: '/body/DocFragment[4]/body/p/text().12', fraction: 0.25,

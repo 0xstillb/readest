@@ -51,13 +51,14 @@ export const useGrimmLinkSync = (bookKey: string) => {
 
   const provider = useMemo(() => {
     const config = settings.grimmlink;
-    if (!appService || !client || !config.enabled || !config.syncProgress || !config.serverUrl || !config.userkey) return null;
+    if (!appService || !client || !store || !config.enabled || !config.syncProgress || !config.serverUrl || !config.userkey) return null;
     return new GrimmLinkProgressProvider(
       client,
       new GrimmLinkBookLinkStore(appService, `${config.serverUrl}\u0000${config.username}`),
       config,
+      store,
     );
-  }, [appService, client, settings.grimmlink]);
+  }, [appService, client, settings.grimmlink, store]);
 
   const makePosition = useCallback(async () => {
     const local = getProgress(bookKey);
@@ -96,7 +97,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     eventDispatcher.dispatch('hint', { bookKey, message: _('Reading Progress Synced') });
   }, [_, bookKey, getBookData, getView]);
 
-  const pushProgress = useMemo(() => debounce(async () => {
+  const queueProgress = useCallback(async () => {
     if (!provider || !pulled.current || settings.grimmlink.strategy === 'receive') return;
     const book = getBookData(bookKey)?.book;
     const position = await makePosition();
@@ -106,7 +107,9 @@ export const useGrimmLinkSync = (bookKey: string) => {
       await store.enqueueProgress(book.hash, toGrimmLinkProgressPayload(book, link, position, settings.grimmlink));
       void outbox.replay();
     }
-  }, 5000), [bookKey, getBookData, makePosition, outbox, provider, settings.grimmlink, settings.grimmlink.strategy, store]);
+  }, [bookKey, getBookData, makePosition, outbox, provider, settings.grimmlink.strategy, store]);
+
+  const pushProgress = useMemo(() => debounce(() => { void queueProgress(); }, 5000), [queueProgress]);
 
   const pullProgress = useCallback(async (retryUnmatched = false) => {
     if (!provider || !progress) return;
@@ -147,12 +150,20 @@ export const useGrimmLinkSync = (bookKey: string) => {
   }, [_, applyRemote, bookKey, getBookData, progress, provider, settings.grimmlink.strategy]);
 
   useEffect(() => {
-    const push = (event: CustomEvent) => { if (event.detail.bookKey === bookKey) { pushProgress(); pushProgress.flush(); } };
+    const push = async (event: CustomEvent) => {
+      if (event.detail.bookKey === bookKey) await queueProgress();
+    };
     const pull = (event: CustomEvent) => { if (event.detail.bookKey === bookKey) void pullProgress(true); };
     eventDispatcher.on('push-grimmlink', push);
+    eventDispatcher.on('flush-grimmlink', push);
     eventDispatcher.on('pull-grimmlink', pull);
-    return () => { eventDispatcher.off('push-grimmlink', push); eventDispatcher.off('pull-grimmlink', pull); pushProgress.flush(); };
-  }, [bookKey, pullProgress, pushProgress]);
+    return () => {
+      eventDispatcher.off('push-grimmlink', push);
+      eventDispatcher.off('flush-grimmlink', push);
+      eventDispatcher.off('pull-grimmlink', pull);
+      pushProgress.flush();
+    };
+  }, [bookKey, pullProgress, pushProgress, queueProgress]);
 
   useEffect(() => { if (provider && progress && !pulled.current) void pullProgress(); }, [progress, provider, pullProgress]);
   useEffect(() => { if (syncState === 'synced' && progress && settings.grimmlink.strategy !== 'receive') pushProgress(); }, [progress, pushProgress, settings.grimmlink.strategy, syncState]);
