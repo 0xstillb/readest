@@ -38,15 +38,16 @@ const normalizeShelfBook = (value: GrimmoryShelfBookResponse): GrimmLinkShelfBoo
     ?? nonEmptyString(value.fileName)
     ?? nonEmptyString(value.originalFileName)
     ?? (extension ? `book-${value.bookId}.${extension}` : `book-${value.bookId}`);
-  const fileSize = Number.isFinite(value.fileSize) ? Number(value.fileSize)
-    : Number.isFinite(value.fileSizeKb) ? Number(value.fileSizeKb) * 1024
-      : undefined;
   return {
     bookId: value.bookId!,
     bookHash: nonEmptyString(value.bookHash)!,
     filename,
     format: nonEmptyString(value.format) ?? nonEmptyString(value.fileFormat) ?? extension ?? '',
-    size: fileSize,
+    // Grimmory derives these fields from its integer-KB database column, so
+    // `fileSize` is not necessarily the exact byte count sent by download.
+    // Keep the binary signature validation, but never reject a valid file for
+    // that rounded metadata value.
+    size: undefined,
     title: nonEmptyString(value.title),
     author: nonEmptyString(value.author),
   };

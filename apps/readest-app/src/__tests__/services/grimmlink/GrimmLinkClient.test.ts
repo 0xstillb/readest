@@ -145,7 +145,7 @@ describe('GrimmLinkClient', () => {
       bookHash: 'server-hash',
       filename: 'Ocean 5.epub',
       format: 'EPUB',
-      size: 1024,
+      size: undefined,
       title: 'Ocean 5',
       author: undefined,
     }]);
