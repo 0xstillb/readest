@@ -27,6 +27,42 @@ type GrimmoryShelfBookResponse = Partial<GrimmLinkShelfBook> & {
   extension?: unknown;
 };
 
+/**
+ * Grimmory v1 originally advertised features as individual boolean fields,
+ * while newer GrimmLink peers use a `capabilities` array.  Keep accepting
+ * both contracts so an older Grimmory server does not silently disable a
+ * feature that its v1 endpoints already support.
+ */
+type GrimmoryCapabilitiesResponse = {
+  capabilities?: unknown;
+  apiVersion?: unknown;
+  progressSync?: unknown;
+  readingSessions?: unknown;
+  metadataSync?: unknown;
+  shelves?: unknown;
+};
+
+const normalizeCapabilities = (response: GrimmoryCapabilitiesResponse): string[] => {
+  const capabilities = Array.isArray(response.capabilities)
+    ? response.capabilities.filter((capability): capability is string => typeof capability === 'string')
+    : [];
+  const add = (capability: string, enabled: unknown) => {
+    if (enabled === true && !capabilities.some((item) => item.toLowerCase() === capability)) capabilities.push(capability);
+  };
+  add('progress', response.progressSync);
+  add('sessions', response.readingSessions);
+  add('metadata', response.metadataSync);
+  add('shelves', response.shelves);
+
+  // Read status is a core Grimmory v1 endpoint, but its legacy capability
+  // response omitted a corresponding boolean.  The endpoint itself still
+  // advertises its accepted statuses before any write is queued.
+  if (response.apiVersion === 'v1' && !capabilities.some((item) => item.toLowerCase() === 'read-status')) {
+    capabilities.push('read-status');
+  }
+  return capabilities;
+};
+
 const nonEmptyString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
@@ -145,8 +181,9 @@ export class GrimmLinkClient {
     return this.requestJson('/auth');
   }
 
-  getCapabilities(): Promise<GrimmLinkCapabilities> {
-    return this.requestJson('/capabilities');
+  async getCapabilities(): Promise<GrimmLinkCapabilities> {
+    const response = await this.requestJson<GrimmoryCapabilitiesResponse>('/capabilities');
+    return { capabilities: normalizeCapabilities(response) };
   }
 
   async matchBook(bookHash: string): Promise<GrimmLinkBookLink | null> {

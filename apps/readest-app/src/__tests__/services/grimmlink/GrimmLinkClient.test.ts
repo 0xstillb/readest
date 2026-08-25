@@ -69,6 +69,16 @@ describe('GrimmLinkClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('normalizes Grimmory v1 boolean capabilities, including its core read-status endpoint', async () => {
+    setFetch(async () => jsonResponse(200, {
+      apiVersion: 'v1', progressSync: true, readingSessions: true, metadataSync: true, shelves: true,
+    }));
+
+    await expect(new GrimmLinkClient(makeConfig()).getCapabilities()).resolves.toEqual({
+      capabilities: ['progress', 'sessions', 'metadata', 'shelves', 'read-status'],
+    });
+  });
+
   it('rejects HTML success pages and classifies HTTP errors', async () => {
     setFetch(async () => ({ ok: true, status: 200, headers: new Headers(), json: async () => { throw new Error('HTML'); } }));
     await expect(new GrimmLinkClient(makeConfig()).authenticate()).rejects.toThrow(GrimmLinkRequestError);

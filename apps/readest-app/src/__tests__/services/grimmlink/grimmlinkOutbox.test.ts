@@ -6,7 +6,7 @@ import { NodeAppService } from '@/services/nodeAppService';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
 import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
-import { mapReadStatus, mergeRemoteReadStatus } from '@/services/grimmlink/status';
+import { fromGrimmoryReadStatus, mapReadStatus, mergeRemoteReadStatus } from '@/services/grimmlink/status';
 import { fromGrimmLinkRating, toGrimmLinkRating } from '@/services/grimmlink/metadata';
 import { GrimmLinkReadStatusProvider, queueExplicitGrimmLinkReadStatus } from '@/services/grimmlink/readStatus';
 import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
@@ -106,6 +106,12 @@ describe('GrimmLink status and rating contract', () => {
       { readingStatus: 'finished', readingStatusUpdatedAt: 200 },
       { status: 'reading', updatedAt: '1970-01-01T00:00:00.100Z' },
       ['reading'],
+    )).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
+    expect(fromGrimmoryReadStatus('READ')).toBe('finished');
+    expect(mergeRemoteReadStatus(
+      { readingStatus: 'reading', readingStatusUpdatedAt: 100 },
+      { status: 'READ', updatedAt: '1970-01-01T00:00:00.200Z' },
+      ['READ', 'READING'],
     )).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
   });
 
