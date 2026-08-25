@@ -69,8 +69,9 @@ const GrimmLinkShelfPanel = () => {
         if (subscription.shelfType !== 'regular' && subscription.shelfType !== 'magic') continue;
         const policy = subscription.cleanupPolicy === 'remove_managed_copy' || subscription.cleanupPolicy === 'ask'
           ? subscription.cleanupPolicy : 'keep_local';
-        const result = await provider.sync(subscription.shelfType, subscription.shelfId, policy, useLibraryStore.getState().library, async (book) => {
-          setLibrary([...useLibraryStore.getState().library, book]);
+        const result = await provider.sync(subscription.shelfType, subscription.shelfId, policy, useLibraryStore.getState().library, async (_book, nextLibrary) => {
+          setLibrary(nextLibrary);
+          await appService.saveLibraryBooks(nextLibrary);
         }, appService, 'grimmlink', {
           signal: abortController.current.signal,
           onProgress: ({ progress: done, total }) => setProgress(total > 0 ? Math.round((done / total) * 100) : null),
