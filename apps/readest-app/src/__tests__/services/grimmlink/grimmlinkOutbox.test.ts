@@ -101,6 +101,7 @@ describe('GrimmLink status and rating contract', () => {
   it('maps only supported read statuses and keeps a newer explicit local status', () => {
     expect(mapReadStatus('finished', ['unread', 'reading'])).toBeNull();
     expect(mapReadStatus('finished', ['finished'])).toBe('finished');
+    expect(mapReadStatus('finished', ['READ', 'READING'])).toBe('READ');
     expect(mergeRemoteReadStatus(
       { readingStatus: 'finished', readingStatusUpdatedAt: 200 },
       { status: 'reading', updatedAt: '1970-01-01T00:00:00.100Z' },
