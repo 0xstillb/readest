@@ -243,10 +243,6 @@ export class GrimmLinkClient {
     return combined.buffer;
   }
 
-  removeShelfMembership(type: GrimmLinkShelfType, shelfId: number, bookId: number): Promise<Record<string, unknown>> {
-    return this.requestJson(`/shelves/${type}/${shelfId}/books/${bookId}/remove`, 'POST');
-  }
-
   async connect(): Promise<GrimmLinkConnectionResult> {
     try {
       await this.authenticate();

@@ -19,7 +19,6 @@ const allowedRequests: ReadonlyArray<readonly [string, RegExp]> = [
   ['GET', /^\/shelves\/[^/]+\/books$/],
   ['GET', /^\/shelves\/(?:regular|magic)\/[^/]+\/books$/],
   ['GET', /^\/books\/[^/]+\/download$/],
-  ['POST', /^\/shelves\/(?:regular|magic)\/[^/]+\/books\/[^/]+\/remove$/],
   ['GET', /^\/books\/read-statuses$/],
   ['PUT', /^\/books\/[^/]+\/status$/],
 ];

@@ -1,6 +1,6 @@
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
-import type { GrimmLinkShelfBook, GrimmLinkShelfCleanupPolicy, GrimmLinkShelfType } from './types';
+import type { GrimmLinkShelfBook, GrimmLinkShelfType } from './types';
 import { repairMalformedEpubOpfNamespace, safeShelfFilename, validateShelfDownload } from './download';
 import { GrimmLinkSyncStore } from './GrimmLinkSyncStore';
 import type { ProgressHandler } from '@/utils/transfer';
@@ -13,16 +13,6 @@ export interface GrimmLinkShelfSyncResult {
   downloaded: number;
   removed: number;
 }
-
-export const mayRemoveManagedCopy = (
-  entry: Pick<ShelfEntry, 'managedByGrimmLink' | 'localPath'>,
-  managedRoot: string,
-): boolean => {
-  if (!entry.managedByGrimmLink || !entry.localPath) return false;
-  const root = managedRoot.replace(/\\/g, '/').replace(/\/+$/, '');
-  const path = entry.localPath.replace(/\\/g, '/');
-  return !!root && path.startsWith(`${root}/`) && !path.split('/').some((segment) => segment === '.' || segment === '..');
-};
 
 export const planShelfSync = (
   remote: GrimmLinkShelfBook[],
@@ -52,7 +42,6 @@ export class GrimmLinkShelfProvider {
   async sync(
     type: GrimmLinkShelfType,
     shelfId: number,
-    cleanupPolicy: GrimmLinkShelfCleanupPolicy,
     library: Book[],
     onImported: (book: Book, library: Book[]) => Promise<void> | void,
     appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'importBook'>,
@@ -65,28 +54,23 @@ export class GrimmLinkShelfProvider {
     const plan = planShelfSync(remote, existing, new Set(localLibrary.map((book) => book.hash)), new Set(localLibrary.map(getLocalBookFilename)));
     for (const bookId of plan.reuse) {
       const remoteBook = remote.find((book) => book.bookId === bookId)!;
-      await this.store.markShelfEntry(type, shelfId, bookId, remoteBook.bookHash, null, false);
+      const tracked = existing.find((entry) => entry.bookId === bookId && entry.bookHash === remoteBook.bookHash);
+      await this.store.markShelfEntry(
+        type,
+        shelfId,
+        bookId,
+        remoteBook.bookHash,
+        tracked?.localPath ?? null,
+        tracked?.managedByGrimmLink ?? false,
+      );
     }
     for (const remoteBook of plan.download) {
       await this.downloadAndImport(type, shelfId, remoteBook, localLibrary, onImported, appService, managedRoot, transfer);
     }
-    let removed = 0;
-    if (cleanupPolicy === 'remove_managed_copy') {
-      for (const entry of plan.absent) {
-        if (!mayRemoveManagedCopy(entry, managedRoot)) continue;
-        await appService.deleteFile(entry.localPath!, 'Books');
-        await this.store.removeShelfEntry(type, shelfId, entry.bookId);
-        removed += 1;
-      }
-    }
-    return { reused: plan.reuse.length, downloaded: plan.download.length, removed };
-  }
-
-  /** This is deliberately separate from local cleanup and cannot queue without confirmation. */
-  async requestRemoteRemoval(confirmed: boolean, type: GrimmLinkShelfType, shelfId: number, bookId: number): Promise<boolean> {
-    if (!confirmed) return false;
-    await this.store.enqueueShelfRemoval(type, shelfId, bookId);
-    return true;
+    // A book disappearing from a remote shelf only affects this sync plan.
+    // Keep the imported local copy and its mapping; no local or remote delete
+    // request is ever issued by the GrimmLink integration.
+    return { reused: plan.reuse.length, downloaded: plan.download.length, removed: 0 };
   }
 
   private async downloadAndImport(

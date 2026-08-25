@@ -56,6 +56,9 @@ import { getLocalBookFilename } from '@/utils/book';
 import { MIMETYPES, EXTS } from '@/libs/document';
 import { makeSafeFilename } from '@/utils/misc';
 import { isTauriAppPlatform } from '@/services/environment';
+import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
+import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
+import { queueExplicitGrimmLinkReadStatus } from '@/services/grimmlink/readStatus';
 import { isLocalSendEnabled } from '@/services/localsend/devicePrefs';
 import { splitLibraryOpenIds } from '@/utils/audiobook';
 
@@ -650,6 +653,23 @@ const Bookshelf: React.FC<BookshelfProps> = ({
     eventDispatcher.dispatch('localsend-send-books', { books });
   };
 
+  const queueGrimmLinkReadStatuses = useCallback(async (books: Book[], status: ReadingStatus | undefined) => {
+    const config = settings.grimmlink;
+    if (!appService || !config.enabled || !config.syncReadStatus || !config.serverUrl || !config.userkey) return;
+    const connectionId = `${config.serverUrl}\u0000${config.username}`;
+    const store = new GrimmLinkSyncStore(appService, connectionId);
+    const client = new GrimmLinkClient(config);
+    for (const book of books) {
+      try {
+        await queueExplicitGrimmLinkReadStatus(book, status, config, store, client);
+      } catch (error) {
+        // The local library update already succeeded. A later explicit change
+        // retries normally; do not let an unavailable server interrupt it.
+        console.warn('[GrimmLink] failed to queue reading status', error);
+      }
+    }
+  }, [appService, settings.grimmlink]);
+
   const updateBooksStatus = async (status: ReadingStatus | undefined) => {
     const selectedIds = getSelectedBooks();
     const booksToUpdate: Book[] = [];
@@ -663,6 +683,7 @@ const Bookshelf: React.FC<BookshelfProps> = ({
 
     if (booksToUpdate.length > 0) {
       await updateBooks(envConfig, booksToUpdate);
+      void queueGrimmLinkReadStatuses(booksToUpdate, status);
     }
 
     setSelectedBooks([]);
@@ -674,8 +695,9 @@ const Bookshelf: React.FC<BookshelfProps> = ({
     async (book: Book, status: ReadingStatus | undefined) => {
       const updatedBook = withReadingStatus(book, status);
       await updateBooks(envConfig, [updatedBook]);
+      void queueGrimmLinkReadStatuses([updatedBook], status);
     },
-    [envConfig, updateBooks],
+    [envConfig, queueGrimmLinkReadStatuses, updateBooks],
   );
 
   const handleDeleteBooksIntent = (event: CustomEvent) => {

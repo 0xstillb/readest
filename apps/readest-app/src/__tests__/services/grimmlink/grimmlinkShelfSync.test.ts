@@ -1,7 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
-import { planShelfSync, mayRemoveManagedCopy } from '@/services/grimmlink/shelfSync';
+import { describe, expect, it } from 'vitest';
+import { planShelfSync } from '@/services/grimmlink/shelfSync';
 import { repairMalformedEpubOpfNamespace, validateShelfDownload } from '@/services/grimmlink/download';
-import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
 
 describe('GrimmLink shelf sync safety', () => {
   it('reuses a local hash and downloads only missing remote shelf books', () => {
@@ -11,12 +10,6 @@ describe('GrimmLink shelf sync safety', () => {
     ], [], new Set(['already-local']))).toEqual({
       reuse: [1], download: [{ bookId: 2, bookHash: 'missing', filename: 'two.epub', format: 'EPUB' }], absent: [],
     });
-  });
-
-  it('allows cleanup only for a tracked provider-managed file inside the managed root', () => {
-    expect(mayRemoveManagedCopy({ managedByGrimmLink: true, localPath: 'grimmlink/book.epub' }, 'grimmlink')).toBe(true);
-    expect(mayRemoveManagedCopy({ managedByGrimmLink: false, localPath: 'grimmlink/book.epub' }, 'grimmlink')).toBe(false);
-    expect(mayRemoveManagedCopy({ managedByGrimmLink: true, localPath: '../user/book.epub' }, 'grimmlink')).toBe(false);
   });
 
   it('reuses a tracked local import even when Readest and Grimmory hashes differ', () => {
@@ -49,17 +42,4 @@ describe('GrimmLink shelf sync safety', () => {
     expect(opf).toContain('<package xmlns:opf="http://www.idpf.org/2007/opf">');
   });
 
-  it('replays only an explicitly queued remote shelf-membership removal', async () => {
-    const removeShelfMembership = vi.fn().mockResolvedValue({ ok: true });
-    const store = {
-      isPaused: vi.fn().mockResolvedValue(false),
-      ready: vi.fn()
-        .mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ id: 'remove-1', category: 'shelf-removal', payload: { shelfType: 'magic', shelfId: 2, bookId: 8 }, attempts: 0 }]),
-      remove: vi.fn(),
-    };
-    await new GrimmLinkOutbox(store as never, { removeShelfMembership }).replay();
-    expect(removeShelfMembership).toHaveBeenCalledWith('magic', 2, 8);
-    expect(store.remove).toHaveBeenCalledWith(['remove-1']);
-  });
 });

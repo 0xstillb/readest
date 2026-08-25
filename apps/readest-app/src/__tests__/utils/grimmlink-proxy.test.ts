@@ -8,7 +8,7 @@ describe('GrimmLink proxy request allow-list', () => {
       ['GET', '/syncs/progress/hash'], ['PUT', '/syncs/progress'], ['POST', '/reading-sessions'],
       ['POST', '/reading-sessions/batch'], ['POST', '/syncs/metadata'], ['POST', '/syncs/metadata/batch'],
       ['GET', '/syncs/metadata'], ['GET', '/syncs/metadata?bookHash=abc&type=rating'], ['GET', '/shelves'], ['GET', '/shelves/regular/1/books'],
-      ['GET', '/shelves/1/books'], ['GET', '/books/1/download'], ['POST', '/shelves/magic/1/books/2/remove'],
+      ['GET', '/shelves/1/books'], ['GET', '/books/1/download'],
       ['GET', '/books/read-statuses'], ['PUT', '/books/1/status'],
     ] as const) expect(isValidGrimmLinkRequest(endpoint, method)).toBe(true);
   });

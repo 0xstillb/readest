@@ -1,7 +1,7 @@
 import type { AppService } from '@/types/system';
 import type { GrimmLinkSessionEnvelope } from './sessions';
 
-export type GrimmLinkOutboxCategory = 'progress' | 'sessions' | 'metadata' | 'status' | 'shelf-removal';
+export type GrimmLinkOutboxCategory = 'progress' | 'sessions' | 'metadata' | 'status';
 
 export interface GrimmLinkOutboxRow {
   id: string;
@@ -117,10 +117,6 @@ export class GrimmLinkSyncStore {
     return this.enqueue('metadata', payload, bookHash);
   }
 
-  enqueueShelfRemoval(shelfType: string, shelfId: number, bookId: number): Promise<void> {
-    return this.enqueue('shelf-removal', { shelfType, shelfId, bookId });
-  }
-
   async saveShelfSubscription(shelfType: string, shelfId: number, enabled: boolean, cleanupPolicy = 'keep_local'): Promise<void> {
     await this.withDb((db) => db.execute(
       `INSERT INTO shelf_subscriptions (connection_id, shelf_type, shelf_id, enabled, cleanup_policy) VALUES (?, ?, ?, ?, ?)
@@ -142,19 +138,25 @@ export class GrimmLinkSyncStore {
     )).map((row) => ({ bookId: row.book_id, bookHash: row.book_hash, localPath: row.local_path, managedByGrimmLink: !!row.managed_by_grimmlink })));
   }
 
+  /** Finds the Grimmory identity for a locally imported shelf book. */
+  async getShelfEntryByLocalPath(localPath: string): Promise<{ bookId: number; bookHash: string } | null> {
+    return this.withDb(async (db) => {
+      const row = (await db.select<{ book_id: number; book_hash: string }>(
+        `SELECT book_id, book_hash FROM shelf_entries
+         WHERE connection_id = ? AND local_path = ?
+         ORDER BY last_seen_at DESC LIMIT 1`,
+        [this.connectionId, localPath],
+      ))[0];
+      return row ? { bookId: row.book_id, bookHash: row.book_hash } : null;
+    });
+  }
+
   async markShelfEntry(shelfType: string, shelfId: number, bookId: number, bookHash: string, localPath: string | null, managedByGrimmLink: boolean): Promise<void> {
     await this.withDb((db) => db.execute(
       `INSERT INTO shelf_entries (connection_id, shelf_type, shelf_id, book_id, book_hash, local_path, managed_by_grimmlink, last_seen_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(connection_id, shelf_type, shelf_id, book_id) DO UPDATE SET book_hash=excluded.book_hash, local_path=excluded.local_path, managed_by_grimmlink=excluded.managed_by_grimmlink, last_seen_at=excluded.last_seen_at`,
       [this.connectionId, shelfType, shelfId, bookId, bookHash, localPath, managedByGrimmLink ? 1 : 0, Date.now()],
-    ));
-  }
-
-  async removeShelfEntry(shelfType: string, shelfId: number, bookId: number): Promise<void> {
-    await this.withDb((db) => db.execute(
-      'DELETE FROM shelf_entries WHERE connection_id = ? AND shelf_type = ? AND shelf_id = ? AND book_id = ?',
-      [this.connectionId, shelfType, shelfId, bookId],
     ));
   }
 

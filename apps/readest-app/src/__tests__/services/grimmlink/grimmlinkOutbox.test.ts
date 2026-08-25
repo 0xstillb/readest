@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import type { Book } from '@/types/book';
 import { NodeAppService } from '@/services/nodeAppService';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
 import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
 import { mapReadStatus, mergeRemoteReadStatus } from '@/services/grimmlink/status';
 import { fromGrimmLinkRating, toGrimmLinkRating } from '@/services/grimmlink/metadata';
-import { GrimmLinkReadStatusProvider } from '@/services/grimmlink/readStatus';
+import { GrimmLinkReadStatusProvider, queueExplicitGrimmLinkReadStatus } from '@/services/grimmlink/readStatus';
 import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
 
 const SANDBOX_DIR = path.join(process.cwd(), '.test-sandbox-grimmlink');
@@ -131,6 +132,36 @@ describe('GrimmLink status and rating contract', () => {
       await expect(ratings.queuePush('book-a', 4, { value: 4, scale: 5, updatedAt: 100 })).resolves.toBe(false);
       await expect(store.all('status')).resolves.toEqual([]);
       await expect(store.all('metadata')).resolves.toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses a persisted shelf mapping when syncing an explicit local reading status', async () => {
+    const root = await fsp.mkdtemp(path.join(SANDBOX_DIR, 'shelf-status-'));
+    try {
+      const service = new NodeAppService(root);
+      await service.init();
+      const store = new GrimmLinkSyncStore(service, 'connection-a');
+      const book = { hash: 'readest-hash', title: 'Shelf title', author: 'Author', format: 'EPUB' } as Book;
+      await store.markShelfEntry('regular', 7, 42, 'grimory-hash', 'readest-hash/Shelf title.epub', true);
+      const client = {
+        getCapabilities: vi.fn().mockResolvedValue({ capabilities: ['read-status'] }),
+        getReadStatuses: vi.fn().mockResolvedValue({ statuses: ['finished'] }),
+        matchBook: vi.fn().mockResolvedValue(null),
+        updateReadStatus: vi.fn().mockResolvedValue({ ok: true }),
+      };
+
+      await expect(queueExplicitGrimmLinkReadStatus(
+        book,
+        'finished',
+        { enabled: true, syncReadStatus: true, strategy: 'prompt' },
+        store,
+        client,
+      )).resolves.toBe(true);
+
+      await vi.waitFor(() => expect(client.updateReadStatus).toHaveBeenCalledWith(42, 'finished'));
+      expect(client.matchBook).not.toHaveBeenCalled();
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

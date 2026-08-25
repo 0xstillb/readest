@@ -6,7 +6,6 @@ type ReplayClient = {
   postSessionBatch?(payload: Record<string, unknown>): Promise<unknown>;
   updateReadStatus?(bookId: number, status: string): Promise<unknown>;
   syncMetadata?(payload: Record<string, unknown>): Promise<unknown>;
-  removeShelfMembership?(shelfType: 'regular' | 'magic', shelfId: number, bookId: number): Promise<unknown>;
 };
 
 const retryAt = (attempts: number) => Date.now() + Math.min(60_000, 1_000 * 2 ** Math.min(attempts, 6));
@@ -17,7 +16,7 @@ export class GrimmLinkOutbox {
 
   async replay(): Promise<void> {
     if (await this.store.isPaused()) return;
-    for (const category of ['progress', 'sessions', 'metadata', 'status', 'shelf-removal'] as const) {
+    for (const category of ['progress', 'sessions', 'metadata', 'status'] as const) {
       const rows = await this.store.ready(category);
       if (category === 'sessions') await this.replaySessions(rows);
       else for (const row of rows) await this.replayRow(row);
@@ -64,14 +63,6 @@ export class GrimmLinkOutbox {
       if (row.category === 'metadata') {
         if (!this.client.syncMetadata) return;
         await this.client.syncMetadata(row.payload);
-      }
-      if (row.category === 'shelf-removal') {
-        if (!this.client.removeShelfMembership) return;
-        const type = row.payload['shelfType'];
-        if ((type !== 'regular' && type !== 'magic') || !Number.isFinite(row.payload['shelfId']) || !Number.isFinite(row.payload['bookId'])) {
-          throw new GrimmLinkRequestError('validation', 'Invalid GrimmLink shelf removal');
-        }
-        await this.client.removeShelfMembership(type, Number(row.payload['shelfId']), Number(row.payload['bookId']));
       }
       await this.store.remove([row.id]);
     } catch (error) {

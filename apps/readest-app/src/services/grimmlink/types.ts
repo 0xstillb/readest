@@ -37,7 +37,8 @@ export interface GrimmLinkProgress {
 }
 
 export type GrimmLinkShelfType = 'regular' | 'magic';
-export type GrimmLinkShelfCleanupPolicy = 'keep_local' | 'ask' | 'remove_managed_copy';
+/** Shelf membership is download-only: Readest never removes books from Grimmory. */
+export type GrimmLinkShelfCleanupPolicy = 'keep_local';
 
 export interface GrimmLinkShelf {
   id: number;
