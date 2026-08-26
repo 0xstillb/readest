@@ -20,6 +20,15 @@ describe('GrimmLink shelf sync safety', () => {
     });
   });
 
+  it('downloads again when the remembered shelf path is no longer present locally', () => {
+    const remote = [{ bookId: 1, bookHash: 'grimory-hash', filename: 'one.epub', format: 'EPUB' }];
+    const existing = [{ bookId: 1, bookHash: 'grimory-hash', localPath: 'local-hash/one.epub', managedByGrimmLink: true }];
+
+    expect(planShelfSync(remote, existing, new Set(), new Set())).toMatchObject({
+      reuse: [], download: remote,
+    });
+  });
+
   it('rejects corrupt downloads before import', () => {
     expect(() => validateShelfDownload('book.epub', new Uint8Array([1, 2, 3]).buffer)).toThrow('Invalid EPUB');
     expect(() => validateShelfDownload('book.pdf', new TextEncoder().encode('%PDF-1.7').buffer)).not.toThrow();

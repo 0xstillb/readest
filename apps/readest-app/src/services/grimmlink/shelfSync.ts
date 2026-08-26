@@ -44,14 +44,28 @@ export class GrimmLinkShelfProvider {
     shelfId: number,
     library: Book[],
     onImported: (book: Book, library: Book[]) => Promise<void> | void,
-    appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'importBook'>,
+    appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'exists' | 'importBook'>,
     managedRoot = 'grimmlink',
     transfer?: { onProgress?: ProgressHandler; signal?: AbortSignal },
   ): Promise<GrimmLinkShelfSyncResult> {
     const remote = await this.client.getShelfBooks(type, shelfId);
     const existing = await this.store.getShelfEntries(type, shelfId);
     const localLibrary = [...library];
-    const plan = planShelfSync(remote, existing, new Set(localLibrary.map((book) => book.hash)), new Set(localLibrary.map(getLocalBookFilename)));
+    // A normal Readest delete retains a tombstone so other storage providers
+    // can process it safely.  GrimmLink is download-only, though: its shelf
+    // must treat that tombstone (and any stale shelf path) as absent so Sync
+    // restores the book from Grimmory without ever requesting a remote delete.
+    const presentBooks = (await Promise.all(localLibrary
+      .filter((book) => !book.deletedAt)
+      .map(async (book) => ({ book, present: await appService.exists(getLocalBookFilename(book), 'Books') }))))
+      .filter(({ present }) => present)
+      .map(({ book }) => book);
+    const plan = planShelfSync(
+      remote,
+      existing,
+      new Set(presentBooks.map((book) => book.hash)),
+      new Set(presentBooks.map(getLocalBookFilename)),
+    );
     for (const bookId of plan.reuse) {
       const remoteBook = remote.find((book) => book.bookId === bookId)!;
       const tracked = existing.find((entry) => entry.bookId === bookId && entry.bookHash === remoteBook.bookHash);
@@ -79,7 +93,7 @@ export class GrimmLinkShelfProvider {
     remote: GrimmLinkShelfBook,
     library: Book[],
     onImported: (book: Book, library: Book[]) => Promise<void> | void,
-    appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'importBook'>,
+    appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'exists' | 'importBook'>,
     managedRoot: string,
     transfer?: { onProgress?: ProgressHandler; signal?: AbortSignal },
   ): Promise<void> {
