@@ -51,3 +51,8 @@ swift-rs = { path = "packages/swift-rs" }
 # UIApplicationSceneManifest is present - i.e. the CarPlay scene). See
 # packages/tao/src/platform_impl/ios/view.rs; worth an upstream PR.
 tao = { path = "packages/tao" }
+# `turso_ext` 0.6.1's build script tests the host OS with `cfg!`, which is
+# Windows during Android cross-compilation, and therefore passes `-ladvapi32`
+# to the Android linker. Keep the Windows dependency, but determine it from
+# Cargo's target configuration instead.
+turso_ext = { path = "packages/turso_ext" }
