@@ -5,8 +5,15 @@ import { repairMalformedEpubOpfNamespace, safeShelfFilename, validateShelfDownlo
 import { GrimmLinkSyncStore } from './GrimmLinkSyncStore';
 import type { ProgressHandler } from '@/utils/transfer';
 import { getLocalBookFilename } from '@/utils/book';
+import { isTauriAppPlatform } from '@/services/environment';
 
 type ShelfEntry = { bookId: number; bookHash: string; localPath: string | null; managedByGrimmLink: boolean };
+type ShelfSyncStage = 'downloading' | 'importing';
+type ShelfSyncTransfer = {
+  onProgress?: ProgressHandler;
+  onStage?: (event: { stage: ShelfSyncStage; book: GrimmLinkShelfBook }) => void;
+  signal?: AbortSignal;
+};
 
 export interface GrimmLinkShelfSyncResult {
   reused: number;
@@ -44,9 +51,9 @@ export class GrimmLinkShelfProvider {
     shelfId: number,
     library: Book[],
     onImported: (book: Book, library: Book[]) => Promise<void> | void,
-    appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'exists' | 'importBook'>,
+    appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'exists' | 'importBook' | 'resolveFilePath'>,
     managedRoot = 'grimmlink',
-    transfer?: { onProgress?: ProgressHandler; signal?: AbortSignal },
+    transfer?: ShelfSyncTransfer,
   ): Promise<GrimmLinkShelfSyncResult> {
     const remote = await this.client.getShelfBooks(type, shelfId);
     const existing = await this.store.getShelfEntries(type, shelfId);
@@ -93,12 +100,14 @@ export class GrimmLinkShelfProvider {
     remote: GrimmLinkShelfBook,
     library: Book[],
     onImported: (book: Book, library: Book[]) => Promise<void> | void,
-    appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'exists' | 'importBook'>,
+    appService: Pick<AppService, 'createDir' | 'writeFile' | 'openFile' | 'deleteFile' | 'exists' | 'importBook' | 'resolveFilePath'>,
     managedRoot: string,
-    transfer?: { onProgress?: ProgressHandler; signal?: AbortSignal },
+    transfer?: ShelfSyncTransfer,
   ): Promise<void> {
     const tempPath = `${managedRoot}/${safeShelfFilename(remote.filename, remote.bookId)}`;
+    transfer?.onStage?.({ stage: 'downloading', book: remote });
     const downloaded = await this.client.downloadShelfBook(remote.bookId, transfer?.onProgress, transfer?.signal);
+    transfer?.onStage?.({ stage: 'importing', book: remote });
     const data = remote.filename.toLowerCase().endsWith('.epub')
       ? await repairMalformedEpubOpfNamespace(downloaded)
       : downloaded;
@@ -106,7 +115,12 @@ export class GrimmLinkShelfProvider {
     await appService.createDir(managedRoot, 'Temp', true);
     await appService.writeFile(tempPath, 'Temp', data);
     try {
-      const file = await appService.openFile(tempPath, 'Temp');
+      // Native imports can parse an EPUB and copy it directly from its temp path.
+      // Passing a File object forces the slower JavaScript parser and a buffered
+      // write instead, which is especially noticeable on large Android shelves.
+      const file = isTauriAppPlatform()
+        ? await appService.resolveFilePath(tempPath, 'Temp')
+        : await appService.openFile(tempPath, 'Temp');
       const imported = await appService.importBook(file, library);
       if (!imported) throw new Error('Failed to import GrimmLink shelf book');
       const existingIndex = library.findIndex((book) => book.hash === imported.hash);

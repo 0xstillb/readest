@@ -21,6 +21,7 @@ const GrimmLinkShelfPanel = () => {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
+  const [syncStage, setSyncStage] = useState<{ stage: 'downloading' | 'importing'; filename: string } | null>(null);
   const abortController = useRef<AbortController | null>(null);
   const store = useMemo(() => appService ? new GrimmLinkSyncStore(appService, `${settings.grimmlink.serverUrl}\u0000${settings.grimmlink.username}`) : null, [appService, settings.grimmlink.serverUrl, settings.grimmlink.username]);
   const client = useMemo(() => settings.grimmlink.enabled && settings.grimmlink.serverUrl && settings.grimmlink.userkey ? new GrimmLinkClient(settings.grimmlink) : null, [settings.grimmlink]);
@@ -73,6 +74,10 @@ const GrimmLinkShelfPanel = () => {
         }, appService, 'grimmlink', {
           signal: abortController.current.signal,
           onProgress: ({ progress: done, total }) => setProgress(total > 0 ? Math.round((done / total) * 100) : null),
+          onStage: ({ stage, book }) => {
+            setSyncStage({ stage, filename: book.filename });
+            if (stage === 'downloading') setProgress(0);
+          },
         });
         downloaded += result.downloaded;
         reused += result.reused;
@@ -90,6 +95,7 @@ const GrimmLinkShelfPanel = () => {
     } finally {
       abortController.current = null;
       setProgress(null);
+      setSyncStage(null);
       setSyncing(false);
     }
   };
@@ -113,7 +119,16 @@ const GrimmLinkShelfPanel = () => {
         </label>;
       })}
       {!loading && shelves.length === 0 && <Tips><li>{_('No Grimmory shelves found.')}</li></Tips>}
-      {syncing && <div className='text-xs opacity-70'>{progress === null ? _('Downloading…') : `${_('Downloading')}: ${progress}%`}</div>}
+      {syncing && <div className='text-xs opacity-70'>
+        {syncStage?.stage === 'importing'
+          ? _('Importing {{filename}}…', { filename: syncStage.filename })
+          : syncStage
+            ? _('Downloading {{filename}}: {{percent}}%', {
+                filename: syncStage.filename,
+                percent: progress ?? 0,
+              })
+            : _('Downloading…')}
+      </div>}
     </section>
   );
 };

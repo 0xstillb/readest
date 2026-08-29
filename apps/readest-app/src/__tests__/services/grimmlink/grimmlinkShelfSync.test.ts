@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planShelfSync } from '@/services/grimmlink/shelfSync';
+import { GrimmLinkShelfProvider, planShelfSync } from '@/services/grimmlink/shelfSync';
 import { repairMalformedEpubOpfNamespace, validateShelfDownload } from '@/services/grimmlink/download';
 
 describe('GrimmLink shelf sync safety', () => {
@@ -49,6 +49,40 @@ describe('GrimmLink shelf sync safety', () => {
     const opf = await entry.getData(new TextWriter());
     await reader.close();
     expect(opf).toContain('<package xmlns:opf="http://www.idpf.org/2007/opf">');
+  });
+
+  it('reports the import stage after a shelf download completes', async () => {
+    const stages: string[] = [];
+    const client = {
+      getShelfBooks: async () => [
+        { bookId: 1, bookHash: 'remote-hash', filename: 'book.pdf', format: 'PDF' as const },
+      ],
+      downloadShelfBook: async () => new TextEncoder().encode('%PDF-1.7').buffer,
+    };
+    const store = {
+      getShelfEntries: async () => [],
+      markShelfEntry: async () => {},
+    };
+    const appService = {
+      exists: async () => false,
+      createDir: async () => {},
+      writeFile: async () => {},
+      openFile: async () => ({ name: 'book.pdf' }),
+      deleteFile: async () => {},
+      importBook: async () => ({ hash: 'local-hash', title: 'Book', format: 'PDF' }),
+    };
+
+    await new GrimmLinkShelfProvider(client, store as never).sync(
+      'regular',
+      1,
+      [],
+      async () => {},
+      appService as never,
+      'grimmlink',
+      { onStage: ({ stage }) => stages.push(stage) },
+    );
+
+    expect(stages).toEqual(['downloading', 'importing']);
   });
 
 });
