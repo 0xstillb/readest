@@ -5,6 +5,7 @@ import { isLanAddress } from '@/utils/network';
 import { getAPIBaseUrl, isTauriAppPlatform } from '../environment';
 import { GrimmLinkRequestError } from './GrimmLinkRequestError';
 import type { ProgressHandler } from '@/utils/transfer';
+import { tauriDownload } from '@/utils/transfer';
 import type {
   GrimmLinkBookLink,
   GrimmLinkCapabilities,
@@ -278,6 +279,44 @@ export class GrimmLinkClient {
     let offset = 0;
     for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.byteLength; }
     return combined.buffer;
+  }
+
+  /**
+   * Stream a shelf book straight to a native file.  Android WebViews have a
+   * relatively small and fragile IPC/memory budget; buffering the response in
+   * JS and then copying it into a Temp file briefly holds two full copies of a
+   * book (plus parser allocations).  The native downloader writes incrementally
+   * and reports progress through the same channel used by other transfers.
+   */
+  async downloadShelfBookToFile(
+    bookId: number,
+    filePath: string,
+    onProgress?: ProgressHandler,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!isTauriAppPlatform()) throw new GrimmLinkRequestError('transport', 'Native download is unavailable.');
+    if (signal?.aborted) throw new Error('Download aborted');
+
+    const download = async (serverUrl: string) => {
+      await tauriDownload(
+        `${serverUrl}${API_PREFIX}/books/${bookId}/download`,
+        filePath,
+        onProgress,
+        this.headers(),
+        undefined,
+        false,
+        true,
+      );
+    };
+
+    try {
+      await download(this.serverUrl);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (!this.fallbackUrl) throw error;
+      await download(this.fallbackUrl);
+    }
+    if (signal?.aborted) throw new Error('Download aborted');
   }
 
   async connect(): Promise<GrimmLinkConnectionResult> {

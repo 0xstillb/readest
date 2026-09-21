@@ -87,6 +87,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 // ── Helper to create a dummy TranslationFunc ─────────────────────
@@ -113,6 +114,16 @@ describe('updater', () => {
 
   // ── checkForAppUpdates ─────────────────────────────────────────
   describe('checkForAppUpdates', () => {
+    test('does not contact upstream when updates are disabled for a fork build', async () => {
+      vi.stubEnv('NEXT_PUBLIC_DISABLE_UPDATER', 'true');
+
+      const result = await checkForAppUpdates(dummyTranslate, false);
+
+      expect(result).toBe(false);
+      expect(mockCheck).not.toHaveBeenCalled();
+      expect(mockTauriFetch).not.toHaveBeenCalled();
+    });
+
     test('skips check when auto-check and interval has not elapsed', async () => {
       const now = Date.now();
       localStorage.setItem('lastAppUpdateCheck', now.toString());
@@ -330,6 +341,16 @@ describe('updater', () => {
 
   // ── checkAppReleaseNotes ───────────────────────────────────────
   describe('checkAppReleaseNotes', () => {
+    test('does not fetch upstream release notes when updates are disabled for a fork build', async () => {
+      vi.stubEnv('NEXT_PUBLIC_DISABLE_UPDATER', 'true');
+      const mockFetchFn = vi.fn();
+      vi.stubGlobal('fetch', mockFetchFn);
+
+      await expect(checkAppReleaseNotes(false)).resolves.toBe(false);
+      expect(mockFetchFn).not.toHaveBeenCalled();
+      expect(mockTauriFetch).not.toHaveBeenCalled();
+    });
+
     test('shows release notes when current version is newer than last shown', async () => {
       mockAppVersion = '2.0.0';
       setLastShownReleaseNotesVersion('1.0.0');

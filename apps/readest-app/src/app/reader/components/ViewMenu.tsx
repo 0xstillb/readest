@@ -7,7 +7,7 @@ import { PiGear } from 'react-icons/pi';
 import { TbSunMoon } from 'react-icons/tb';
 import { MdZoomOut, MdZoomIn, MdCheck, MdInfoOutline, MdOutlineSensors } from 'react-icons/md';
 import { MdRemove, MdAdd, MdContrast } from 'react-icons/md';
-import { MdSync, MdSyncProblem } from 'react-icons/md';
+import { MdOutlineCollectionsBookmark, MdSync, MdSyncProblem } from 'react-icons/md';
 import { IoMdExpand } from 'react-icons/io';
 import { IoShareOutline } from 'react-icons/io5';
 import { TbArrowAutofitWidth } from 'react-icons/tb';
@@ -40,6 +40,10 @@ import dayjs from 'dayjs';
 import { clampSyncTimeForDisplay } from '@/utils/time';
 import { saveViewSettings } from '@/helpers/settings';
 import { tauriHandleToggleFullScreen } from '@/utils/window';
+import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
+import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
+import { syncSubscribedGrimmLinkShelves } from '@/services/grimmlink/shelfSync';
+import { useLibraryStore } from '@/store/libraryStore';
 import MenuItem from '@/components/MenuItem';
 import Menu from '@/components/Menu';
 
@@ -59,7 +63,13 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
   const { user } = useAuth();
   const { envConfig, appService } = useEnv();
   const { getConfig, getBookData } = useBookDataStore();
-  const { setSettingsDialogOpen, setSettingsDialogBookKey } = useSettingsStore();
+  const {
+    settings,
+    setSettingsDialogOpen,
+    setSettingsDialogBookKey,
+    setRequestedPanel,
+    setRequestedSubPage,
+  } = useSettingsStore();
   const { getView, getViewSettings, getViewState, getProgress, setViewSettings, recreateViewer } =
     useReaderStore();
   const config = getConfig(bookKey)!;
@@ -86,6 +96,7 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
   );
   const [applyThemeToPDF, setApplyThemeToPDF] = useState(viewSettings!.applyThemeToPDF!);
   const [rtlSpread, setRtlSpread] = useState(bookData?.bookDoc?.dir === 'rtl');
+  const [shelfSyncing, setShelfSyncing] = useState(false);
 
   const zoomIn = () => setZoomLevel((prev) => Math.min(prev + ZOOM_STEP, MAX_ZOOM_LEVEL));
   const zoomOut = () => setZoomLevel((prev) => Math.max(prev - ZOOM_STEP, MIN_ZOOM_LEVEL));
@@ -125,6 +136,49 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
     } else {
       eventDispatcher.dispatch('sync-book-progress', { bookKey });
     }
+  };
+
+  const handleShelfSync = () => {
+    setIsDropdownOpen?.(false);
+    if (!settings.grimmlink?.enabled || !settings.grimmlink.serverUrl || !settings.grimmlink.userkey) {
+      setSettingsDialogBookKey(bookKey);
+      setRequestedPanel('Integrations');
+      setRequestedSubPage('grimmlink');
+      setSettingsDialogOpen(true);
+      return;
+    }
+    if (!appService) return;
+    setShelfSyncing(true);
+    void (async () => {
+      try {
+        const client = new GrimmLinkClient(settings.grimmlink);
+        const store = new GrimmLinkSyncStore(appService, `${settings.grimmlink.serverUrl}\u0000${settings.grimmlink.username}`);
+        if ((await store.getShelfSubscriptions()).length === 0) {
+          eventDispatcher.dispatch('toast', { message: _('Select at least one Grimmory shelf first.'), type: 'info' });
+          return;
+        }
+        const result = await syncSubscribedGrimmLinkShelves(client, store, () => useLibraryStore.getState().library, async (_book, nextLibrary) => {
+          useLibraryStore.getState().setLibrary(nextLibrary);
+          await appService.saveLibraryBooks(nextLibrary);
+        }, appService, undefined, async (_book, nextLibrary) => {
+          useLibraryStore.getState().setLibrary(nextLibrary);
+          await appService.saveLibraryBooks(nextLibrary);
+        });
+        if (result.downloaded > 0) {
+          eventDispatcher.dispatch('toast', { message: _('Imported {{count}} books.', { count: result.downloaded }), type: 'success' });
+        } else if (result.reused > 0) {
+          eventDispatcher.dispatch('toast', { message: _('All selected shelf books are already in your library.'), type: 'info' });
+        } else if (result.removed > 0) {
+          eventDispatcher.dispatch('toast', { message: _('Removed {{count}} books no longer in selected shelves.', { count: result.removed }), type: 'info' });
+        } else {
+          eventDispatcher.dispatch('toast', { message: _('No books found in selected shelves.'), type: 'info' });
+        }
+      } catch (error) {
+        eventDispatcher.dispatch('toast', { message: `${_('Shelf sync failed')}: ${error instanceof Error ? error.message : _('Connection error')}`, type: 'error' });
+      } finally {
+        setShelfSyncing(false);
+      }
+    })();
   };
 
   const handleStartRSVP = () => {
@@ -516,6 +570,13 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
             <MdInfoOutline size={16} />
           </button>
         }
+      />
+
+      <MenuItem
+        label={_('Shelf Sync')}
+        Icon={MdOutlineCollectionsBookmark}
+        onClick={handleShelfSync}
+        disabled={shelfSyncing}
       />
 
       <hr aria-hidden='true' className='border-base-300 my-1' />

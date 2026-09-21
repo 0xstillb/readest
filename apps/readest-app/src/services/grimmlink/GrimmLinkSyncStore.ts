@@ -160,6 +160,13 @@ export class GrimmLinkSyncStore {
     ));
   }
 
+  async removeShelfEntry(shelfType: string, shelfId: number, bookId: number): Promise<void> {
+    await this.withDb((db) => db.execute(
+      'DELETE FROM shelf_entries WHERE connection_id = ? AND shelf_type = ? AND shelf_id = ? AND book_id = ?',
+      [this.connectionId, shelfType, shelfId, bookId],
+    ));
+  }
+
   async ready(category: GrimmLinkOutboxCategory, now = Date.now()): Promise<GrimmLinkOutboxRow[]> {
     return this.withDb(async (db) => (await db.select<Row>(
       `SELECT id, category, book_hash, payload, idempotency_key, attempts, created_at, next_retry_at FROM outbox

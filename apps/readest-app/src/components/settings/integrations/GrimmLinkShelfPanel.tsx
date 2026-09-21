@@ -3,7 +3,7 @@ import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
 import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
-import { GrimmLinkShelfProvider } from '@/services/grimmlink/shelfSync';
+import { syncSubscribedGrimmLinkShelves } from '@/services/grimmlink/shelfSync';
 import type { GrimmLinkShelf } from '@/services/grimmlink/types';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -58,34 +58,32 @@ const GrimmLinkShelfPanel = () => {
     setSyncing(true);
     abortController.current = new AbortController();
     try {
-      const provider = new GrimmLinkShelfProvider(client, store);
       const subscriptions = await store.getShelfSubscriptions();
       if (subscriptions.length === 0) {
         eventDispatcher.dispatch('toast', { message: _('Select at least one Grimmory shelf first.'), type: 'info' });
         return;
       }
-      let downloaded = 0;
-      let reused = 0;
-      for (const subscription of subscriptions) {
-        if (subscription.shelfType !== 'regular' && subscription.shelfType !== 'magic') continue;
-        const result = await provider.sync(subscription.shelfType, subscription.shelfId, useLibraryStore.getState().library, async (_book, nextLibrary) => {
+      const result = await syncSubscribedGrimmLinkShelves(client, store, () => useLibraryStore.getState().library, async (_book, nextLibrary) => {
           setLibrary(nextLibrary);
           await appService.saveLibraryBooks(nextLibrary);
-        }, appService, 'grimmlink', {
+        }, appService, {
           signal: abortController.current.signal,
           onProgress: ({ progress: done, total }) => setProgress(total > 0 ? Math.round((done / total) * 100) : null),
           onStage: ({ stage, book }) => {
             setSyncStage({ stage, filename: book.filename });
             if (stage === 'downloading') setProgress(0);
           },
+        }, async (_book, nextLibrary) => {
+          setLibrary(nextLibrary);
+          await appService.saveLibraryBooks(nextLibrary);
         });
-        downloaded += result.downloaded;
-        reused += result.reused;
-      }
+      const { downloaded, reused, removed } = result;
       if (downloaded > 0) {
         eventDispatcher.dispatch('toast', { message: _('Imported {{count}} books.', { count: downloaded }), type: 'success' });
       } else if (reused > 0) {
         eventDispatcher.dispatch('toast', { message: _('All selected shelf books are already in your library.'), type: 'info' });
+      } else if (removed > 0) {
+        eventDispatcher.dispatch('toast', { message: _('Removed {{count}} books no longer in selected shelves.', { count: removed }), type: 'info' });
       } else {
         eventDispatcher.dispatch('toast', { message: _('No books found in selected shelves.'), type: 'info' });
       }

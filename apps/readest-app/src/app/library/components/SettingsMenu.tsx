@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { PiUserCircle, PiUserCircleCheck, PiGear } from 'react-icons/pi';
 import { PiSun, PiMoon } from 'react-icons/pi';
 import { TbSunMoon } from 'react-icons/tb';
-import { MdCloudSync, MdSync, MdSyncProblem, MdOutlineSensors } from 'react-icons/md';
+import { MdCloudSync, MdSync, MdSyncProblem, MdOutlineSensors, MdOutlineCollectionsBookmark } from 'react-icons/md';
 
 import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import { DOWNLOAD_READEST_URL } from '@/services/constants';
@@ -24,6 +24,10 @@ import {
 import { getReadyFileSyncBackends } from '@/services/sync/file/runLibrarySync';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
+import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
+import { syncSubscribedGrimmLinkShelves } from '@/services/grimmlink/shelfSync';
+import { eventDispatcher } from '@/utils/event';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
 import { useTransferQueue } from '@/hooks/useTransferQueue';
@@ -60,7 +64,12 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   const { user } = useAuth();
   const { userProfilePlan, quotas } = useQuotaStats(true);
   const { themeMode, setThemeMode } = useThemeStore();
-  const { settings, setSettingsDialogOpen } = useSettingsStore();
+  const {
+    settings,
+    setSettingsDialogOpen,
+    setRequestedPanel,
+    setRequestedSubPage,
+  } = useSettingsStore();
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(settings.alwaysOnTop);
   const [isAlwaysShowStatusBar, setIsAlwaysShowStatusBar] = useState(settings.alwaysShowStatusBar);
   const [isOpenLastBooks, setIsOpenLastBooks] = useState(settings.openLastBooks);
@@ -74,6 +83,14 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
 
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false);
   const [refreshMetadataProgress, setRefreshMetadataProgress] = useState('');
+  const [shelfSyncing, setShelfSyncing] = useState(false);
+  const [shelfSyncStatus, setShelfSyncStatus] = useState<{
+    stage: 'starting' | 'downloading' | 'importing' | 'done' | 'error' | 'info';
+    book?: string;
+    progress?: number;
+    total?: number;
+    message?: string;
+  } | null>(null);
   const { openDialog: openAppLockDialogInStore } = useAppLockStore();
   const isPinEnabled = !!settings.pinCodeEnabled;
   const [biometricAvailable, setBiometricAvailable] = useState(false);
@@ -256,6 +273,84 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
     setIsDropdownOpen?.(false);
   };
 
+  const handleShelfSync = () => {
+    if (!settings.grimmlink?.enabled || !settings.grimmlink.serverUrl || !settings.grimmlink.userkey) {
+      setIsDropdownOpen?.(false);
+      setRequestedPanel('Integrations');
+      setRequestedSubPage('grimmlink');
+      setSettingsDialogOpen(true);
+      return;
+    }
+    if (!appService || shelfSyncing) return;
+    setShelfSyncing(true);
+    setShelfSyncStatus({ stage: 'starting' });
+    eventDispatcher.dispatch('toast', { message: _('Shelf sync started'), type: 'info' });
+    void (async () => {
+      try {
+        const client = new GrimmLinkClient(settings.grimmlink);
+        const store = new GrimmLinkSyncStore(appService, `${settings.grimmlink.serverUrl}\u0000${settings.grimmlink.username}`);
+        if ((await store.getShelfSubscriptions()).length === 0) {
+          setShelfSyncStatus({ stage: 'info', message: _('Select at least one Grimmory shelf first.') });
+          eventDispatcher.dispatch('toast', { message: _('Select at least one Grimmory shelf first.'), type: 'info' });
+          return;
+        }
+        const result = await syncSubscribedGrimmLinkShelves(
+          client,
+          store,
+          () => useLibraryStore.getState().library,
+          async (_book, nextLibrary) => {
+            setLibrary(nextLibrary);
+            await appService.saveLibraryBooks(nextLibrary);
+          },
+          appService,
+          {
+            onStage: ({ stage, book }) => {
+              setShelfSyncStatus({
+                stage,
+                book: book.title || book.filename,
+              });
+            },
+            onProgress: ({ progress, total }) => {
+              setShelfSyncStatus((current) => ({
+                stage: current?.stage === 'importing' ? 'importing' : 'downloading',
+                book: current?.book,
+                progress,
+                total,
+              }));
+            },
+          },
+          async (_book, nextLibrary) => {
+            setLibrary(nextLibrary);
+            await appService.saveLibraryBooks(nextLibrary);
+          },
+        );
+        setShelfSyncStatus({
+          stage: 'done',
+          message: result.downloaded > 0
+            ? _('Imported {{count}} books.', { count: result.downloaded })
+            : result.removed > 0
+              ? _('Removed {{count}} books no longer in selected shelves.', { count: result.removed })
+              : _('Shelf sync complete'),
+        });
+        if (result.downloaded > 0) {
+          eventDispatcher.dispatch('toast', { message: _('Imported {{count}} books.', { count: result.downloaded }), type: 'success' });
+        } else if (result.reused > 0) {
+          eventDispatcher.dispatch('toast', { message: _('All selected shelf books are already in your library.'), type: 'info' });
+        } else if (result.removed > 0) {
+          eventDispatcher.dispatch('toast', { message: _('Removed {{count}} books no longer in selected shelves.', { count: result.removed }), type: 'info' });
+        } else {
+          eventDispatcher.dispatch('toast', { message: _('No books found in selected shelves.'), type: 'info' });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : _('Connection error');
+        setShelfSyncStatus({ stage: 'error', message });
+        eventDispatcher.dispatch('toast', { message: `${_('Shelf sync failed')}: ${message}`, type: 'error' });
+      } finally {
+        setShelfSyncing(false);
+      }
+    })();
+  };
+
   const avatarUrl = user?.user_metadata?.['picture'] || user?.user_metadata?.['avatar_url'];
   const userFullName = user?.user_metadata?.['full_name'];
   const userDisplayName = userFullName ? userFullName.split(' ')[0] : null;
@@ -384,6 +479,23 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
       ) : (
         <MenuItem label={_('Sign In')} Icon={PiUserCircle} onClick={handleUserLogin}></MenuItem>
       )}
+
+      <MenuItem
+        label={_('Shelf Sync')}
+        Icon={MdOutlineCollectionsBookmark}
+        onClick={handleShelfSync}
+        disabled={shelfSyncing}
+        iconClassName={shelfSyncing ? 'animate-reverse-spin' : ''}
+        description={
+          shelfSyncStatus
+            ? shelfSyncStatus.stage === 'downloading'
+              ? `${_('Downloading')} ${shelfSyncStatus.book ?? ''}${shelfSyncStatus.total ? ` · ${Math.floor((shelfSyncStatus.progress ?? 0) / shelfSyncStatus.total * 100)}%` : ''}`
+              : shelfSyncStatus.stage === 'importing'
+                ? `${_('Importing')} ${shelfSyncStatus.book ?? ''}`
+                : shelfSyncStatus.message ?? (shelfSyncStatus.stage === 'starting' ? _('Starting shelf sync…') : '')
+            : undefined
+        }
+      />
 
       {isTauriAppPlatform() && (
         <MenuItem

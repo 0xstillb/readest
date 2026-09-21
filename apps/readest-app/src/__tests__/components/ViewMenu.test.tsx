@@ -69,8 +69,11 @@ vi.mock('@/store/bookDataStore', () => ({
 }));
 vi.mock('@/store/settingsStore', () => ({
   useSettingsStore: () => ({
+    settings: { grimmlink: {} },
     setSettingsDialogOpen: vi.fn(),
     setSettingsDialogBookKey: vi.fn(),
+    setRequestedPanel: vi.fn(),
+    setRequestedSubPage: vi.fn(),
   }),
 }));
 vi.mock('@/hooks/useTranslation', () => ({

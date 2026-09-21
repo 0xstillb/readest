@@ -53,6 +53,7 @@ describe('GrimmLink shelf sync safety', () => {
 
   it('reports the import stage after a shelf download completes', async () => {
     const stages: string[] = [];
+    let importedFile: unknown;
     const client = {
       getShelfBooks: async () => [
         { bookId: 1, bookHash: 'remote-hash', filename: 'book.pdf', format: 'PDF' as const },
@@ -62,14 +63,19 @@ describe('GrimmLink shelf sync safety', () => {
     const store = {
       getShelfEntries: async () => [],
       markShelfEntry: async () => {},
+      removeShelfEntry: async () => {},
     };
     const appService = {
       exists: async () => false,
       createDir: async () => {},
       writeFile: async () => {},
-      openFile: async () => ({ name: 'book.pdf' }),
+      resolveFilePath: async () => '/tmp/book.pdf',
       deleteFile: async () => {},
-      importBook: async () => ({ hash: 'local-hash', title: 'Book', format: 'PDF' }),
+      importBook: async (file: unknown) => {
+        importedFile = file;
+        return { hash: 'local-hash', title: 'Book', format: 'PDF' };
+      },
+      deleteBook: async () => {},
     };
 
     await new GrimmLinkShelfProvider(client, store as never).sync(
@@ -78,11 +84,43 @@ describe('GrimmLink shelf sync safety', () => {
       [],
       async () => {},
       appService as never,
-      'grimmlink',
       { onStage: ({ stage }) => stages.push(stage) },
     );
 
     expect(stages).toEqual(['downloading', 'importing']);
+    expect(importedFile).toBeInstanceOf(File);
+  });
+
+  it('purges GrimmLink-managed books that disappear from a shelf', async () => {
+    const removedEntries: number[] = [];
+    const purged: string[] = [];
+    const book = { hash: 'local-hash', title: 'Book', sourceTitle: 'Book', format: 'PDF' };
+    const client = {
+      getShelfBooks: async () => [],
+      downloadShelfBook: async () => new ArrayBuffer(0),
+    };
+    const store = {
+      getShelfEntries: async () => [{ bookId: 7, bookHash: 'remote-hash', localPath: 'local-hash/Book.pdf', managedByGrimmLink: true }],
+      markShelfEntry: async () => {},
+      removeShelfEntry: async (_type: string, _shelfId: number, bookId: number) => { removedEntries.push(bookId); },
+    };
+    const appService = {
+      exists: async () => true,
+      createDir: async () => {},
+      writeFile: async () => {},
+      openFile: async () => ({ name: 'book.pdf' }),
+      deleteFile: async () => {},
+      importBook: async () => null,
+      deleteBook: async (target: typeof book) => { purged.push(target.hash); },
+    };
+
+    const result = await new GrimmLinkShelfProvider(client, store as never).sync(
+      'regular', 1, [book as never], async () => {}, appService as never,
+    );
+
+    expect(result.removed).toBe(1);
+    expect(purged).toEqual(['local-hash']);
+    expect(removedEntries).toEqual([7]);
   });
 
 });
