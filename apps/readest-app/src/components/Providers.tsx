@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { IconContext } from 'react-icons';
 import { AuthProvider } from '@/context/AuthContext';
 import { useEnv } from '@/context/EnvContext';
+import WindowResizeHandles from '@/components/WindowResizeHandles';
 import { CSPostHogProvider } from '@/context/PHContext';
 import { SyncProvider } from '@/context/SyncContext';
 import { initSystemThemeListener, loadDataTheme } from '@/store/themeStore';
@@ -34,6 +35,8 @@ import { DropdownProvider } from '@/context/DropdownContext';
 import { CommandPaletteProvider, CommandPalette } from '@/components/command-palette';
 import AtmosphereOverlay from '@/components/AtmosphereOverlay';
 import AppLockScreen from '@/components/AppLockScreen';
+import AndroidAutoLibraryBridge from '@/components/AndroidAutoLibraryBridge';
+import FileSyncReport from '@/components/FileSyncReport';
 import AppLockDialog from '@/components/settings/AppLockDialog';
 import PassphrasePrompt from '@/components/PassphrasePrompt';
 import TelemetryConsentDialog from '@/components/TelemetryConsentDialog';
@@ -229,6 +232,7 @@ const Providers = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <CSPostHogProvider>
+      <AndroidAutoLibraryBridge />
       <AuthProvider>
         <IconContext.Provider value={{ size: `${iconSize}px` }}>
           <SyncProvider>
@@ -242,6 +246,8 @@ const Providers = ({ children }: { children: React.ReactNode }) => {
                   <CommandPalette />
                   <AtmosphereOverlay />
                   <PassphrasePrompt />
+                  {!appShellHidden && <FileSyncReport />}
+                  <WindowResizeHandles />
                 </div>
                 <AppLockDialog />
                 <TelemetryConsentDialog

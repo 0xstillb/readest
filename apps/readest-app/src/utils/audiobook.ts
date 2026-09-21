@@ -1,11 +1,45 @@
 import type { BookMetadata } from '@/libs/document';
+import type { ABSServer } from '@/types/audiobookshelf';
 import type { Book } from '@/types/book';
 
 /** Scheme prefix for the synthetic filePath of an ABS streaming audiobook. */
 export const ABS_FILE_SCHEME = 'abs://';
 
-/** True when `book` is a streaming audiobook from an Audiobookshelf server (no local file). */
-export const isAudiobook = (book: Pick<Book, 'format'>): boolean => book.format === 'ABS';
+/**
+ * True when `book` plays through the audiobook player rather than the reader:
+ * an Audiobookshelf stream, or audio streamed from an OPDS catalog (#6224).
+ * Neither has a local file.
+ */
+export const isAudiobook = (book: {
+  format: Book['format'];
+  metadata?: Book['metadata'];
+}): boolean =>
+  book.format === 'OPDSAUDIO' ||
+  book.format === 'BOOKORBIT' ||
+  (book.format === 'ABS' && book.metadata?.absMediaType !== 'ebook');
+
+/** True when `book` is an ebook streamed from an Audiobookshelf server. */
+export const isAbsEbook = (book: {
+  format: Book['format'];
+  metadata?: Book['metadata'];
+}): boolean => book.format === 'ABS' && book.metadata?.absMediaType === 'ebook';
+
+/**
+ * True when an ABS book's media can be downloaded for offline use: audiobooks
+ * and ebooks, not podcast shows. Reads both copies of the media type: a
+ * metadata edit drops the mirror until the next library sync.
+ */
+export const isAbsOfflineCapable = (book: {
+  format: Book['format'];
+  absMediaType?: Book['absMediaType'];
+  metadata?: Book['metadata'];
+}): boolean =>
+  book.format === 'ABS' &&
+  book.absMediaType !== 'podcast' &&
+  book.metadata?.absMediaType !== 'podcast';
+
+/** Books-relative folder holding an ABS audiobook downloaded for offline use. */
+export const getAbsOfflineDir = (bookHash: string): string => `${bookHash}/abs-offline`;
 
 /** Builds the synthetic filePath for an ABS book: `abs://<serverId>/<itemId>`. */
 export const makeAbsFilePath = (serverId: string, itemId: string): string =>
@@ -24,6 +58,29 @@ export const parseAbsFilePath = (
   if (!serverId || !itemId) return null;
   return { serverId, itemId };
 };
+
+/**
+ * Absolute media URL for a server-relative track path, authenticated by query
+ * token (media elements cannot send headers). Takes the server row rather
+ * than a client on purpose: callers pass the store's CURRENT row on every
+ * load so a token rotated mid-session is used, not one captured at start.
+ */
+export const buildAbsMediaUrl = (
+  server: Pick<ABSServer, 'url' | 'accessToken'>,
+  contentPath: string,
+): string => {
+  const base = server.url.replace(/\/+$/, '');
+  const separator = contentPath.includes('?') ? '&' : '?';
+  // Encode the token: a `+`, `&`, or `#` in a non-JWT access token would
+  // otherwise be reparsed as query syntax and the media request fail auth.
+  return `${base}${contentPath}${separator}token=${encodeURIComponent(server.accessToken ?? '')}`;
+};
+
+/** Authenticated URL for the primary ebook file on an ABS item. */
+export const buildAbsEbookUrl = (
+  server: Pick<ABSServer, 'url' | 'accessToken'>,
+  itemId: string,
+): string => buildAbsMediaUrl(server, `/api/items/${encodeURIComponent(itemId)}/ebook`);
 
 /**
  * Build the `metadata` payload an ABS stub syncs with.
@@ -96,7 +153,7 @@ export interface LibraryOpenSplit {
  */
 export const splitLibraryOpenIds = (
   ids: string[],
-  lookup: (hash: string) => Pick<Book, 'format'> | undefined,
+  lookup: (hash: string) => Pick<Book, 'format' | 'metadata'> | undefined,
 ): LibraryOpenSplit => {
   if (ids.length === 1) {
     const book = lookup(ids[0]!);

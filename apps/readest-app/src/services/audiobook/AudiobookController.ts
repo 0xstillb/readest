@@ -19,9 +19,7 @@ import type { ABSChapter, ABSTrack } from '@/types/audiobookshelf';
 import type { TTSMark } from '@/services/tts/types';
 import { eventDispatcher } from '@/utils/event';
 import { stubTranslation as _ } from '@/utils/misc';
-
-export const SKIP_FORWARD_SEC = 30;
-export const SKIP_BACKWARD_SEC = 15;
+import { SKIP_BACKWARD_SEC, SKIP_FORWARD_SEC } from '@/services/playback/playbackSource';
 
 // How often 'tts-speak-mark' is re-emitted while playing, so the lock-screen
 // position stays honest even when the rate isn't 1 (mirrors the TTS bridge's
@@ -52,7 +50,10 @@ export interface AudiobookSource {
   author: string;
   tracks: ABSTrack[];
   chapters: ABSChapter[];
-  /** Resolve a track contentUrl to a playable absolute URL (adds ?token=). */
+  /**
+   * Resolve a track contentUrl to a playable absolute URL (adds ?token=;
+   * routed through the loopback media proxy on native, see mediaProxy.ts).
+   */
   resolveUrl: (contentPath: string) => string;
   /** Global seconds to resume from. */
   startAt: number;

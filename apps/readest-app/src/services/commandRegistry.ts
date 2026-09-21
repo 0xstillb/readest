@@ -332,6 +332,28 @@ const layoutPanelItems = [
     keywords: ['progress', 'display', 'page', 'number', 'percentage'],
     section: 'Header & Footer',
   },
+  {
+    id: 'settings.layout.headerFooterFontSize',
+    labelKey: _('Font Size'),
+    keywords: ['font', 'size', 'header', 'footer', 'progress', 'page', 'number', 'text'],
+    section: 'Header & Footer',
+  },
+  {
+    id: 'settings.layout.headerFooterBackground',
+    labelKey: _('Background Color'),
+    keywords: [
+      'background',
+      'color',
+      'transparent',
+      'text',
+      'header',
+      'footer',
+      'progress',
+      'page',
+      'number',
+    ],
+    section: 'Header & Footer',
+  },
 ];
 
 // color panel items
@@ -455,6 +477,12 @@ const controlPanelItems = [
     section: 'Pagination',
   },
   {
+    id: 'settings.control.disablePullDownToBookmark',
+    labelKey: _('Pull-Down to Bookmark'),
+    keywords: ['pull', 'down', 'bookmark', 'gesture'],
+    section: 'Annotation Tools',
+  },
+  {
     id: 'settings.control.enableQuickActions',
     labelKey: _('Enable Quick Actions'),
     keywords: ['quick', 'actions', 'annotation', 'enable'],
@@ -500,6 +528,12 @@ const controlPanelItems = [
     id: 'settings.control.autohideCursor',
     labelKey: _('Auto-hide Cursor'),
     keywords: ['cursor', 'mouse', 'pointer', 'hide', 'autohide', 'idle'],
+    section: 'Device',
+  },
+  {
+    id: 'settings.control.gamepadEnabled',
+    labelKey: _('Gamepad Support'),
+    keywords: ['gamepad', 'controller', 'joystick', 'steam', 'deck', 'joypad'],
     section: 'Device',
   },
   {

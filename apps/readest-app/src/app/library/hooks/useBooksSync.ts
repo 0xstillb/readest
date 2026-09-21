@@ -24,7 +24,7 @@ import {
   pickFresherCover,
   pickFresherMetadata,
 } from '@/app/library/utils/libraryUtils';
-import { getPrimaryLanguage } from '@/utils/book';
+import { getPrimaryLanguage, pickFresherGroup } from '@/utils/book';
 import { isAudiobook, parseAbsFilePath } from '@/utils/audiobook';
 
 export const useBooksSync = () => {
@@ -35,6 +35,17 @@ export const useBooksSync = () => {
   const { setLibrary, setIsSyncing, setSyncProgress } = useLibraryStore();
   const { useSyncInited, syncedBooks, syncBooks, lastSyncedAtBooks } = useSync();
   const isPullingRef = useRef(false);
+  // A library change that lands while a sync is in flight must not be lost.
+  // The post-import chain (push, pull, follow-up pull) runs for seconds and a
+  // book's upload completes inside it, stamping `uploadedAt` — the field
+  // peers gate adoption on. Dropping that change left the cloud row with
+  // `uploaded_at = null` until an unrelated change re-pushed the book.
+  const syncPendingRef = useRef(false);
+  const handleAutoSyncRef = useRef<() => void>(() => {});
+  const releaseSyncLock = useCallback(() => {
+    isPullingRef.current = false;
+    if (syncPendingRef.current) handleAutoSyncRef.current();
+  }, []);
 
   const getNewBooks = useCallback(() => {
     if (!user) return {};
@@ -104,7 +115,11 @@ export const useBooksSync = () => {
         let fileSucceeded = false;
         if (runFilePass) {
           const result = await runFileLibrarySyncPass(envConfig, _);
-          fileSucceeded = result !== null;
+          // A run that could not write library.json converged NOTHING, however
+          // many books it uploaded: peers read membership, tombstones and the
+          // uploaded-file record from that one file. Reporting it as "N books
+          // synced" is what let #5900 go unnoticed for so long.
+          fileSucceeded = result !== null && !result.indexPushFailed && !result.failures;
           fileSynced = result?.booksSynced ?? 0;
         }
 
@@ -129,28 +144,34 @@ export const useBooksSync = () => {
           });
         }
       } finally {
-        isPullingRef.current = false;
+        releaseSyncLock();
       }
     },
-    [_, user, libraryLoaded, syncBooks, envConfig],
+    [_, user, libraryLoaded, syncBooks, envConfig, releaseSyncLock],
   );
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleAutoSync = useCallback(
     throttle(
       async () => {
-        if (isPullingRef.current) return;
+        if (isPullingRef.current) {
+          syncPendingRef.current = true;
+          return;
+        }
         // Readest Cloud unchecked: the native book channel is gated (the auto
         // library sync itself is useLibraryFileSync's).
         const settingsNow = useSettingsStore.getState().settings;
         if (!isReadestCloudEnabled(settingsNow)) return;
         const newBooks = getNewBooks();
         if (!newBooks.lastSyncedAt) return;
+        // getNewBooks just read the live library, so every change up to now
+        // rides on this sync; only changes landing during it re-arm.
+        syncPendingRef.current = false;
         isPullingRef.current = true;
         try {
           await syncBooks(newBooks.books, 'both');
         } finally {
-          isPullingRef.current = false;
+          releaseSyncLock();
         }
       },
       SYNC_BOOKS_INTERVAL_SEC * 1000,
@@ -160,8 +181,11 @@ export const useBooksSync = () => {
   );
 
   useEffect(() => {
+    handleAutoSyncRef.current = handleAutoSync;
+  }, [handleAutoSync]);
+
+  useEffect(() => {
     if (!user) return;
-    if (isPullingRef.current) return;
     handleAutoSync();
   }, [user, library, handleAutoSync]);
 
@@ -257,6 +281,25 @@ export const useBooksSync = () => {
             mergedBook.primaryLanguage = getPrimaryLanguage(meta.metadata.language);
           }
         }
+        // Group membership resolves on its own groupUpdatedAt clock (issue
+        // #5911). `transformBookFromDB` always materialises groupId/groupName,
+        // so the row spread above hands an absent cloud group straight over a
+        // present local one — and it does so on `>=`, meaning a mere TIE wiped
+        // the group. `updatedAt` is bumped by an UPLOAD as well as by an edit,
+        // so a stale cloud row could outrank every real grouping.
+        const group = pickFresherGroup(
+          oldBook,
+          matchingBook,
+          matchingBook.updatedAt >= oldBook.updatedAt,
+        );
+        mergedBook.groupId = group.groupId;
+        mergedBook.groupName = group.groupName;
+        mergedBook.groupUpdatedAt = group.groupUpdatedAt;
+        // Same story for the metadata blob, which carries the description: a
+        // cloud row whose `metadata` column is null arrives as `metadata: null`
+        // and the spread clears the local copy. An absent blob always means
+        // "this row never had one", never "the user cleared it" (#5912).
+        mergedBook.metadata = mergedBook.metadata ?? oldBook.metadata ?? matchingBook.metadata;
         return mergedBook;
       }
       return oldBook;
@@ -265,7 +308,12 @@ export const useBooksSync = () => {
     const oldBooksBatchSize = 100;
     for (let i = 0; i < oldBooksNeedsDownload.length; i += oldBooksBatchSize) {
       const batch = oldBooksNeedsDownload.slice(i, i + oldBooksBatchSize);
-      await appService?.downloadBookCovers(batch);
+      await appService?.downloadBookCovers(batch).catch((error) => {
+        console.warn('Cover refresh failed; continuing library sync:', error);
+        // The merge adopts the remote cover hash below. Keep failed covers
+        // eligible for retry even after their metadata clocks match.
+        for (const book of batch) book.coverDownloadedAt = null;
+      });
     }
 
     const updatedLibrary = await Promise.all(liveLibrary.map(processOldBook));
@@ -310,7 +358,9 @@ export const useBooksSync = () => {
       const batchSize = 10;
       for (let i = 0; i < newBooks.length; i += batchSize) {
         const batch = newBooks.slice(i, i + batchSize);
-        await appService?.downloadBookCovers(batch);
+        await appService?.downloadBookCovers(batch).catch((error) => {
+          console.warn('Cover download failed; continuing library sync:', error);
+        });
         await Promise.all(batch.map(processNewBook));
         const progress = Math.min((i + batchSize) / newBooks.length, 1);
         setSyncProgress(progress);

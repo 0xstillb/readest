@@ -34,6 +34,10 @@ export interface ABSTrack {
   duration: number; // seconds
   contentUrl: string; // server-relative, e.g. /api/items/<id>/file/<ino>
   mimeType: string;
+  /** The audio file's name, e.g. `20686-01.mp3`. */
+  title?: string;
+  /** The audio file on the server; `size` in bytes. */
+  metadata?: { filename?: string; size?: number };
 }
 
 export interface ABSChapter {
@@ -67,6 +71,8 @@ export interface ABSLibraryItem {
       authorName?: string | null; // book items
       author?: string | null; // podcast items
       language?: string | null;
+      narratorName?: string | null; // minified book items
+      narrators?: string[]; // expanded book items
     };
     duration?: number;
     numTracks?: number;
@@ -76,6 +82,12 @@ export interface ABSLibraryItem {
     tracks?: ABSTrack[];
     chapters?: ABSChapter[];
     episodes?: ABSEpisode[];
+    /** Primary ebook file, present for ebook-backed book items. */
+    ebookFile?: {
+      ino?: string;
+      ebookFormat?: string;
+      metadata?: { filename?: string; size?: number };
+    };
   };
 }
 
@@ -88,6 +100,12 @@ export interface ABSMediaProgress {
   duration: number; // seconds
   isFinished: boolean;
   lastUpdate: number; // ms epoch
+  /** Overall completion 0..1, what the ABS library UI draws its progress bar from. */
+  progress?: number;
+  /** Ebook reading position: an EPUB CFI, or a format-specific locator such as a PDF page. */
+  ebookLocation?: string | null;
+  /** Ebook completion 0..1, tracked separately from the audio `progress`. */
+  ebookProgress?: number;
 }
 
 /** Subset of POST /api/items/:id/play response. */

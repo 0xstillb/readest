@@ -7,6 +7,7 @@ import {
   DeleteAction,
   type DictionaryImportProgressHandler,
   DistChannel,
+  FileInfo,
   FileItem,
   FileSystem,
   OsPlatform,
@@ -22,6 +23,7 @@ import { getLibraryFilename, getLibraryBackupFilename } from '@/utils/book';
 import { getDirPath, getFilename } from '@/utils/path';
 
 import { getOSPlatform } from '@/utils/misc';
+import { buildAbsEbookUrl, isAbsEbook, parseAbsFilePath } from '@/utils/audiobook';
 import { isStoragePermissionError, requestStoragePermission } from '@/utils/permission';
 import { ProgressHandler } from '@/utils/transfer';
 import { CustomTextureInfo } from '@/styles/textures';
@@ -261,6 +263,10 @@ export abstract class BaseAppService implements AppService {
     } catch {
       return false;
     }
+  }
+
+  async stats(path: string, base: BaseDir): Promise<FileInfo> {
+    return await this.fs.stats(path, base);
   }
 
   async getImageURL(path: string): Promise<string> {
@@ -591,6 +597,19 @@ export abstract class BaseAppService implements AppService {
   }
 
   async loadBookContent(book: Book): Promise<BookContent> {
+    if (isAbsEbook(book)) {
+      const parsed = parseAbsFilePath(book.filePath);
+      if (parsed) {
+        const { findABSServerById } = await import('@/store/absServerStore');
+        const server = findABSServerById(parsed.serverId);
+        if (server) {
+          return BookSvc.loadBookContent(this.fs, {
+            ...book,
+            url: buildAbsEbookUrl(server, parsed.itemId),
+          });
+        }
+      }
+    }
     return BookSvc.loadBookContent(this.fs, book);
   }
 

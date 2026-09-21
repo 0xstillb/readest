@@ -29,7 +29,7 @@ interface LibraryHeaderProps {
   onPullLibrary: () => void;
   onImportBooksFromFiles: () => void;
   onImportBooksFromDirectory?: () => void;
-  onImportBookFromUrl?: () => void;
+  onImportFromWebBrowser?: () => void;
   onImportBookFromNovelUrl?: () => void;
   onOpenCatalogManager: () => void;
   onOpenFeeds: () => void;
@@ -50,7 +50,7 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
   onPullLibrary,
   onImportBooksFromFiles,
   onImportBooksFromDirectory,
-  onImportBookFromUrl,
+  onImportFromWebBrowser,
   onImportBookFromNovelUrl,
   onOpenCatalogManager,
   onOpenFeeds,
@@ -104,7 +104,7 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
       }}
     >
       <div className='flex w-full items-center justify-between space-x-6 sm:space-x-12'>
-        <div className='exclude-title-bar-mousedown relative flex w-full items-center pl-4'>
+        <div className='exclude-title-bar-mousedown relative flex w-full items-center ps-4'>
           <div className='relative flex h-9 w-full items-center sm:h-7'>
             {/* The icon doubles as the mode indicator and toggle: magnifier
                 for book search, full-text glyph for content search. */}
@@ -118,7 +118,7 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
                   'text-base-content/55 hover:text-base-content',
                   'not-eink:transition-colors ms-1.5 flex h-7 min-h-7 items-center justify-center',
                   'touch-target w-8 rounded-full bg-transparent duration-150',
-                  'focus-visible:ring-base-content/15 focus-visible:outline-none focus-visible:ring-2',
+                  'focus-visible:ring-base-content/15 focus-visible:outline-hidden focus-visible:ring-2',
                 )}
                 onClick={() => onSearchTargetChange(searchTarget === 'text' ? 'books' : 'text')}
               >
@@ -148,7 +148,7 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
                 'bg-base-300/45 border-0',
                 'font-sans text-sm font-light',
                 'placeholder:text-base-content/50 truncate',
-                'focus:outline-none focus:ring-0',
+                'focus:outline-hidden focus:ring-0',
               )}
             />
             {searchTarget === 'text' && (
@@ -164,7 +164,7 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
                   menuClassName='no-triangle mt-1'
                   buttonClassName={clsx(
                     'btn btn-ghost h-full min-h-0 w-9 rounded-none rounded-e-full p-0',
-                    '!bg-transparent hover:!bg-transparent',
+                    'bg-transparent! hover:bg-transparent!',
                   )}
                   toggleButton={
                     <FaChevronDown role='none' className='text-base-content/50 h-3 w-3' />
@@ -180,8 +180,8 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
           </div>
           <div
             className={clsx(
-              'text-base-content/50 absolute flex items-center space-x-2 sm:space-x-4',
-              searchTarget === 'text' ? 'end-14' : 'right-4',
+              'text-base-content/50 absolute flex items-center gap-1',
+              searchTarget === 'text' ? 'end-14' : 'end-4',
             )}
           >
             {searchQuery && (
@@ -202,13 +202,13 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
                   className={clsx(
                     'exclude-title-bar-mousedown dropdown-bottom dropdown-center cursor-pointer',
                   )}
-                  buttonClassName='p-0 h-6 min-h-6 w-6 flex touch-target items-center justify-center !bg-transparent'
+                  buttonClassName='p-0 h-6 min-h-6 w-6 flex touch-target items-center justify-center bg-transparent!'
                   toggleButton={<PiPlus role='none' className='m-0.5 h-5 w-5' />}
                 >
                   <ImportMenu
                     onImportBooksFromFiles={onImportBooksFromFiles}
                     onImportBooksFromDirectory={onImportBooksFromDirectory}
-                    onImportBookFromUrl={onImportBookFromUrl}
+                    onImportFromWebBrowser={onImportFromWebBrowser}
                     onImportBookFromNovelUrl={onImportBookFromNovelUrl}
                     onOpenCatalogManager={onOpenCatalogManager}
                     onOpenFeeds={onOpenFeeds}

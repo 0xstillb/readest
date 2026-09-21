@@ -12,23 +12,8 @@ local UIManagerStub = stubs.UIManager
 
 local ReadestSync = require("main")
 
--- Bare plugin instance: skips init() (menu/dispatcher/meta wiring) and
--- fakes the pull methods so tests observe what onResume triggers.
 local function makePlugin(opts)
-    local plugin = setmetatable({
-        settings = {
-            auto_sync = opts.auto_sync,
-            access_token = opts.access_token,
-        },
-        ui = { document = opts.document },
-        pull_calls = {},
-    }, { __index = ReadestSync })
-    for _, method in ipairs({ "pullBookConfig", "pullBookNotes", "pullBookStats" }) do
-        plugin[method] = function(self, interactive)
-            table.insert(self.pull_calls, { method = method, interactive = interactive })
-        end
-    end
-    return plugin
+    return stubs.makePullPlugin(ReadestSync, opts)
 end
 
 describe("ReadestSync:onResume", function()
@@ -45,7 +30,7 @@ describe("ReadestSync:onResume", function()
         -- Delayed, not immediate: Wi-Fi is still coming back up right after wake.
         assert.is_true(UIManagerStub._scheduled[1].delay > 0)
 
-        UIManagerStub._scheduled[1].fn()
+        UIManagerStub:drain()
         assert.are.equal(3, #plugin.pull_calls)
         local pulled = {}
         for _, call in ipairs(plugin.pull_calls) do
@@ -83,8 +68,7 @@ describe("ReadestSync:onResume", function()
         assert.are.equal(1, #UIManagerStub._scheduled)
 
         -- Simulate the pending task firing.
-        local task = table.remove(UIManagerStub._scheduled, 1)
-        task.fn()
+        UIManagerStub:drain()
 
         -- Still inside the debounce window: no new pull.
         plugin:onResume()

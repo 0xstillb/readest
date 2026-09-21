@@ -143,6 +143,7 @@ describe('services/constants', () => {
       expect(SUPPORTED_BOOK_EXTS).toContain('mobi');
       expect(SUPPORTED_BOOK_EXTS).toContain('txt');
       expect(SUPPORTED_BOOK_EXTS).toContain('md');
+      expect(SUPPORTED_BOOK_EXTS).toContain('html');
     });
 
     it('BOOK_ACCEPT_FORMATS is a comma-separated string of dotted extensions', () => {
@@ -653,6 +654,7 @@ describe('services/constants', () => {
       expect(typeof DEFAULT_TTS_CONFIG.ttsVoice).toBe('string');
       expect(typeof DEFAULT_TTS_CONFIG.ttsLocation).toBe('string');
       expect(typeof DEFAULT_TTS_CONFIG.ttsMediaMetadata).toBe('string');
+      expect(DEFAULT_TTS_CONFIG.ttsSkipInlineAnnotations).toBe(false);
     });
 
     it('has ttsHighlightOptions with style and color', () => {

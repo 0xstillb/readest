@@ -15,14 +15,25 @@
 // one playback session; Android needs it so multi-hour local files can stream
 // from disk without buffering the whole audiobook through the WebView.
 // Desktop and web use a plain HTMLAudioElement.
+//
+// A source whose recording is split across several files (an Audiobookshelf
+// item's tracks) hands over a track list instead, and MultiTrackNarrationClock
+// presents those files as one timeline on top of the same per-platform player.
 
 import type { BookDoc } from '@/libs/document';
+import { BlobAudioClock, HtmlAudioClock } from '@/services/audiobook/AudiobookClock';
 import { getOSPlatform, stubTranslation as _ } from '@/utils/misc';
 import { parseSSMLMarks } from '@/utils/ssml';
 import type { TTSCapabilities, TTSClient, TTSMessageEvent } from '../TTSClient';
 import type { TTSController } from '../TTSController';
 import type { TTSGranularity, TTSVoice, TTSVoicesGroup } from '../types';
 import type { MediaOverlaySection, NarrationPar } from './MediaOverlaySection';
+import {
+  MultiTrackNarrationClock,
+  type NarrationTrack,
+  type NarrationTrackPlayer,
+} from './MultiTrackNarrationClock';
+import type { NarrationClock } from './NarrationClock';
 import { NativeNarrationPlayer } from './NativeNarrationPlayer';
 
 export const MEDIA_OVERLAY_CLIENT_NAME = 'media-overlay';
@@ -88,18 +99,56 @@ export interface NarrationAudioSource {
   loadBlob: (href: string) => Promise<Blob>;
   resolveUrl?: (href: string) => Promise<string | null>;
   resolvePath?: (href: string) => Promise<string | null>;
+  // A recording split across several streamable files, timed on one global
+  // clock. Takes precedence over the single-file resolvers when it returns
+  // tracks.
+  resolveTracks?: (href: string) => Promise<NarrationTrack[] | null>;
+  // Fetches one track's bytes, for a server whose audio a media element cannot
+  // load from its URL at all (BookOrbit sends `Cross-Origin-Resource-Policy:
+  // same-origin`). The track list then carries paths rather than URLs, and the
+  // composite plays them from blobs, one at a time.
+  loadTrack?: (path: string) => Promise<Blob>;
 }
 
-// Minimal clock surface shared by HTMLAudioElement and NativeNarrationPlayer.
-interface NarrationClock {
-  currentTime: number;
-  playbackRate: number;
-  readonly paused: boolean;
-  play(): Promise<void>;
-  pause(): void;
-  addEventListener(type: 'ended' | 'error' | 'timeupdate', fn: () => void): void;
-  removeEventListener(type: 'ended' | 'error' | 'timeupdate', fn: () => void): void;
-}
+const seekClock = async (audio: NarrationClock, seconds: number): Promise<void> => {
+  // A native or multi-file seek is async (plugin invoke, file switch);
+  // assigning currentTime alone can race with play() and start from the
+  // previous playhead.
+  if (audio.seek) await audio.seek(seconds);
+  else audio.currentTime = seconds;
+};
+
+const setClockRate = async (audio: NarrationClock, rate: number): Promise<void> => {
+  if (audio.setRate) await audio.setRate(rate);
+  else audio.playbackRate = rate;
+};
+
+// The shared native player as a per-track player: each track loads by URL
+// under the same href, so the native session survives file switches.
+const nativeTrackPlayer = (player: NativeNarrationPlayer, href: string): NarrationTrackPlayer => ({
+  get currentTime() {
+    return player.currentTime;
+  },
+  set currentTime(seconds: number) {
+    player.currentTime = seconds;
+  },
+  get playbackRate() {
+    return player.playbackRate;
+  },
+  set playbackRate(rate: number) {
+    player.playbackRate = rate;
+  },
+  get paused() {
+    return player.paused;
+  },
+  load: (url, startAt) => player.loadPath(href, url, startAt),
+  play: () => player.play(),
+  pause: () => player.pause(),
+  seek: (seconds) => player.seek(seconds),
+  setRate: (rate) => player.setRate(rate),
+  addEventListener: (type, fn) => player.addEventListener(type, fn),
+  removeEventListener: (type, fn) => player.removeEventListener(type, fn),
+});
 
 // Consecutive pars sharing an audio file. Normally one run per block; a run
 // boundary means the publisher split the paragraph across files.
@@ -127,6 +176,10 @@ export class MediaOverlayClient implements TTSClient {
   #objectUrl: string | null = null;
   #audioLoad: { href: string; promise: Promise<NarrationClock> } | null = null;
   #currentPar: NarrationPar | null = null;
+  // Last par the recording actually rode, kept across the handover that ends
+  // every block (unlike #currentPar) so speak() can tell a stalled cursor
+  // catching up from a navigation backwards. Cleared with the clock itself.
+  #playedPar: NarrationPar | null = null;
   #nextChunkPosition: number | null = null;
   #handoverTimer: ReturnType<typeof setTimeout> | null = null;
   #rate = 1;
@@ -199,6 +252,31 @@ export class MediaOverlayClient implements TTSClient {
   async #loadAudio(href: string): Promise<NarrationClock> {
     if (!this.#source) throw new Error('Book cannot load narration audio');
 
+    const tracks = await this.#source.resolveTracks?.(href).catch(() => null);
+    if (tracks?.length) {
+      let player: NarrationTrackPlayer;
+      if (this.#native && this.#player) {
+        // Same reasoning as the native branch below: never #releaseAudio here.
+        this.#cancelHandover();
+        this.#audio?.destroy?.();
+        player = nativeTrackPlayer(this.#player, href);
+      } else {
+        this.#releaseAudio();
+        // A source with a blob loader may still resolve real URLs (BookOrbit
+        // does when the media proxy is up), and those stream and seek, so the
+        // blob clock is only for the tracks that are not URLs.
+        const loadTrack = this.#source.loadTrack;
+        const streamable = tracks.every((track) => /^https?:\/\//.test(track.url));
+        player = loadTrack && !streamable ? new BlobAudioClock(loadTrack) : new HtmlAudioClock();
+      }
+      const clock = new MultiTrackNarrationClock(tracks, player);
+      await clock.setRate(this.#rate);
+      this.#audio = clock;
+      this.#audioHref = href;
+      this.#objectUrl = null;
+      return clock;
+    }
+
     if (this.#native && this.#player) {
       const path = await this.#source.resolvePath?.(href).catch(() => null);
       // Keep any prior native session's file until the new one is staged; load()
@@ -256,10 +334,12 @@ export class MediaOverlayClient implements TTSClient {
   #releaseAudio(): void {
     this.#cancelHandover();
     this.#audio?.pause();
+    this.#audio?.destroy?.();
     if (this.#objectUrl) URL.revokeObjectURL(this.#objectUrl);
     this.#audio = null;
     this.#audioHref = null;
     this.#objectUrl = null;
+    this.#playedPar = null;
     if (this.#native && this.#player) {
       void this.#player.release();
     }
@@ -275,6 +355,7 @@ export class MediaOverlayClient implements TTSClient {
     // recording plays on under the engine that took over.
     this.#audio?.pause();
     this.#currentPar = null;
+    this.#playedPar = null;
     this.#audioLoad = null;
     this.#audio = null;
     this.#audioHref = null;
@@ -373,8 +454,7 @@ export class MediaOverlayClient implements TTSClient {
       if (signal.aborted) return;
 
       this.#cancelHandover();
-      if (this.#native && this.#player) await this.#player.setRate(this.#rate);
-      else audio.playbackRate = this.#rate;
+      await setClockRate(audio, this.#rate);
       // Sequential narration needs no seeking: Media Overlay clips are contiguous
       // and in document order, so the element can simply keep rolling while
       // boundaries are reported as the clock passes each clip. Seeking to
@@ -387,15 +467,25 @@ export class MediaOverlayClient implements TTSClient {
         runIndex === 0 && requestedStart !== null
           ? first.clipBegin + Math.min(Math.max(requestedStart, 0), first.clipEnd - first.clipBegin)
           : null;
+      const playhead = audio.currentTime;
       const alreadyRolling =
-        audio.currentTime >= first.clipBegin - CLIP_CONTINUITY_TOLERANCE_SEC &&
-        audio.currentTime < first.clipEnd;
-      if (requestedPosition !== null || !alreadyRolling) {
-        const position = requestedPosition ?? first.clipBegin;
-        // Native seek is async (plugin invoke); assigning currentTime alone can
-        // race with play() and start from the previous playhead.
-        if (this.#native && this.#player) await this.#player.seek(position);
-        else audio.currentTime = position;
+        playhead >= first.clipBegin - CLIP_CONTINUITY_TOLERANCE_SEC && playhead < first.clipEnd;
+      // ...and the recording can be further along still. The native mobile
+      // player runs in-process rather than in the WebView, so it keeps playing
+      // while the WebView's main thread is stalled or its timers throttled (a
+      // page-turn relayout, a section preload, the screen off) and the block
+      // cursor — advanced by a JS poll of this clock — falls a paragraph or
+      // more behind. Seeking back to clipBegin then replays audio the listener
+      // has already heard. The recording is the master clock: leave it rolling
+      // and let the marks catch up as the clip loop walks the passed pars.
+      // Only clips strictly after the last one played count, so a deliberate
+      // backward navigation — and a replay of the par just heard — still seeks.
+      const ranPastWhileStalled =
+        playhead >= first.clipEnd &&
+        this.#playedPar?.audioHref === first.audioHref &&
+        first.clipBegin > this.#playedPar.clipBegin;
+      if (requestedPosition !== null || !(alreadyRolling || ranPastWhileStalled)) {
+        await seekClock(audio, requestedPosition ?? first.clipBegin);
       }
       try {
         await audio.play();
@@ -412,6 +502,7 @@ export class MediaOverlayClient implements TTSClient {
           return;
         }
         this.#currentPar = par;
+        this.#playedPar = par;
         this.controller?.dispatchSpeakMark({
           offset: 0,
           name: par.markName,
@@ -481,10 +572,10 @@ export class MediaOverlayClient implements TTSClient {
     // Await the native set-rate invoke: assigning playbackRate alone was
     // fire-and-forget, so stop→setRate→start (and live changes) raced play()
     // and left AVPlayer at the previous rate until the next voice switch.
-    if (this.#native && this.#player) {
+    if (this.#audio) {
+      await setClockRate(this.#audio, rate);
+    } else if (this.#native && this.#player) {
       await this.#player.setRate(rate);
-    } else if (this.#audio) {
-      this.#audio.playbackRate = rate;
     }
   }
 
@@ -559,9 +650,7 @@ export class MediaOverlayClient implements TTSClient {
     const par = this.#currentPar;
     if (!audio || !par) return false;
     const within = Math.min(Math.max(seconds, 0), par.clipEnd - par.clipBegin);
-    const position = par.clipBegin + within;
-    if (this.#native && this.#player) await this.#player.seek(position);
-    else audio.currentTime = position;
+    await seekClock(audio, par.clipBegin + within);
     return true;
   }
 

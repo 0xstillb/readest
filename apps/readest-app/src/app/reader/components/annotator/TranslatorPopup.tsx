@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import Popup from '@/components/Popup';
 import { Position } from '@/utils/sel';
+import { useEnv } from '@/context/EnvContext';
+import { useReaderStore } from '@/store/readerStore';
+import { saveViewSettings } from '@/helpers/settings';
 import { useAuth } from '@/context/AuthContext';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -25,6 +28,7 @@ const generateTranslatorLangs = () => {
 const translatorLangs = generateTranslatorLangs();
 
 interface TranslatorPopupProps {
+  bookKey: string;
   text: string;
   position: Position;
   trianglePosition: Position;
@@ -40,6 +44,7 @@ interface TranslatorType {
 }
 
 const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
+  bookKey,
   text,
   position,
   trianglePosition,
@@ -49,9 +54,13 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
 }) => {
   const _ = useTranslation();
   const { token } = useAuth();
+  const { envConfig } = useEnv();
+  const { getViewSettings } = useReaderStore();
   const { settings, setSettings } = useSettingsStore();
   const [providers, setProviders] = useState<TranslatorType[]>([]);
-  const [sourceLang, setSourceLang] = useState('AUTO');
+  const [sourceLang, setSourceLang] = useState(
+    getViewSettings(bookKey)?.translateSourceLang ?? 'AUTO',
+  );
   const [targetLang, setTargetLang] = useState(settings.globalReadSettings.translateTargetLang);
   const [provider, setProvider] = useState(settings.globalReadSettings.translationProvider);
   const [translation, setTranslation] = useState<string | null>(null);
@@ -71,6 +80,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
 
   const handleSourceLangChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     setSourceLang(event.target.value);
+    saveViewSettings(envConfig, bookKey, 'translateSourceLang', event.target.value, true, false);
   };
 
   const handleTargetLangChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -118,7 +128,10 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
           throw new Error('No translation found');
         }
 
-        setTranslation(translatedText);
+        // Decode provider entities once while keeping any markup literal.
+        const decoder = document.createElement('textarea');
+        decoder.innerHTML = translatedText.replaceAll('<', '&lt;');
+        setTranslation(decoder.value);
         if (sourceLang === 'AUTO' && detectedSource) {
           setDetectedSourceLang(detectedSource);
         }
@@ -149,7 +162,15 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
         minHeight={popupHeight}
         maxHeight={720}
         position={position}
-        className='grid h-full select-text grid-rows-[1fr,auto,1fr,auto]'
+        // Tracks are space-separated (`_` in a Tailwind arbitrary value).
+        // Commas here emitted `grid-template-rows:1fr,auto,1fr,auto`, which the
+        // browser discards, leaving four implicit auto rows that sized to their
+        // content and pushed the translated pane and the provider footer past
+        // the popup's own max height with nothing scrollable to reach them.
+        // `minmax(0,...)` rather than a bare `1fr`: a bare fr floors at
+        // min-content, so the rows would refuse to shrink inside the capped
+        // popup and overflow it again.
+        className='grid h-full select-text grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]'
         onDismiss={onDismiss}
       >
         <div className='overflow-y-auto p-4 font-sans'>
@@ -176,7 +197,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
           <p className='text-base'>{text}</p>
         </div>
 
-        <div className='mx-4 flex-shrink-0 border-t border-base-content/20'></div>
+        <div className='mx-4 shrink-0 border-t border-base-content/20'></div>
 
         <div className='overflow-y-auto p-4 font-sans'>
           <div className='mb-2 flex items-center justify-between'>

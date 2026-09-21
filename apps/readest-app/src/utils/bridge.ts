@@ -242,6 +242,10 @@ export async function getSafeAreaInsets(): Promise<GetSafeAreaInsetsResponse> {
   return result;
 }
 
+export async function setScreenWakeLock(enabled: boolean): Promise<void> {
+  await invoke('plugin:native-bridge|set_screen_wake_lock', { payload: { enabled } });
+}
+
 export async function getScreenBrightness(): Promise<GetScreenBrightnessResponse> {
   const result = await invoke<GetScreenBrightnessResponse>(
     'plugin:native-bridge|get_screen_brightness',
@@ -346,6 +350,29 @@ export async function captureWebviewRegion(
   return await invoke<ArrayBuffer>('plugin:native-bridge|capture_webview_region', {
     payload: request,
   });
+}
+
+export interface CoverWebviewRegionResponse {
+  token: number;
+}
+
+/**
+ * Freeze the on-screen pixels of a webview region behind a native snapshot
+ * view that `captureWebviewRegion` does not see (iOS only so far). The
+ * two-column page curl uses it to capture the incoming column under its
+ * overlay without ever showing it (#6106). Rejects where unimplemented.
+ */
+export async function coverWebviewRegion(
+  request: CaptureWebviewRegionRequest,
+): Promise<CoverWebviewRegionResponse> {
+  return await invoke<CoverWebviewRegionResponse>('plugin:native-bridge|cover_webview_region', {
+    payload: request,
+  });
+}
+
+/** Remove the cover put up by `coverWebviewRegion`; stale tokens are ignored. */
+export async function uncoverWebviewRegion(request: { token: number }): Promise<void> {
+  await invoke('plugin:native-bridge|uncover_webview_region', { payload: request });
 }
 
 // ── Sync passphrase keychain ────────────────────────────────────────────

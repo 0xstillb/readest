@@ -11,12 +11,20 @@ import {
   formatNumber,
   formatProgress,
   getChapterTickFractions,
+  getChapterLocationsLeft,
   getReferencePageInfo,
 } from '@/utils/progress';
 import { footerInfoVisible, footerReservesBand } from '../utils/footerBand';
+import {
+  getChromeChip,
+  getChromeFontSize,
+  getChromeTextColor,
+  isChromeStyled,
+} from '../utils/headerFooterStyle';
 import StatusInfo from './StatusInfo.tsx';
 import StickyProgressBar from './StickyProgressBar.tsx';
 import { convertPagesToTimeRemainingMinutes } from '@/app/library/utils/libraryUtils.ts';
+import { SIZE_PER_LOC, SIZE_PER_TIME_UNIT } from '@/services/constants';
 import { useMedianPageDurationSecs } from '@/hooks/useMedianPageDurationSecs';
 
 interface ProgressBarProps {
@@ -86,11 +94,32 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
     (pageInfo && pageInfo.total > 0 ? (pageInfo.current + 1) / pageInfo.total : 0);
 
   const { page: current = 0, pages: total = 0 } = view?.renderer || {};
-  const pagesLeft = bookData?.isFixedLayout
+  const screenPagesLeft = bookData?.isFixedLayout
     ? pageInfo
       ? Math.max(pageInfo.total - pageInfo.current, 1)
       : 0
     : Math.min(Math.max(total - current, 1), pageInfo ? pageInfo.total - pageInfo.current : total);
+  const chapterLocationsLeft = bookData?.isFixedLayout
+    ? undefined
+    : getChapterLocationsLeft(progress, bookData?.bookDoc?.toc);
+  const sectionFractions = view?.getSectionFractions() ?? [];
+  const sectionIndex = section?.current ?? 0;
+  // Foliate rounds current/next locations down. Their difference can alternate
+  // between 0, 1 and 2 for identical screens, so use the unrounded section span.
+  const sectionFraction =
+    (sectionFractions[sectionIndex + 1] ?? 0) - (sectionFractions[sectionIndex] ?? 0);
+  const locationsPerScreen = total > 0 ? (sectionFraction * (pageinfo?.total ?? 0)) / total : 0;
+  const pagesLeft =
+    chapterLocationsLeft !== undefined && locationsPerScreen > 0
+      ? Math.max(1, Math.ceil(chapterLocationsLeft / locationsPerScreen))
+      : screenPagesLeft;
+  // Pace statistics and TOC locations use logical pages, not viewport-sized pages.
+  const timePagesLeft = bookData?.isFixedLayout
+    ? pagesLeft
+    : (chapterLocationsLeft ??
+      (progress?.timeinfo.section !== undefined
+        ? (progress.timeinfo.section * SIZE_PER_TIME_UNIT) / SIZE_PER_LOC
+        : pagesLeft));
   const showPagesLeft = pagesLeft > 0 && (total > 0 || !!bookData?.isFixedLayout);
   const md5 = bookData?.book?.hash;
   const medianPageDurationSecs = useMedianPageDurationSecs(md5) ?? undefined;
@@ -101,14 +130,14 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
     ? remainingInBook
       ? _('{{time}} min left in book', {
           time: formatNumber(
-            convertPagesToTimeRemainingMinutes(pagesLeft, medianPageDurationSecs),
+            convertPagesToTimeRemainingMinutes(timePagesLeft, medianPageDurationSecs),
             localize,
             lang,
           ),
         })
       : _('{{time}} min left in chapter', {
           time: formatNumber(
-            convertPagesToTimeRemainingMinutes(pagesLeft, medianPageDurationSecs),
+            convertPagesToTimeRemainingMinutes(timePagesLeft, medianPageDurationSecs),
             localize,
             lang,
           ),
@@ -153,11 +182,29 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
   // band, sticky-bar band, vertical side column).
   const hasFooterContent = stickyBarActive || footerInfoVisible(viewSettings);
   const stripTappable = hasFooterContent && (isVertical || footerReservesBand(viewSettings));
+  // The sticky bar reserves the band again, so `auto` needs no pill there; a
+  // color the reader chose still paints, since they asked to see it (#5938).
+  const chip = getChromeChip(viewSettings, 'footer', {
+    isEink,
+    isScrolled: !!viewSettings.scrolled,
+    isVertical: !!isVertical,
+    bandReserved: stickyBarActive,
+  });
+  // The segment is the tap target for #5293 wherever the info floats over the
+  // text -- that has to hold even when the reader turns the backdrop off, or
+  // "Background: none" would silently take tap-to-toggle away with it.
+  const pillTappable = !!viewSettings.scrolled && !isVertical && !stickyBarActive;
   const pillClass =
-    viewSettings.scrolled &&
-    !isVertical &&
-    !stickyBarActive &&
-    'progress-pill eink-bordered pointer-events-auto cursor-pointer rounded-md bg-base-100/85 px-1.5';
+    (pillTappable || chip) &&
+    clsx(
+      'progress-pill rounded-md px-1.5',
+      pillTappable && 'pointer-events-auto cursor-pointer',
+      chip && 'eink-bordered',
+      chip?.kind === 'theme' && 'bg-base-100/85',
+    );
+  const pillStyle = chip?.kind === 'custom' ? { backgroundColor: chip.color } : undefined;
+  const textColor = getChromeTextColor(viewSettings, isEink);
+  const fontSize = getChromeFontSize(viewSettings, isEink);
   const showStatusInfo = hasTimeInfo || hasBatteryInfo;
 
   return (
@@ -165,13 +212,15 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
       role='presentation'
       className={clsx(
         'progressinfo pointer-events-none absolute bottom-0 z-10 flex items-center justify-between font-sans',
-        isEink ? 'text-sm font-normal' : 'text-xs font-extralight',
+        isEink ? 'font-normal' : 'font-extralight',
         // The blend keeps the info legible over an unthemed fixed-layout page,
         // but it composites the whole container as a group -- with the pills on
         // it differences a white pill against the white page and paints it pure
         // black (#5342). The pill backdrop already guarantees legibility, so it
-        // takes over from the blend whenever it is present.
-        bookData?.isFixedLayout && !isEink && !pillClass
+        // takes over from the blend whenever it is present. A reader who set
+        // their own color or backdrop (#5938) has taken over too: the blend
+        // would invert their text color and black out their chip.
+        bookData?.isFixedLayout && !isEink && !pillClass && !isChromeStyled(viewSettings)
           ? 'text-white/75 mix-blend-difference'
           : 'text-base-content',
         isVertical ? 'writing-vertical-rl' : 'w-full',
@@ -188,8 +237,12 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
       ]
         .filter(Boolean)
         .join(', ')}
-      style={
-        isVertical
+      style={{
+        // Set on the container so the pills, the status widgets and the sticky
+        // bar (which inherits currentColor) all resolve from one place.
+        fontSize: `${fontSize}px`,
+        ...(textColor ? { color: textColor } : {}),
+        ...(isVertical
           ? {
               top: `${(contentInsets.top - gridInsets.top) * 1.5}px`,
               bottom: `${(contentInsets.bottom - gridInsets.bottom) * 1.5}px`,
@@ -202,8 +255,8 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
               paddingInlineStart: `calc(${horizontalGap / 2}% + ${contentInsets.left / 2}px)`,
               paddingInlineEnd: `calc(${horizontalGap / 2}% + ${contentInsets.right / 2}px)`,
               paddingBottom: appService?.hasSafeAreaInset ? `${gridInsets.bottom * 0.33}px` : 0,
-            }
-      }
+            }),
+      }}
     >
       <div
         aria-hidden='true'
@@ -237,9 +290,11 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
             )}
           >
             {viewSettings.showRemainingTime ? (
-              <span className={clsx('time-left-label text-start', pillClass)}>{timeLeftStr}</span>
+              <span className={clsx('time-left-label text-start', pillClass)} style={pillStyle}>
+                {timeLeftStr}
+              </span>
             ) : viewSettings.showRemainingPages && showPagesLeft ? (
-              <span className={clsx('text-start', pillClass)}>
+              <span className={clsx('text-start', pillClass)} style={pillStyle}>
                 {localize ? (
                   remainingInBook ? (
                     <Trans
@@ -283,12 +338,13 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
             isVertical={isVertical}
             isEink={isEink}
             className={pillClass || undefined}
+            style={pillStyle}
           />
         )}
 
         <div
           className={clsx(
-            'progress-info items-center text-end tabular-nums truncate',
+            'progress-readout items-center text-end tabular-nums truncate',
             !stickyBarActive && 'flex-1 min-w-0',
           )}
         >
@@ -299,6 +355,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
                 isVertical ? 'mt-auto' : 'ms-auto',
                 pillClass,
               )}
+              style={pillStyle}
             >
               {progressInfo}
             </span>
