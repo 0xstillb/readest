@@ -69,6 +69,8 @@ export interface SyncDetails {
     percentage?: number;
     currentPage?: number;
     totalPages?: number;
+    /** Optional source label used by GrimmLink; KOSync callers may omit it. */
+    device?: string;
   };
   remote: KoSyncProgress & {
     preview: string;

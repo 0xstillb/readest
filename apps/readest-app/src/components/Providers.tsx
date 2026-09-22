@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from '@/hooks/useSafeAreaInsets';
 import { useSettingsSync } from '@/hooks/useSettingsSync';
 import { useDefaultIconSize } from '@/hooks/useResponsiveSize';
 import { useBackgroundTexture } from '@/hooks/useBackgroundTexture';
-import { useEinkMode } from '@/hooks/useEinkMode';
+import { resolveEinkMode, useEinkMode } from '@/hooks/useEinkMode';
 import { getLocale } from '@/utils/misc';
 import { getDirFromUILanguage } from '@/utils/rtl';
 import { getAndroidPatchedViewportContent } from '@/utils/viewport';
@@ -168,9 +168,9 @@ const Providers = ({ children }: { children: React.ReactNode }) => {
         // (which inherits the reader/global texture until decoupled). The
         // reader re-applies its own texture when a book opens (issue #4743).
         applyBackgroundTexture(envConfig, getLibraryViewSettings(settings));
-        if (globalViewSettings.isEink) {
-          applyEinkMode(true);
-        }
+        applyEinkMode(
+          resolveEinkMode(settings.einkOptimization, globalViewSettings.isEink, appService.isEink),
+        );
         // Initialize the app-lock gate from on-disk settings. Until
         // this runs, the gate renders nothing — guarantees the
         // library can't flash on screen before the lock screen does.

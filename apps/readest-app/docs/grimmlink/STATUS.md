@@ -25,7 +25,7 @@ deadline and shelf payloads are rejected when malformed instead of silently
 dropping records.
 Tests: `pnpm test --run src/__tests__/services/grimmlink
        src/__tests__/services/grimmlink-settings.test.ts
-       src/__tests__/utils/grimmlink-proxy.test.ts` (52 passed).
+       src/__tests__/utils/grimmlink-proxy.test.ts` (65 passed).
        TypeScript check reaches the existing unrelated `pdf-worker-compat.test.ts`
        `GlobalWorkerOptions` mismatch; no GrimmLink diagnostics are reported.
 Diagnostics/lifecycle: Readest now persists last attempt/success/error state,
@@ -36,6 +36,19 @@ pull. Foreground/background and online transitions close/restart sessions and
 replay the durable outbox without merging suspended time. GrimmLink conflicts
 use human-readable position/device/percentage/time labels and never render raw
 CFI/XPointer identifiers.
+Shelf v2: full snapshots now reconcile into added/unchanged/changed/removed,
+with duplicate-trigger suppression, serial bounded downloads, cancellation,
+Wi-Fi/always/off download policy, conservative Keep-local default, and shared
+managed-file reference checks before destructive cleanup. Book details derive a
+Grimmory status from the mapping/shelf/outbox state without querying Grimmory per
+library tile. Device name/ID are shown in integration settings and same-device
+progress echoes are ignored by stable ID. E-ink optimization adds an additive
+Auto/On/Off root setting plus opt-in, redacted runtime diagnostics; existing
+per-book e-ink settings remain compatible.
+Known deviations: shelf preview is currently exposed as a pure reconciliation
+summary for callers/tests, not a new confirmation wizard; remote-only books are
+still entered through the existing shelf download/import flow; full Ocean 5 Pro
+physical-button and sleep testing requires the actual Android device.
 Open release-gate evidence: authenticated sync and offline→online replay still
 require a configured test account. On 2026-09-22, the supplied Grimmory LAN
 endpoint and public endpoint both returned the Grimmory UI (200) and protected

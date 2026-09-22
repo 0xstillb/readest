@@ -38,7 +38,9 @@ export const toGrimmLinkProgressPayload = (
     bookFileId: link.bookFileId,
     fileFormat: book.format,
     progress: fixed ? String(position.currentPage ?? 0) : position.location,
-    ...(fixed ? { currentPage: position.currentPage, totalPages: position.totalPages } : { location: position.location }),
+    ...(fixed
+      ? { currentPage: position.currentPage, totalPages: position.totalPages }
+      : { location: position.location }),
     percentage,
     device: config.deviceName,
     device_id: config.deviceId,
@@ -49,7 +51,13 @@ export const toGrimmLinkProgressPayload = (
 export const progressPullDisposition = (
   strategy: KOSyncStrategy,
   remoteIsNewer: boolean,
+  remoteDeviceId?: string,
+  localDeviceId?: string,
 ): 'apply' | 'prompt' | 'ignore' => {
+  // Grimmory echoes the last write back to the originating device.  Treat an
+  // acknowledged write as already settled; comparing display names would
+  // create false conflicts when the user renames a device.
+  if (remoteDeviceId && localDeviceId && remoteDeviceId === localDeviceId) return 'ignore';
   if (strategy === 'receive') return 'apply';
   if (strategy === 'send') return 'ignore';
   if (strategy === 'silent') return remoteIsNewer ? 'apply' : 'ignore';
@@ -82,8 +90,11 @@ export class GrimmLinkProgressProvider {
   ) {}
 
   async resolveLink(book: Book, retryUnmatched = false): Promise<GrimmLinkBookLink | null> {
-    const shelfEntry = await this.shelfEntries?.getShelfEntryByLocalPath(getLocalBookFilename(book));
-    if (shelfEntry) return { bookId: shelfEntry.bookId, bookHash: shelfEntry.bookHash, format: book.format };
+    const shelfEntry = await this.shelfEntries?.getShelfEntryByLocalPath(
+      getLocalBookFilename(book),
+    );
+    if (shelfEntry)
+      return { bookId: shelfEntry.bookId, bookHash: shelfEntry.bookHash, format: book.format };
     const cached = await this.links.get(book.hash);
     if (cached && 'unmatchedAt' in cached) {
       if (!retryUnmatched && Date.now() - cached.unmatchedAt < UNMATCHED_CACHE_MS) return null;

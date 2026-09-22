@@ -66,6 +66,34 @@
 - [ ] same-device echo ไม่สร้าง conflict ปลอม
 - [ ] malformed/invalid remote data ไม่ทำให้ local progress หาย
 
+## 4A. Shelf Sync v2
+
+- [ ] initial subscription shows the reconciliation preview/counts before Sync
+- [ ] second unchanged sync performs no download
+- [ ] added/changed/removed books are reconciled by remote book ID/hash
+- [ ] duplicate Sync taps share one in-flight operation
+- [ ] Keep local removes membership only
+- [ ] Remove managed copy deletes only a GrimmLink-managed file
+- [ ] a file referenced by two shelves is not deleted until the last reference is removed
+- [ ] a user-imported book is never deleted by shelf cleanup
+- [ ] Magic Shelf churn defaults to Keep local
+- [ ] Off/Wi-Fi-only policy does not start a download on a metered connection
+- [ ] cancellation/invalid or interrupted download leaves no final corrupt import
+
+## 4B. Library and device identity
+
+- [ ] Book Detail shows Grimmory source/status only for mapped or managed books
+- [ ] Book Detail Sync now uses the existing reader pull event
+- [ ] one book in multiple Grimmory shelves remains one local library record
+- [ ] device name is editable and device ID stays read-only
+- [ ] stable device ID survives restart and same-device echo does not reopen conflict
+
+## 4C. E-ink reference device
+
+- [ ] Auto/On/Off setting changes the canonical `data-eink` root state
+- [ ] Export diagnostics includes platform, UA, viewport, screen and lifecycle only
+- [ ] verify toolbar/dialog repaint and hardware page keys on the Ocean 5 Pro
+
 ## 5. Windows lifecycle
 
 - [ ] ติดตั้ง build ล่าสุดและบันทึก path/version

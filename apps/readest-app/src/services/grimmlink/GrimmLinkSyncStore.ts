@@ -89,7 +89,8 @@ const schema = [
   )`,
   `CREATE TABLE IF NOT EXISTS shelf_subscriptions (
     connection_id TEXT NOT NULL, shelf_type TEXT NOT NULL, shelf_id INTEGER NOT NULL, enabled INTEGER NOT NULL,
-    cleanup_policy TEXT NOT NULL DEFAULT 'keep_local', PRIMARY KEY (connection_id, shelf_type, shelf_id)
+    cleanup_policy TEXT NOT NULL DEFAULT 'keep_local', download_policy TEXT NOT NULL DEFAULT 'always',
+    PRIMARY KEY (connection_id, shelf_type, shelf_id)
   )`,
   `CREATE TABLE IF NOT EXISTS shelf_entries (
     connection_id TEXT NOT NULL, shelf_type TEXT NOT NULL, shelf_id INTEGER NOT NULL, book_id INTEGER NOT NULL,
@@ -117,6 +118,13 @@ export class GrimmLinkSyncStore {
     const db = await this.appService.openDatabase(DB_SCHEMA, DB_PATH, 'Data');
     try {
       for (const statement of schema) await db.execute(statement);
+      // Additive migration for databases created before download policy was
+      // persisted. SQLite has no IF NOT EXISTS form for ADD COLUMN.
+      await db
+        .execute(
+          "ALTER TABLE shelf_subscriptions ADD COLUMN download_policy TEXT NOT NULL DEFAULT 'always'",
+        )
+        .catch(() => {});
       return await fn(db);
     } finally {
       await db.close();
@@ -176,29 +184,36 @@ export class GrimmLinkSyncStore {
     shelfId: number,
     enabled: boolean,
     cleanupPolicy = 'keep_local',
+    downloadPolicy = 'always',
   ): Promise<void> {
     await this.withDb((db) =>
       db.execute(
-        `INSERT INTO shelf_subscriptions (connection_id, shelf_type, shelf_id, enabled, cleanup_policy) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(connection_id, shelf_type, shelf_id) DO UPDATE SET enabled=excluded.enabled, cleanup_policy=excluded.cleanup_policy`,
-        [this.connectionId, shelfType, shelfId, enabled ? 1 : 0, cleanupPolicy],
+        `INSERT INTO shelf_subscriptions (connection_id, shelf_type, shelf_id, enabled, cleanup_policy, download_policy) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(connection_id, shelf_type, shelf_id) DO UPDATE SET enabled=excluded.enabled, cleanup_policy=excluded.cleanup_policy, download_policy=excluded.download_policy`,
+        [this.connectionId, shelfType, shelfId, enabled ? 1 : 0, cleanupPolicy, downloadPolicy],
       ),
     );
   }
 
   async getShelfSubscriptions(): Promise<
-    { shelfType: string; shelfId: number; cleanupPolicy: string }[]
+    { shelfType: string; shelfId: number; cleanupPolicy: string; downloadPolicy: string }[]
   > {
     return this.withDb(async (db) =>
       (
-        await db.select<{ shelf_type: string; shelf_id: number; cleanup_policy: string }>(
-          'SELECT shelf_type, shelf_id, cleanup_policy FROM shelf_subscriptions WHERE connection_id = ? AND enabled = 1',
+        await db.select<{
+          shelf_type: string;
+          shelf_id: number;
+          cleanup_policy: string;
+          download_policy: string;
+        }>(
+          'SELECT shelf_type, shelf_id, cleanup_policy, download_policy FROM shelf_subscriptions WHERE connection_id = ? AND enabled = 1',
           [this.connectionId],
         )
       ).map((row) => ({
         shelfType: row.shelf_type,
         shelfId: row.shelf_id,
         cleanupPolicy: row.cleanup_policy,
+        downloadPolicy: row.download_policy || 'always',
       })),
     );
   }
@@ -243,6 +258,19 @@ export class GrimmLinkSyncStore {
         )
       )[0];
       return row ? { bookId: row.book_id, bookHash: row.book_hash } : null;
+    });
+  }
+
+  async getManagedShelfEntryReferences(localPath: string): Promise<number> {
+    return this.withDb(async (db) => {
+      const row = (
+        await db.select<{ count: number | string }>(
+          `SELECT COUNT(*) AS count FROM shelf_entries
+         WHERE connection_id = ? AND local_path = ? AND managed_by_grimmlink = 1`,
+          [this.connectionId, localPath],
+        )
+      )[0];
+      return Number(row?.count ?? 0);
     });
   }
 

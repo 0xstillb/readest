@@ -35,6 +35,7 @@ import BookCover from '@/components/BookCover';
 import BookCoverViewer, { useBookCoverViewer } from '@/components/BookCoverViewer';
 import Dropdown from '../Dropdown';
 import MenuItem from '../MenuItem';
+import type { GrimmLinkBookStatus } from '@/services/grimmlink/libraryStatus';
 
 interface BookDetailViewProps {
   book: Book;
@@ -54,6 +55,8 @@ interface BookDetailViewProps {
   /** Set when the offline download needs an upgrade; shown as a badge. */
   offlinePremiumLabel?: string;
   onMetadataValueClick?: (type: 'tag' | 'subject', value: string) => void;
+  grimmlinkStatus?: GrimmLinkBookStatus | null;
+  onGrimmLinkSyncNow?: () => void;
 }
 
 const BookDetailView: React.FC<BookDetailViewProps> = ({
@@ -72,6 +75,8 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
   onDownloadOffline,
   offlinePremiumLabel,
   onMetadataValueClick,
+  grimmlinkStatus,
+  onGrimmLinkSyncNow,
 }) => {
   const _ = useTranslation();
   const { envConfig } = useEnv();
@@ -81,6 +86,17 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
   const { coverSrc, openCoverViewer, closeCoverViewer } = useBookCoverViewer(book);
   const subjects = getContributorNames(metadata?.subject);
   const visibleSubjects = subjectsExpanded ? subjects : subjects.slice(0, 3);
+  const grimmlinkStatusLabel = grimmlinkStatus
+    ? {
+        grimmory: _('Grimmory'),
+        synced: _('Synced'),
+        pending: _('Pending'),
+        'remote-only': _('Remote only'),
+        downloaded: _('Downloaded'),
+        conflict: _('Conflict'),
+        error: _('Error'),
+      }[grimmlinkStatus.status]
+    : null;
 
   const renderMetadataChip = (type: 'tag' | 'subject', value: string) => {
     const className = 'badge badge-outline h-auto min-h-6 whitespace-normal px-2 py-1 text-xs';
@@ -479,6 +495,36 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
           )}
         </div>
       </div>
+      {grimmlinkStatus && (
+        <div className='mt-3 rounded-lg border border-base-300 px-4 py-3 text-sm eink-bordered'>
+          <div className='flex items-center justify-between gap-3'>
+            <span className='font-semibold'>GrimmLink</span>
+            <span className='badge badge-outline'>{grimmlinkStatusLabel}</span>
+          </div>
+          <div className='mt-1 flex flex-wrap gap-x-4 gap-y-1 text-neutral-content'>
+            <span>{_('Source')}: Grimmory</span>
+            {grimmlinkStatus.shelfCount > 0 && (
+              <span>
+                {_('Shelves')}: {grimmlinkStatus.shelfCount}
+              </span>
+            )}
+            {grimmlinkStatus.lastSuccessAt && (
+              <span>
+                {_('Last sync')}: {new Date(grimmlinkStatus.lastSuccessAt).toLocaleString()}
+              </span>
+            )}
+          </div>
+          {onGrimmLinkSyncNow && (
+            <button
+              type='button'
+              className='btn btn-ghost btn-sm mt-2 eink-bordered'
+              onClick={onGrimmLinkSyncNow}
+            >
+              {_('Sync now')}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

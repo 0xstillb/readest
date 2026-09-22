@@ -195,7 +195,8 @@ For each enabled subscription:
 6. Mark present entries `last_seen_at` only after a complete successful remote
    list, never after a partial or cancelled list.
 7. For entries absent from a complete remote list, apply the subscription
-   policy: `keep_local` (default), `ask`, or `remove_managed_copy`.
+   policy: `keep_local` (default) or `remove_managed_copy`. Downloads are
+   separately controlled by `always`, `wifi_only`, or `off`.
 
 Only a row with `managed_by_grimmlink = 1` and a path inside Readest's managed
 library roots may be locally deleted. There is no automatic local-delete to
@@ -223,6 +224,24 @@ another category.
   work never block it.
 - Reuse book links and shelf snapshots to avoid redundant matching requests.
 - Use cursor-based metadata pulls and batched session/metadata writes.
-- Limit concurrent downloads: 2 on mobile, 3 on desktop, 1 under a low-power
-  mode if Readest exposes it.
+- Downloads are currently serial (one active import) to bound memory on large
+  Android EPUB/PDF imports and prevent duplicate library records.
 - Use the existing transfer UI for progress, cancellation, retry, and errors.
+
+## Library and device identity
+
+Book tiles do not query Grimmory or SQLite per render. The Book Detail modal
+performs a bounded local query and derives `synced`, `pending`, `downloaded`,
+`remote-only`, `conflict`, or `error` from mapping, shelf membership, local
+file presence, outbox, and diagnostics. Device ID remains the existing stable
+settings value; device name is editable and is sent only through existing
+supported GrimmLink payloads. Same-device progress acknowledgements are
+ignored by ID, not by display name.
+
+## E-ink
+
+The existing `data-eink` root mechanism remains canonical. `einkOptimization`
+adds an additive `auto`/`on`/`off` override and does not hard-code a device
+model. Diagnostics are opt-in and content-free (runtime dimensions, lifecycle,
+and bounded key event names only); physical Ocean 5 Pro tuning still requires
+an attached reference device.

@@ -254,6 +254,8 @@ export const useGrimmLinkSync = (bookKey: string) => {
         const disposition = progressPullDisposition(
           settings.grimmlink.strategy,
           remoteUpdatedAt > localUpdatedAt,
+          remote.device_id,
+          settings.grimmlink.deviceId,
         );
         const details: SyncDetails = {
           book,
@@ -266,6 +268,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
               : undefined,
             currentPage: progress.section?.current,
             totalPages: progress.section?.total,
+            device: settings.grimmlink.deviceName,
           },
           remote: {
             progress: remote.location ?? remote.progress ?? String(remote.currentPage ?? ''),

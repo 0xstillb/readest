@@ -67,6 +67,7 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   const [pageTurnStyle, setPageTurnStyle] = useState(viewSettings.pageTurnStyle || 'push');
   const [isEink, setIsEink] = useState(viewSettings.isEink);
   const [isColorEink, setIsColorEink] = useState(viewSettings.isColorEink);
+  const [einkOptimization, setEinkOptimization] = useState(settings.einkOptimization ?? 'auto');
   const [autoScreenBrightness, setAutoScreenBrightness] = useState(settings.autoScreenBrightness);
   const [swipeBrightnessGesture, setSwipeBrightnessGesture] = useState(
     settings.swipeBrightnessGesture,
@@ -267,6 +268,15 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     saveViewSettings(envConfig, bookKey, 'isColorEink', isColorEink);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isColorEink]);
+
+  useEffect(() => {
+    if (einkOptimization === settings.einkOptimization) return;
+    saveSysSettings(envConfig, 'einkOptimization', einkOptimization);
+    // The root attribute is owned by Providers; reloading the setting here
+    // still gives the current reader an immediate response.
+    applyEinkMode(einkOptimization === 'on' || (einkOptimization === 'auto' && isEink));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [einkOptimization]);
 
   useEffect(() => {
     if (autoScreenBrightness === settings.autoScreenBrightness) return;
@@ -535,6 +545,21 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           onChange={() => setIsEink(!isEink)}
           data-setting-id='settings.control.einkMode'
         />
+        <SettingsRow
+          label={_('E-Ink Optimization')}
+          data-setting-id='settings.control.einkOptimization'
+        >
+          <SettingsSelect
+            value={einkOptimization}
+            onChange={(event) => setEinkOptimization(event.target.value as 'auto' | 'on' | 'off')}
+            ariaLabel={_('E-Ink Optimization')}
+            options={[
+              { value: 'auto', label: _('Auto') },
+              { value: 'on', label: _('On') },
+              { value: 'off', label: _('Off') },
+            ]}
+          />
+        </SettingsRow>
         <SettingsSwitchRow
           label={_('Color E-Ink Mode')}
           checked={isColorEink}

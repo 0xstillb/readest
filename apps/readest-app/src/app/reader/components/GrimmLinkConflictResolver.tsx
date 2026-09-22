@@ -48,11 +48,16 @@ const GrimmLinkConflictResolver: React.FC<GrimmLinkConflictResolverProps> = ({
           <span className='flex min-w-0 flex-1 flex-col gap-1'>
             <span className='font-medium'>{_('Continue from this device')}</span>
             <span className='text-sm opacity-70'>
-              {pageLabel(details.local.currentPage, details.local.totalPages) ??
-                positionLabel(
-                  details.local.percentage == null ? undefined : details.local.percentage * 100,
-                  _('Current position'),
-                )}
+              {[
+                details.local.device,
+                pageLabel(details.local.currentPage, details.local.totalPages) ??
+                  positionLabel(
+                    details.local.percentage == null ? undefined : details.local.percentage * 100,
+                    _('Current position'),
+                  ),
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             </span>
           </span>
         </button>

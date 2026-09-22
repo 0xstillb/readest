@@ -476,6 +476,8 @@ export interface SystemSettings {
   openLastBooks: boolean;
   lastOpenBooks: string[];
   autoImportBooksOnOpen: boolean;
+  /** Generic e-ink rendering policy. `auto` preserves the platform/legacy view detection. */
+  einkOptimization: 'auto' | 'on' | 'off';
   savedBookCoverForLockScreen: string;
   savedBookCoverForLockScreenPath: string;
   telemetryEnabled: boolean;

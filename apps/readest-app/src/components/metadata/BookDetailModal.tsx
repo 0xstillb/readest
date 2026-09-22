@@ -7,6 +7,7 @@ import { BookMetadata } from '@/libs/document';
 import { useEnv } from '@/context/EnvContext';
 import { useAuth } from '@/context/AuthContext';
 import { useThemeStore } from '@/store/themeStore';
+import { useSettingsStore } from '@/store/settingsStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useMetadataEdit } from './useMetadataEdit';
 import { DeleteAction } from '@/types/system';
@@ -19,6 +20,10 @@ import BookDetailView from './BookDetailView';
 import BookDetailEdit from './BookDetailEdit';
 import SourceSelector from './SourceSelector';
 import Spinner from '../Spinner';
+import {
+  loadGrimmLinkBookStatus,
+  type GrimmLinkBookStatus,
+} from '@/services/grimmlink/libraryStatus';
 
 interface BookDetailModalProps {
   book: Book;
@@ -65,6 +70,7 @@ const BookDetailModal: React.FC<BookDetailModalProps> = ({
   const _ = useTranslation();
   const { envConfig, appService } = useEnv();
   const { user } = useAuth();
+  const { settings } = useSettingsStore();
   const { safeAreaInsets } = useThemeStore();
   const [activeDeleteAction, setActiveDeleteAction] = useState<DeleteMenuAction | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -76,6 +82,7 @@ const BookDetailModal: React.FC<BookDetailModalProps> = ({
   // save, so the details view tracks the saved book locally to refresh its
   // cover/title/author immediately (otherwise it shows the stale prop).
   const [displayBook, setDisplayBook] = useState<Book>(book);
+  const [grimmlinkStatus, setGrimmLinkStatus] = useState<GrimmLinkBookStatus | null>(null);
 
   // Initialize metadata edit hook
   const {
@@ -127,12 +134,21 @@ const BookDetailModal: React.FC<BookDetailModalProps> = ({
         setBookMeta(details);
         const size = await appService.getBookFileSize(book);
         setFileSize(size);
+        if (settings.grimmlink.enabled) {
+          setGrimmLinkStatus(
+            await loadGrimmLinkBookStatus(appService, settings.grimmlink, book, size !== null),
+          );
+        } else {
+          setGrimmLinkStatus(null);
+        }
       } finally {
       }
     };
-    fetchBookDetails();
+    void fetchBookDetails().catch(() => {
+      setGrimmLinkStatus(null);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [book]);
+  }, [book, settings.grimmlink]);
 
   useEffect(() => {
     setDisplayBook(book);
@@ -301,6 +317,13 @@ const BookDetailModal: React.FC<BookDetailModalProps> = ({
                 }
                 offlinePremiumLabel={offlinePremiumLabel}
                 onMetadataValueClick={onMetadataValueClick}
+                grimmlinkStatus={grimmlinkStatus}
+                onGrimmLinkSyncNow={
+                  grimmlinkStatus
+                    ? () =>
+                        eventDispatcher.dispatch('pull-grimmlink', { bookKey: displayBook.hash })
+                    : undefined
+                }
               />
             )}
           </div>

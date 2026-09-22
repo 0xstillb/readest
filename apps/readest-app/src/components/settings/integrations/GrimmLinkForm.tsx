@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { md5 } from 'js-md5';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
@@ -25,8 +25,13 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
   const [fallbackUrl, setFallbackUrl] = useState(settings.grimmlink.fallbackUrl ?? '');
   const [username, setUsername] = useState(settings.grimmlink.username);
   const [password, setPassword] = useState('');
+  const [deviceName, setDeviceName] = useState(settings.grimmlink.deviceName || 'Readest');
   const [isConnecting, setIsConnecting] = useState(false);
   const isLanServer = isLanAddress(serverUrl);
+
+  useEffect(() => {
+    setDeviceName(settings.grimmlink.deviceName || 'Readest');
+  }, [settings.grimmlink.deviceName]);
 
   const saveGrimmLink = async (patch: Partial<typeof settings.grimmlink>) => {
     const grimmlink = { ...settings.grimmlink, ...patch };
@@ -47,6 +52,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
         : false,
       username,
       userkey: md5(password),
+      deviceName: deviceName.trim() || 'Readest',
     };
     const result = await new GrimmLinkClient(grimmlink).connect();
     if (result.success) {
@@ -136,6 +142,38 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
         </Tips>
         {settings.grimmlink.enabled && settings.grimmlink.userkey && (
           <section className='space-y-2'>
+            <SectionTitle>{_('Device identity')}</SectionTitle>
+            <div className='card eink-bordered border-base-200 bg-base-100 space-y-3 border p-4'>
+              <Field
+                label={_('Device name')}
+                id='grimmlink-device-name'
+                value={deviceName}
+                onChange={setDeviceName}
+                onBlur={() => void saveGrimmLink({ deviceName: deviceName.trim() || 'Readest' })}
+              />
+              <div className='space-y-1.5'>
+                <SectionTitle as='label' htmlFor='grimmlink-device-id' className='block'>
+                  {_('Device ID')}
+                </SectionTitle>
+                <input
+                  id='grimmlink-device-id'
+                  className='input input-bordered eink-bordered h-11 w-full text-sm opacity-70'
+                  value={settings.grimmlink.deviceId || _('Not assigned yet')}
+                  readOnly
+                />
+              </div>
+              <Tips>
+                <li>
+                  {_(
+                    'The device ID is stable across restarts and is used for progress, sessions, and conflicts.',
+                  )}
+                </li>
+              </Tips>
+            </div>
+          </section>
+        )}
+        {settings.grimmlink.enabled && settings.grimmlink.userkey && (
+          <section className='space-y-2'>
             <SectionTitle>{_('Sync Options')}</SectionTitle>
             <div className='card eink-bordered border-base-200 bg-base-100 overflow-hidden border'>
               <div className='divide-base-200 divide-y'>
@@ -215,12 +253,14 @@ const Field = ({
   id,
   value,
   onChange,
+  onBlur,
   type = 'text',
 }: {
   label: string;
   id: string;
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   type?: 'text' | 'password';
 }) => (
   <div className='space-y-1.5'>
@@ -233,6 +273,7 @@ const Field = ({
       className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
       value={value}
       onChange={(event) => onChange(event.target.value)}
+      onBlur={onBlur}
       autoComplete={type === 'password' ? 'current-password' : undefined}
     />
   </div>

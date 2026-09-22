@@ -11,6 +11,10 @@ import {
 import { useSettingsStore } from '@/store/settingsStore';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import { SectionTitle, Tips } from '../primitives';
+import {
+  collectGrimmLinkRuntimeDiagnostics,
+  startGrimmLinkRuntimeDiagnostics,
+} from '@/services/grimmlink/einkDiagnostics';
 
 const emptySummary: GrimmLinkOutboxSummary = {
   totalPending: 0,
@@ -90,6 +94,8 @@ const GrimmLinkDiagnosticsPanel = () => {
     return () => window.clearInterval(timer);
   }, [checkConnection, refresh]);
 
+  useEffect(() => startGrimmLinkRuntimeDiagnostics(), []);
+
   if (!client || !store) return null;
 
   const syncStatus = diagnostics.lastError
@@ -129,7 +135,7 @@ const GrimmLinkDiagnosticsPanel = () => {
       generatedAt: new Date().toISOString(),
       serverOrigin: safeOrigin(config.serverUrl),
       connection: { enabled: config.enabled, strategy: config.strategy },
-      runtime: { status: connection, userAgent: navigator.userAgent },
+      runtime: { status: connection, ...collectGrimmLinkRuntimeDiagnostics() },
       queue: summary,
       diagnostics,
     };
