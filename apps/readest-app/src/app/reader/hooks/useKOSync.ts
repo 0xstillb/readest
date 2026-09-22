@@ -66,14 +66,17 @@ export interface SyncDetails {
   local: {
     cfi?: string;
     preview: string;
+    chapter?: string;
     percentage?: number;
     currentPage?: number;
     totalPages?: number;
     /** Optional source label used by GrimmLink; KOSync callers may omit it. */
     device?: string;
+    updatedAt?: string | number;
   };
   remote: KoSyncProgress & {
     preview: string;
+    chapter?: string;
     percentage?: number;
     updatedAt?: string;
     currentPage?: number;

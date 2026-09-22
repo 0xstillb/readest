@@ -45,6 +45,9 @@ library tile. Device name/ID are shown in integration settings and same-device
 progress echoes are ignored by stable ID. E-ink optimization adds an additive
 Auto/On/Off root setting plus opt-in, redacted runtime diagnostics; existing
 per-book e-ink settings remain compatible.
+Conflict UX now uses side-by-side `This device` / `Grimmory` cards with chapter
+labels when resolvable, percentage/page, device name, local/remote time, and
+explicit `Continue here` / `Use Grimmory position` actions.
 Known deviations: shelf preview is currently exposed as a pure reconciliation
 summary for callers/tests, not a new confirmation wizard; remote-only books are
 still entered through the existing shelf download/import flow; full Ocean 5 Pro

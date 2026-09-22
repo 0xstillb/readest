@@ -8,6 +8,9 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { debounce } from '@/utils/debounce';
 import { eventDispatcher } from '@/utils/event';
 import { getCFIFromXPointer, getXPointerFromCFI } from '@/utils/xcfi';
+import { getIndexFromCfi } from '@/utils/cfi';
+import { getLocalProgressPreview } from './kosyncPreview';
+import type { BookDoc, TOCItem } from '@/libs/document';
 import { FIXED_LAYOUT_FORMATS } from '@/types/book';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
 import { GrimmLinkBookLinkStore } from '@/services/grimmlink/bookLinks';
@@ -34,6 +37,36 @@ type SyncState =
   | 'retrying'
   | 'offline'
   | 'error';
+
+const flattenToc = (items: TOCItem[]): TOCItem[] =>
+  items.flatMap((item) => [item, ...(item.subitems ? flattenToc(item.subitems) : [])]);
+
+const chapterForIndex = (toc: TOCItem[], index: number | null): string | undefined => {
+  if (index == null) return undefined;
+  return flattenToc(toc)
+    .filter((item) => typeof item.index === 'number' && item.index <= index && item.label?.trim())
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+    .at(-1)
+    ?.label?.trim();
+};
+
+const getRemoteChapterLabel = async (
+  remote: { progress?: string; location?: string },
+  bookDoc: BookDoc,
+): Promise<string | undefined> => {
+  const position = remote.location ?? remote.progress;
+  if (!position) return undefined;
+  try {
+    const cfi = position.startsWith('/body/DocFragment[')
+      ? await getCFIFromXPointer(position, undefined, undefined, bookDoc)
+      : position.startsWith('epubcfi(')
+        ? position
+        : undefined;
+    return cfi ? chapterForIndex(bookDoc.toc ?? [], getIndexFromCfi(cfi)) : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /** Reader-only GrimmLink v1 progress, session, rating, annotation, and bookmark integration. */
 export const useGrimmLinkSync = (bookKey: string) => {
@@ -251,6 +284,10 @@ export const useGrimmLinkSync = (bookKey: string) => {
           typeof remote.percentage === 'number' ? remote.percentage / 100 : undefined;
         const localUpdatedAt = data?.config?.updatedAt ?? book.updatedAt;
         const remoteUpdatedAt = remote.updatedAt ? Date.parse(remote.updatedAt) : 0;
+        const remoteChapter = await getRemoteChapterLabel(remote, bookDoc);
+        const localPageInfo = FIXED_LAYOUT_FORMATS.has(book.format)
+          ? progress.section
+          : progress.pageinfo;
         const disposition = progressPullDisposition(
           settings.grimmlink.strategy,
           remoteUpdatedAt > localUpdatedAt,
@@ -262,17 +299,20 @@ export const useGrimmLinkSync = (bookKey: string) => {
           bookDoc,
           local: {
             cfi: progress.location,
-            preview: _('Current position'),
-            percentage: progress.pageinfo?.total
-              ? ((progress.pageinfo.current ?? 0) + 1) / progress.pageinfo.total
+            preview: getLocalProgressPreview(progress, FIXED_LAYOUT_FORMATS.has(book.format), _),
+            chapter: progress.sectionLabel?.trim() || undefined,
+            percentage: localPageInfo?.total
+              ? ((localPageInfo.current ?? 0) + 1) / localPageInfo.total
               : undefined,
             currentPage: progress.section?.current,
             totalPages: progress.section?.total,
             device: settings.grimmlink.deviceName,
+            updatedAt: localUpdatedAt,
           },
           remote: {
             progress: remote.location ?? remote.progress ?? String(remote.currentPage ?? ''),
             percentage: remoteFraction,
+            chapter: remoteChapter,
             device: remote.device,
             device_id: remote.device_id,
             updatedAt: remote.updatedAt,
