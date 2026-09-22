@@ -104,6 +104,7 @@ import AutoScrollControl from './AutoScrollControl';
 import AutoScrollSpeedOverlay from './AutoScrollSpeedOverlay';
 import Spinner from '@/components/Spinner';
 import KOSyncConflictResolver from './KOSyncResolver';
+import GrimmLinkConflictResolver from './GrimmLinkConflictResolver';
 import { useGrimmLinkSync } from '../hooks/useGrimmLinkSync';
 import ImageViewer from './ImageViewer';
 import TableViewer from './TableViewer';
@@ -1198,7 +1199,7 @@ const FoliateViewer: React.FC<{
         />
       )}
       {grimmlinkSync.syncState === 'conflict' && grimmlinkSync.conflictDetails && (
-        <KOSyncConflictResolver
+        <GrimmLinkConflictResolver
           details={grimmlinkSync.conflictDetails}
           onResolveWithLocal={grimmlinkSync.resolveWithLocal}
           onResolveWithRemote={grimmlinkSync.resolveWithRemote}

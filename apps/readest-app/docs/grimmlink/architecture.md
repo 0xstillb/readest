@@ -79,6 +79,7 @@ interface GrimmLinkSettings {
   fallbackUrl?: string;
   username: string;
   userkey: string; // MD5(password), never derived at request time
+  allowSelfSignedCertificate?: boolean; // LAN-only, opt-in
   deviceId: string;
   deviceName: string;
   strategy: 'prompt' | 'silent' | 'send' | 'receive';
@@ -120,8 +121,12 @@ stored when the user connects. `GrimmLinkClient` also merges normalized custom
 headers but prevents them from overriding either auth header.
 
 - Tauri desktop/mobile calls the configured server directly via the existing
-  Tauri HTTP client, including the same explicit invalid-certificate behavior
-  used by compatible Readest integrations.
+  Tauri HTTP client. Certificate verification is always enabled unless the
+  user explicitly opts into `allowSelfSignedCertificate` for a LAN endpoint;
+  public and Cloudflare Tunnel origins can never use that exception.
+- Requests have explicit 15s metadata/control and 120s download deadlines,
+  three retries with 250/500/1000ms exponential backoff, and classify failures
+  as Auth, Network, Server, Conflict, or Invalid data.
 - Readest Web calls `pages/api/grimmlink.ts`. The proxy accepts only the
   documented GrimmLink methods and path templates, rejects private targets,
   follows no redirects, does not cache authenticated responses, and streams

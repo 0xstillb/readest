@@ -23,8 +23,13 @@ const allowedRequests: ReadonlyArray<readonly [string, RegExp]> = [
   ['PUT', /^\/books\/[^/]+\/status$/],
 ];
 
+const PROXY_TIMEOUT_MS = 15_000;
+const PROXY_DOWNLOAD_TIMEOUT_MS = 120_000;
+
 export const isValidGrimmLinkRequest = (endpoint: string, method: string): boolean =>
-  allowedRequests.some(([allowedMethod, pattern]) => allowedMethod === method && pattern.test(endpoint));
+  allowedRequests.some(
+    ([allowedMethod, pattern]) => allowedMethod === method && pattern.test(endpoint),
+  );
 
 const allowedHeader = (name: string): boolean =>
   ['x-auth-user', 'x-auth-key', 'cf-access-client-id', 'cf-access-client-secret'].includes(
@@ -42,7 +47,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!serverUrl || !endpoint || !method) {
     return res.status(400).json({ error: 'serverUrl, endpoint, and method are required' });
   }
-  if (!isValidGrimmLinkRequest(endpoint, method)) return res.status(400).json({ error: 'Invalid request' });
+  if (!isValidGrimmLinkRequest(endpoint, method))
+    return res.status(400).json({ error: 'Invalid request' });
 
   let parsed: URL;
   try {
@@ -51,10 +57,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Invalid serverUrl' });
   }
   if (!['http:', 'https:'].includes(parsed.protocol) || isLanAddress(parsed.toString())) {
-    return res.status(400).json({ error: 'Requests to private/internal addresses are not allowed' });
+    return res
+      .status(400)
+      .json({ error: 'Requests to private/internal addresses are not allowed' });
   }
 
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let streamActive = false;
   try {
+    const controller = new AbortController();
+    const timeoutMs = endpoint.endsWith('/download') ? PROXY_DOWNLOAD_TIMEOUT_MS : PROXY_TIMEOUT_MS;
+    timeout = setTimeout(() => controller.abort(), timeoutMs);
     const response = await fetch(`${parsed.origin}/api/grimmlink/v1${endpoint}`, {
       method,
       headers: {
@@ -64,14 +77,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       body: body ? JSON.stringify(body) : undefined,
       redirect: 'error',
+      signal: controller.signal,
     });
     res.setHeader('Cache-Control', 'no-store');
     res.status(response.status);
     const contentType = response.headers.get('content-type');
     if (contentType) res.setHeader('Content-Type', contentType);
     if (!response.body) return res.end();
-    Readable.fromWeb(response.body as import('node:stream/web').ReadableStream).pipe(res);
+    streamActive = true;
+    const stream = Readable.fromWeb(response.body as import('node:stream/web').ReadableStream);
+    const clearStreamTimeout = () => {
+      if (timeout) clearTimeout(timeout);
+      timeout = undefined;
+    };
+    stream.once('end', clearStreamTimeout);
+    stream.once('error', clearStreamTimeout);
+    res.once('close', clearStreamTimeout);
+    stream.pipe(res);
   } catch {
-    res.status(502).json({ error: 'GrimmLink proxy request failed' });
+    if (!res.headersSent) res.status(502).json({ error: 'GrimmLink proxy request failed' });
+    else res.destroy();
+  } finally {
+    if (!streamActive && timeout) clearTimeout(timeout);
   }
 }

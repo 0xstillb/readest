@@ -14,6 +14,7 @@ export interface GrimmLinkConnectionResult {
   success: boolean;
   message?: string;
   capabilities?: string[];
+  errorCategory?: import('./GrimmLinkRequestError').GrimmLinkErrorCategory;
 }
 
 export interface GrimmLinkBookLink {

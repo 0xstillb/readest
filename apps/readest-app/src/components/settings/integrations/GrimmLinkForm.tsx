@@ -7,9 +7,11 @@ import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
 import { useSettingsStore } from '@/store/settingsStore';
 import { KOSyncStrategy } from '@/types/settings';
 import { eventDispatcher } from '@/utils/event';
+import { isLanAddress } from '@/utils/network';
 import SubPageHeader from '../SubPageHeader';
 import { SectionTitle, SettingLabel, SettingsSelect, SettingsSwitchRow, Tips } from '../primitives';
 import GrimmLinkShelfPanel from './GrimmLinkShelfPanel';
+import GrimmLinkDiagnosticsPanel from './GrimmLinkDiagnosticsPanel';
 
 interface GrimmLinkFormProps {
   onBack: () => void;
@@ -24,6 +26,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
   const [username, setUsername] = useState(settings.grimmlink.username);
   const [password, setPassword] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
+  const isLanServer = isLanAddress(serverUrl);
 
   const saveGrimmLink = async (patch: Partial<typeof settings.grimmlink>) => {
     const grimmlink = { ...settings.grimmlink, ...patch };
@@ -39,6 +42,9 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
       enabled: true,
       serverUrl,
       fallbackUrl: fallbackUrl || undefined,
+      allowSelfSignedCertificate: isLanServer
+        ? settings.grimmlink.allowSelfSignedCertificate === true
+        : false,
       username,
       userkey: md5(password),
     };
@@ -50,7 +56,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
       eventDispatcher.dispatch('toast', { message: _('Connected'), type: 'info' });
     } else {
       eventDispatcher.dispatch('toast', {
-        message: `${_('Failed to connect')}: ${_(result.message || 'Connection error')}`,
+        message: `${_('Failed to connect')}${result.errorCategory ? ` [${result.errorCategory}]` : ''}: ${_(result.message || 'Connection error')}`,
         type: 'error',
       });
     }
@@ -73,17 +79,60 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
           void connect();
         }}
       >
-        <Field label={_('Server URL')} id='grimmlink-server-url' value={serverUrl} onChange={setServerUrl} />
+        <Field
+          label={_('Server URL')}
+          id='grimmlink-server-url'
+          value={serverUrl}
+          onChange={setServerUrl}
+        />
         <Field
           label={_('Fallback URL (optional)')}
           id='grimmlink-fallback-url'
           value={fallbackUrl}
           onChange={setFallbackUrl}
         />
-        <Field label={_('Username')} id='grimmlink-username' value={username} onChange={setUsername} />
-        <Field label={_('Password')} id='grimmlink-password' value={password} onChange={setPassword} type='password' />
+        <Field
+          label={_('Username')}
+          id='grimmlink-username'
+          value={username}
+          onChange={setUsername}
+        />
+        <Field
+          label={_('Password')}
+          id='grimmlink-password'
+          value={password}
+          onChange={setPassword}
+          type='password'
+        />
+        {isLanServer && (
+          <section className='space-y-2'>
+            <SectionTitle>{_('LAN security')}</SectionTitle>
+            <div className='card eink-bordered border-base-200 bg-base-100 overflow-hidden border'>
+              <SettingsSwitchRow
+                label={_('Allow self-signed certificate')}
+                checked={settings.grimmlink.allowSelfSignedCertificate === true}
+                onChange={() =>
+                  void saveGrimmLink({
+                    allowSelfSignedCertificate: !settings.grimmlink.allowSelfSignedCertificate,
+                  })
+                }
+              />
+            </div>
+            <Tips>
+              <li>
+                {_(
+                  'Only applies to LAN addresses. Public and Cloudflare Tunnel connections always verify TLS certificates.',
+                )}
+              </li>
+            </Tips>
+          </section>
+        )}
         <Tips>
-          <li>{_('Your password is used only to create the GrimmLink credential for this connection.')}</li>
+          <li>
+            {_(
+              'Your password is used only to create the GrimmLink credential for this connection.',
+            )}
+          </li>
         </Tips>
         {settings.grimmlink.enabled && settings.grimmlink.userkey && (
           <section className='space-y-2'>
@@ -94,7 +143,9 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
                   <SettingLabel>{_('Sync Strategy')}</SettingLabel>
                   <SettingsSelect
                     value={settings.grimmlink.strategy}
-                    onChange={(event) => void saveGrimmLink({ strategy: event.target.value as KOSyncStrategy })}
+                    onChange={(event) =>
+                      void saveGrimmLink({ strategy: event.target.value as KOSyncStrategy })
+                    }
                     ariaLabel={_('Sync Strategy')}
                     options={[
                       { value: 'prompt', label: _('Ask on conflict') },
@@ -104,22 +155,54 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
                     ]}
                   />
                 </div>
-                <SettingsSwitchRow label={_('Sync Reading Progress')} checked={settings.grimmlink.syncProgress} onChange={() => void saveGrimmLink({ syncProgress: !settings.grimmlink.syncProgress })} />
-                <SettingsSwitchRow label={_('Sync Highlights, Bookmarks, and Ratings')} checked={settings.grimmlink.syncMetadata} onChange={() => void saveGrimmLink({ syncMetadata: !settings.grimmlink.syncMetadata })} />
-                <SettingsSwitchRow label={_('Sync Reading Sessions')} checked={settings.grimmlink.syncSessions} onChange={() => void saveGrimmLink({ syncSessions: !settings.grimmlink.syncSessions })} />
-                <SettingsSwitchRow label={_('Sync Reading Status')} checked={settings.grimmlink.syncReadStatus} onChange={() => void saveGrimmLink({ syncReadStatus: !settings.grimmlink.syncReadStatus })} />
+                <SettingsSwitchRow
+                  label={_('Sync Reading Progress')}
+                  checked={settings.grimmlink.syncProgress}
+                  onChange={() =>
+                    void saveGrimmLink({ syncProgress: !settings.grimmlink.syncProgress })
+                  }
+                />
+                <SettingsSwitchRow
+                  label={_('Sync Highlights, Bookmarks, and Ratings')}
+                  checked={settings.grimmlink.syncMetadata}
+                  onChange={() =>
+                    void saveGrimmLink({ syncMetadata: !settings.grimmlink.syncMetadata })
+                  }
+                />
+                <SettingsSwitchRow
+                  label={_('Sync Reading Sessions')}
+                  checked={settings.grimmlink.syncSessions}
+                  onChange={() =>
+                    void saveGrimmLink({ syncSessions: !settings.grimmlink.syncSessions })
+                  }
+                />
+                <SettingsSwitchRow
+                  label={_('Sync Reading Status')}
+                  checked={settings.grimmlink.syncReadStatus}
+                  onChange={() =>
+                    void saveGrimmLink({ syncReadStatus: !settings.grimmlink.syncReadStatus })
+                  }
+                />
               </div>
             </div>
           </section>
         )}
         <GrimmLinkShelfPanel />
+        <GrimmLinkDiagnosticsPanel />
         <div className='flex justify-end pt-1'>
           <button
             type='submit'
             disabled={isConnecting || !serverUrl || !username || !password}
-            className={clsx('btn btn-primary h-10 min-h-10 rounded-lg px-5 text-sm', isConnecting && 'opacity-60')}
+            className={clsx(
+              'btn btn-primary h-10 min-h-10 rounded-lg px-5 text-sm',
+              isConnecting && 'opacity-60',
+            )}
           >
-            {isConnecting ? <span className='loading loading-spinner loading-sm' /> : _('Test connection')}
+            {isConnecting ? (
+              <span className='loading loading-spinner loading-sm' />
+            ) : (
+              _('Test connection')
+            )}
           </button>
         </div>
       </form>

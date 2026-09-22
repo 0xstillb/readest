@@ -19,6 +19,10 @@ example `GrimmLinkClient.test.ts`, `grimmlinkProgress.test.ts`, and
 - Classifies 400, 401, 403, 404, 409, 429, 5xx, malformed JSON, timeout, and
   transport failures.
 - Attempts fallback only after a transport failure.
+- Omits invalid-TLS flags by default; allows them only for an opted-in LAN
+  endpoint and never for public or Cloudflare Tunnel origins.
+- Retries transient responses and transport timeouts with a 15s request
+  deadline, three retries, and 250/500/1000ms exponential backoff.
 
 ## Store and outbox tests
 
@@ -29,6 +33,10 @@ example `GrimmLinkClient.test.ts`, `grimmlinkProgress.test.ts`, and
 - Note mappings are isolated by connection and book hash.
 - Managed shelf entry cannot authorize deletion outside the managed library
   root.
+- Diagnostics summary, persisted error categories, URL redaction, retry and
+  invalid-row cleanup.
+- Lifecycle session intervals remain separate across suspend/resume and a
+  single-flight pull prevents duplicate replay races.
 
 ## Progress tests
 
@@ -37,6 +45,8 @@ example `GrimmLinkClient.test.ts`, `grimmlinkProgress.test.ts`, and
 - Prompt/silent/send/receive strategies.
 - Same-device remote echo does not create a false conflict.
 - Unmatched book and unresolved native position are non-destructive.
+- GrimmLink conflict labels show user-facing position/device/time data without
+  exposing CFI, XPointer, hashes, or internal IDs.
 
 ## Metadata tests
 

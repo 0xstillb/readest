@@ -66,10 +66,16 @@ export interface SyncDetails {
   local: {
     cfi?: string;
     preview: string;
+    percentage?: number;
+    currentPage?: number;
+    totalPages?: number;
   };
   remote: KoSyncProgress & {
     preview: string;
     percentage?: number;
+    updatedAt?: string;
+    currentPage?: number;
+    totalPages?: number;
   };
 }
 

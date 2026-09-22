@@ -134,6 +134,11 @@ export interface GrimmLinkSettings {
   username: string;
   /** MD5(password), supplied by the user or derived only while connecting. */
   userkey: string;
+  /**
+   * Permit self-signed certificates only for an explicitly configured LAN
+   * endpoint. The client ignores this flag for public/Tunnel URLs.
+   */
+  allowSelfSignedCertificate?: boolean;
   deviceId: string;
   deviceName: string;
   strategy: KOSyncStrategy;

@@ -6,10 +6,18 @@ import { NodeAppService } from '@/services/nodeAppService';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
 import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
-import { fromGrimmoryReadStatus, mapReadStatus, mergeRemoteReadStatus } from '@/services/grimmlink/status';
+import {
+  fromGrimmoryReadStatus,
+  mapReadStatus,
+  mergeRemoteReadStatus,
+} from '@/services/grimmlink/status';
 import { fromGrimmLinkRating, toGrimmLinkRating } from '@/services/grimmlink/metadata';
-import { GrimmLinkReadStatusProvider, queueExplicitGrimmLinkReadStatus } from '@/services/grimmlink/readStatus';
+import {
+  GrimmLinkReadStatusProvider,
+  queueExplicitGrimmLinkReadStatus,
+} from '@/services/grimmlink/readStatus';
 import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
+import { GrimmLinkSessionTracker } from '@/services/grimmlink/sessions';
 
 const SANDBOX_DIR = path.join(process.cwd(), '.test-sandbox-grimmlink');
 
@@ -64,27 +72,46 @@ describe('GrimmLink durable outbox', () => {
   it('pauses only the affected connection after an authentication failure', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueProgress('book-a', { percentage: 10 });
-    const client = { updateProgress: vi.fn().mockRejectedValue(new GrimmLinkRequestError('authentication', 'nope', 401)) };
+    const client = {
+      updateProgress: vi
+        .fn()
+        .mockRejectedValue(new GrimmLinkRequestError('authentication', 'nope', 401)),
+    };
 
     await new GrimmLinkOutbox(store, client).replay();
 
     expect(await store.isPaused()).toBe(true);
-    expect((await store.all('progress'))).toHaveLength(1);
+    expect(await store.all('progress')).toHaveLength(1);
   });
 
   it('uploads valid collected sessions in batches without waiting for the lifecycle caller', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueSession({
-      bookId: 4, bookHash: 'book-a', bookType: 'EPUB', device: 'Readest Test', deviceId: 'd1',
-      session: { startTime: '2026-08-23T00:00:00.000Z', endTime: '2026-08-23T00:00:11.000Z', durationSeconds: 11, startProgress: 0.1, endProgress: 0.2, progressDelta: 0.1 },
+      bookId: 4,
+      bookHash: 'book-a',
+      bookType: 'EPUB',
+      device: 'Readest Test',
+      deviceId: 'd1',
+      session: {
+        startTime: '2026-08-23T00:00:00.000Z',
+        endTime: '2026-08-23T00:00:11.000Z',
+        durationSeconds: 11,
+        startProgress: 0.1,
+        endProgress: 0.2,
+        progressDelta: 0.1,
+      },
     });
     const client = { postSessionBatch: vi.fn().mockResolvedValue({ ok: true }) };
 
     await new GrimmLinkOutbox(store, client).replay();
 
-    expect(client.postSessionBatch).toHaveBeenCalledWith(expect.objectContaining({
-      bookId: 4, bookHash: 'book-a', sessions: [expect.objectContaining({ durationSeconds: 11 })],
-    }));
+    expect(client.postSessionBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookId: 4,
+        bookHash: 'book-a',
+        sessions: [expect.objectContaining({ durationSeconds: 11 })],
+      }),
+    );
   });
 
   it('retains metadata when no replay handler is available', async () => {
@@ -95,6 +122,54 @@ describe('GrimmLink durable outbox', () => {
 
     await expect(store.all('metadata')).resolves.toHaveLength(1);
   });
+
+  it('persists diagnostics without leaking server URLs and clears invalid rows only', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueProgress('book-a', { percentage: 10 });
+    await store.enqueueStatus('book-b', 7, 'reading');
+    await store.invalidate((await store.all('progress'))[0]!.id);
+    await store.recordAttempt();
+    await store.recordError({
+      category: 'network',
+      message: 'GET https://secret.example/api failed',
+      action: 'progress',
+      retryable: true,
+    });
+
+    expect(await store.getOutboxSummary()).toMatchObject({
+      totalPending: 1,
+      invalid: 1,
+      pendingByCategory: { status: 1 },
+    });
+    expect((await store.getDiagnostics()).lastError).toMatchObject({
+      category: 'network',
+      message: 'GET [server] failed',
+    });
+    await store.clearInvalid();
+    expect((await store.getOutboxSummary()).invalid).toBe(0);
+  });
+});
+
+describe('GrimmLink lifecycle sessions', () => {
+  it('closes each active window interval instead of merging suspended time', () => {
+    const tracker = new GrimmLinkSessionTracker();
+    const link = {
+      bookId: 1,
+      bookHash: 'book',
+      bookType: 'EPUB',
+      device: 'Readest',
+      deviceId: 'device',
+    };
+    expect(tracker.startSession({ progress: 0.1 }, 10 * 60 * 60 * 1000)).toBe(true);
+    expect(tracker.startSession({ progress: 0.2 }, 10 * 60 * 60 * 1000 + 5_000)).toBe(false);
+    const first = tracker.finish({ progress: 0.2 }, link, 10 * 60 * 60 * 1000 + 10 * 60 * 1000);
+    expect(first?.session).toMatchObject({ durationSeconds: 600 });
+    expect(tracker.startSession({ progress: 0.2 }, 10 * 60 * 60 * 1000 + 40 * 60 * 1000)).toBe(
+      true,
+    );
+    const second = tracker.finish({ progress: 0.3 }, link, 10 * 60 * 60 * 1000 + 50 * 60 * 1000);
+    expect(second?.session).toMatchObject({ durationSeconds: 600 });
+  });
 });
 
 describe('GrimmLink status and rating contract', () => {
@@ -102,25 +177,33 @@ describe('GrimmLink status and rating contract', () => {
     expect(mapReadStatus('finished', ['unread', 'reading'])).toBeNull();
     expect(mapReadStatus('finished', ['finished'])).toBe('finished');
     expect(mapReadStatus('finished', ['READ', 'READING'])).toBe('READ');
-    expect(mergeRemoteReadStatus(
-      { readingStatus: 'finished', readingStatusUpdatedAt: 200 },
-      { status: 'reading', updatedAt: '1970-01-01T00:00:00.100Z' },
-      ['reading'],
-    )).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
+    expect(
+      mergeRemoteReadStatus(
+        { readingStatus: 'finished', readingStatusUpdatedAt: 200 },
+        { status: 'reading', updatedAt: '1970-01-01T00:00:00.100Z' },
+        ['reading'],
+      ),
+    ).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
     expect(fromGrimmoryReadStatus('READ')).toBe('finished');
-    expect(mergeRemoteReadStatus(
-      { readingStatus: 'reading', readingStatusUpdatedAt: 100 },
-      { status: 'READ', updatedAt: '1970-01-01T00:00:00.200Z' },
-      ['READ', 'READING'],
-    )).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
+    expect(
+      mergeRemoteReadStatus(
+        { readingStatus: 'reading', readingStatusUpdatedAt: 100 },
+        { status: 'READ', updatedAt: '1970-01-01T00:00:00.200Z' },
+        ['READ', 'READING'],
+      ),
+    ).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
   });
 
   it('converts rating scales and preserves newer local ratings on pull', () => {
-    expect(toGrimmLinkRating({ value: 4, scale: 5, updatedAt: 200 }, 'connection-a', 'book-a')).toMatchObject({ value: 8, scale: 10 });
-    expect(fromGrimmLinkRating(
-      { value: 6, scale: 10, updatedAt: '1970-01-01T00:00:00.100Z' },
-      { value: 5, scale: 5, updatedAt: 200 },
-    )).toEqual({ value: 5, scale: 5, updatedAt: 200 });
+    expect(
+      toGrimmLinkRating({ value: 4, scale: 5, updatedAt: 200 }, 'connection-a', 'book-a'),
+    ).toMatchObject({ value: 8, scale: 10 });
+    expect(
+      fromGrimmLinkRating(
+        { value: 6, scale: 10, updatedAt: '1970-01-01T00:00:00.100Z' },
+        { value: 5, scale: 5, updatedAt: 200 },
+      ),
+    ).toEqual({ value: 5, scale: 5, updatedAt: 200 });
   });
 
   it('does not queue unsupported status or metadata writes', async () => {
@@ -130,13 +213,16 @@ describe('GrimmLink status and rating contract', () => {
       await service.init();
       const store = new GrimmLinkSyncStore(service, 'connection-a');
       const statuses = new GrimmLinkReadStatusProvider({ getReadStatuses: vi.fn() }, store, []);
-      const ratings = new GrimmLinkRatingProvider(
-        { getMetadata: vi.fn() }, store,
-        { capabilities: [], device: 'Readest Test', deviceId: 'device-1' },
-      );
+      const ratings = new GrimmLinkRatingProvider({ getMetadata: vi.fn() }, store, {
+        capabilities: [],
+        device: 'Readest Test',
+        deviceId: 'device-1',
+      });
 
       await expect(statuses.queueExplicit('book-a', 4, 'reading')).resolves.toBe(false);
-      await expect(ratings.queuePush('book-a', 4, { value: 4, scale: 5, updatedAt: 100 })).resolves.toBe(false);
+      await expect(
+        ratings.queuePush('book-a', 4, { value: 4, scale: 5, updatedAt: 100 }),
+      ).resolves.toBe(false);
       await expect(store.all('status')).resolves.toEqual([]);
       await expect(store.all('metadata')).resolves.toEqual([]);
     } finally {
@@ -150,8 +236,20 @@ describe('GrimmLink status and rating contract', () => {
       const service = new NodeAppService(root);
       await service.init();
       const store = new GrimmLinkSyncStore(service, 'connection-a');
-      const book = { hash: 'readest-hash', title: 'Shelf title', author: 'Author', format: 'EPUB' } as Book;
-      await store.markShelfEntry('regular', 7, 42, 'grimory-hash', 'readest-hash/Shelf title.epub', true);
+      const book = {
+        hash: 'readest-hash',
+        title: 'Shelf title',
+        author: 'Author',
+        format: 'EPUB',
+      } as Book;
+      await store.markShelfEntry(
+        'regular',
+        7,
+        42,
+        'grimory-hash',
+        'readest-hash/Shelf title.epub',
+        true,
+      );
       const client = {
         getCapabilities: vi.fn().mockResolvedValue({ capabilities: ['read-status'] }),
         getReadStatuses: vi.fn().mockResolvedValue({ statuses: ['finished'] }),
@@ -159,13 +257,15 @@ describe('GrimmLink status and rating contract', () => {
         updateReadStatus: vi.fn().mockResolvedValue({ ok: true }),
       };
 
-      await expect(queueExplicitGrimmLinkReadStatus(
-        book,
-        'finished',
-        { enabled: true, syncReadStatus: true, strategy: 'prompt' },
-        store,
-        client,
-      )).resolves.toBe(true);
+      await expect(
+        queueExplicitGrimmLinkReadStatus(
+          book,
+          'finished',
+          { enabled: true, syncReadStatus: true, strategy: 'prompt' },
+          store,
+          client,
+        ),
+      ).resolves.toBe(true);
 
       await vi.waitFor(() => expect(client.updateReadStatus).toHaveBeenCalledWith(42, 'finished'));
       expect(client.matchBook).not.toHaveBeenCalled();
@@ -181,15 +281,17 @@ describe('GrimmLink status and rating contract', () => {
       const service = new NodeAppService(root);
       await service.init();
       const store = new GrimmLinkSyncStore(service, 'connection-a');
-      const ratings = new GrimmLinkRatingProvider(
-        { getMetadata: vi.fn() }, store,
-        { capabilities: ['metadata'], device: 'Readest Windows', deviceId: 'device-1' },
-      );
+      const ratings = new GrimmLinkRatingProvider({ getMetadata: vi.fn() }, store, {
+        capabilities: ['metadata'],
+        device: 'Readest Windows',
+        deviceId: 'device-1',
+      });
 
       await ratings.queuePush('book-a', 4, { value: 4, scale: 5, updatedAt: 100 });
 
       expect((await store.all('metadata'))[0]?.payload).toMatchObject({
-        device: 'Readest Windows', deviceId: 'device-1',
+        device: 'Readest Windows',
+        deviceId: 'device-1',
       });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -203,20 +305,32 @@ describe('GrimmLink status and rating contract', () => {
       const service = new NodeAppService(root);
       await service.init();
       const store = new GrimmLinkSyncStore(service, 'connection-a');
-      const getMetadata = vi.fn()
+      const getMetadata = vi
+        .fn()
         .mockResolvedValueOnce({
-          items: [{ type: 'rating', payload: { value: 4, scale: 10, updatedAt: '2026-08-23T00:00:01.000Z' } }],
+          items: [
+            {
+              type: 'rating',
+              payload: { value: 4, scale: 10, updatedAt: '2026-08-23T00:00:01.000Z' },
+            },
+          ],
           nextCursor: 'page-2',
         })
         .mockResolvedValueOnce({
-          items: [{ type: 'rating', payload: { value: 8, scale: 10, updatedAt: '2026-08-23T00:00:02.000Z' } }],
+          items: [
+            {
+              type: 'rating',
+              payload: { value: 8, scale: 10, updatedAt: '2026-08-23T00:00:02.000Z' },
+            },
+          ],
           nextCursor: 'done',
         })
         .mockResolvedValueOnce({ items: [], nextCursor: null });
-      const ratings = new GrimmLinkRatingProvider(
-        { getMetadata }, store,
-        { capabilities: ['metadata'], device: 'Readest Test', deviceId: 'device-1' },
-      );
+      const ratings = new GrimmLinkRatingProvider({ getMetadata }, store, {
+        capabilities: ['metadata'],
+        device: 'Readest Test',
+        deviceId: 'device-1',
+      });
 
       await expect(ratings.pull('book-a', null)).resolves.toMatchObject({ value: 4, scale: 5 });
       await expect(store.getMetadataCursor('book-a', 'rating')).resolves.toBe('done');
@@ -238,10 +352,17 @@ describe('GrimmLink status and rating contract', () => {
       await service.init();
       const store = new GrimmLinkSyncStore(service, 'connection-a');
       const ratings = new GrimmLinkRatingProvider(
-        { getMetadata: vi.fn().mockResolvedValue({
-          items: [{ type: 'rating', payload: { value: 12, scale: 10, updatedAt: '2026-08-23T00:00:02.000Z' } }],
-          nextCursor: 'bad',
-        }) },
+        {
+          getMetadata: vi.fn().mockResolvedValue({
+            items: [
+              {
+                type: 'rating',
+                payload: { value: 12, scale: 10, updatedAt: '2026-08-23T00:00:02.000Z' },
+              },
+            ],
+            nextCursor: 'bad',
+          }),
+        },
         store,
         { capabilities: ['metadata'], device: 'Readest Test', deviceId: 'device-1' },
       );

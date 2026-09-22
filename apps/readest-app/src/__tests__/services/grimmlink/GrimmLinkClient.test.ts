@@ -61,7 +61,10 @@ describe('GrimmLinkClient', () => {
 
   it('tests authentication then returns server capabilities', async () => {
     const fetchMock = setFetch(async (url: unknown) =>
-      jsonResponse(200, String(url).endsWith('/auth') ? { user: 'alice' } : { capabilities: ['sessions'] }),
+      jsonResponse(
+        200,
+        String(url).endsWith('/auth') ? { user: 'alice' } : { capabilities: ['sessions'] },
+      ),
     );
     const result = await new GrimmLinkClient(makeConfig()).connect();
 
@@ -69,10 +72,77 @@ describe('GrimmLinkClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('does not weaken TLS by default, and only opts into invalid certificates for LAN', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: [] }));
+    await new GrimmLinkClient(makeConfig()).getCapabilities();
+    expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty('danger');
+
+    fetchMock.mockClear();
+    await new GrimmLinkClient(makeConfig({ allowSelfSignedCertificate: true })).getCapabilities();
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true },
+    });
+
+    const publicFetch = setFetch(async () => jsonResponse(200, { capabilities: [] }));
+    await new GrimmLinkClient(
+      makeConfig({ serverUrl: 'https://books.example.com', allowSelfSignedCertificate: true }),
+    ).getCapabilities();
+    expect(publicFetch.mock.calls[0]?.[1]).not.toHaveProperty('danger');
+  });
+
+  it('retries transient server responses with exponential backoff', async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const fetchMock = setFetch(async () => {
+        attempts += 1;
+        return attempts < 3
+          ? jsonResponse(503, { message: 'busy' })
+          : jsonResponse(200, { capabilities: [] });
+      });
+      const result = new GrimmLinkClient(makeConfig()).getCapabilities();
+      await vi.runAllTimersAsync();
+      await expect(result).resolves.toEqual({ capabilities: [] });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('classifies exhausted timeouts as network errors', async () => {
+    vi.useFakeTimers();
+    try {
+      setFetch(
+        (_url, init) =>
+          new Promise<Response>((_, reject) => {
+            (init as RequestInit).signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      );
+      const result = new GrimmLinkClient(makeConfig()).authenticate();
+      const assertion = expect(result).rejects.toMatchObject({
+        kind: 'transport',
+        category: 'network',
+      });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(200_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('normalizes Grimmory v1 boolean capabilities, including its core read-status endpoint', async () => {
-    setFetch(async () => jsonResponse(200, {
-      apiVersion: 'v1', progressSync: true, readingSessions: true, metadataSync: true, shelves: true,
-    }));
+    setFetch(async () =>
+      jsonResponse(200, {
+        apiVersion: 'v1',
+        progressSync: true,
+        readingSessions: true,
+        metadataSync: true,
+        shelves: true,
+      }),
+    );
 
     await expect(new GrimmLinkClient(makeConfig()).getCapabilities()).resolves.toEqual({
       capabilities: ['progress', 'sessions', 'metadata', 'shelves', 'read-status'],
@@ -80,17 +150,49 @@ describe('GrimmLinkClient', () => {
   });
 
   it('rejects HTML success pages and classifies HTTP errors', async () => {
-    setFetch(async () => ({ ok: true, status: 200, headers: new Headers(), json: async () => { throw new Error('HTML'); } }));
-    await expect(new GrimmLinkClient(makeConfig()).authenticate()).rejects.toThrow(GrimmLinkRequestError);
+    setFetch(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => {
+        throw new Error('HTML');
+      },
+    }));
+    await expect(new GrimmLinkClient(makeConfig()).authenticate()).rejects.toThrow(
+      GrimmLinkRequestError,
+    );
 
     setFetch(async () => jsonResponse(401, { message: 'Nope' }));
-    const error = await new GrimmLinkClient(makeConfig()).authenticate().catch((cause: unknown) => cause);
-    expect(error).toMatchObject({ status: 401, kind: 'authentication', message: 'Nope' });
+    const error = await new GrimmLinkClient(makeConfig())
+      .authenticate()
+      .catch((cause: unknown) => cause);
+    expect(error).toMatchObject({
+      status: 401,
+      kind: 'authentication',
+      category: 'auth',
+      message: 'Nope',
+    });
+
+    setFetch(async () => jsonResponse(409, { message: 'stale revision' }));
+    await expect(
+      new GrimmLinkClient(makeConfig()).updateProgress({ percentage: 20 }),
+    ).rejects.toMatchObject({
+      kind: 'conflict',
+      category: 'conflict',
+      status: 409,
+    });
+
+    setFetch(async () => jsonResponse(200, null));
+    await expect(new GrimmLinkClient(makeConfig()).authenticate()).rejects.toMatchObject({
+      category: 'invalid-data',
+    });
   });
 
   it('routes public servers through the GrimmLink proxy', async () => {
     const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: [] }));
-    await new GrimmLinkClient(makeConfig({ serverUrl: 'https://books.example.com' })).getCapabilities();
+    await new GrimmLinkClient(
+      makeConfig({ serverUrl: 'https://books.example.com' }),
+    ).getCapabilities();
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://web.readest.com/api/grimmlink');
@@ -103,8 +205,10 @@ describe('GrimmLinkClient', () => {
 
   it('uses v1 hash matching and progress endpoints with encoded hashes and JSON payloads', async () => {
     const fetchMock = setFetch(async (url: unknown) => {
-      if (String(url).includes('by-hash')) return jsonResponse(200, { bookHash: 'a/b', bookId: 42, bookFileId: 9 });
-      if (String(url).includes('/syncs/progress/a%2Fb')) return jsonResponse(200, { progress: '/body/DocFragment[1]/body', percentage: 50 });
+      if (String(url).includes('by-hash'))
+        return jsonResponse(200, { bookHash: 'a/b', bookId: 42, bookFileId: 9 });
+      if (String(url).includes('/syncs/progress/a%2Fb'))
+        return jsonResponse(200, { progress: '/body/DocFragment[1]/body', percentage: 50 });
       return jsonResponse(200, { ok: true });
     });
     const client = new GrimmLinkClient(makeConfig());
@@ -118,7 +222,10 @@ describe('GrimmLinkClient', () => {
       'http://192.168.1.50:3000/api/grimmlink/v1/syncs/progress/a%2Fb',
       'http://192.168.1.50:3000/api/grimmlink/v1/syncs/progress',
     ]);
-    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: 'PUT', body: JSON.stringify({ bookHash: 'a/b', percentage: 50 }) });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      method: 'PUT',
+      body: JSON.stringify({ bookHash: 'a/b', percentage: 50 }),
+    });
   });
 
   it('uses the documented session, status, and rating metadata endpoints', async () => {
@@ -136,28 +243,48 @@ describe('GrimmLinkClient', () => {
       ['http://192.168.1.50:3000/api/grimmlink/v1/books/read-statuses', 'GET'],
       ['http://192.168.1.50:3000/api/grimmlink/v1/books/1/status', 'PUT'],
       ['http://192.168.1.50:3000/api/grimmlink/v1/syncs/metadata/batch', 'POST'],
-      ['http://192.168.1.50:3000/api/grimmlink/v1/syncs/metadata?bookHash=a%2Fb&type=rating&limit=1', 'GET'],
+      [
+        'http://192.168.1.50:3000/api/grimmlink/v1/syncs/metadata?bookHash=a%2Fb&type=rating&limit=1',
+        'GET',
+      ],
     ]);
   });
 
   it('normalizes Grimmory shelf-book fields before downloading or importing', async () => {
-    setFetch(async () => jsonResponse(200, [{
-      bookId: 42,
-      bookHash: 'server-hash',
-      fileName: 'Ocean 5.epub',
-      fileFormat: 'EPUB',
-      fileSize: 1024,
-      title: 'Ocean 5',
-    }]));
+    setFetch(async () =>
+      jsonResponse(200, [
+        {
+          bookId: 42,
+          bookHash: 'server-hash',
+          fileName: 'Ocean 5.epub',
+          fileFormat: 'EPUB',
+          fileSize: 1024,
+          title: 'Ocean 5',
+        },
+      ]),
+    );
 
-    await expect(new GrimmLinkClient(makeConfig()).getShelfBooks('regular', 7)).resolves.toEqual([{
-      bookId: 42,
-      bookHash: 'server-hash',
-      filename: 'Ocean 5.epub',
-      format: 'EPUB',
-      size: undefined,
-      title: 'Ocean 5',
-      author: undefined,
-    }]);
+    await expect(new GrimmLinkClient(makeConfig()).getShelfBooks('regular', 7)).resolves.toEqual([
+      {
+        bookId: 42,
+        bookHash: 'server-hash',
+        filename: 'Ocean 5.epub',
+        format: 'EPUB',
+        size: undefined,
+        title: 'Ocean 5',
+        author: undefined,
+      },
+    ]);
+  });
+
+  it('rejects malformed shelf records instead of silently dropping them', async () => {
+    setFetch(async () =>
+      jsonResponse(200, [{ bookId: 'not-a-number', bookHash: 'missing-valid-id' }]),
+    );
+    await expect(
+      new GrimmLinkClient(makeConfig()).getShelfBooks('regular', 7),
+    ).rejects.toMatchObject({
+      category: 'invalid-data',
+    });
   });
 });

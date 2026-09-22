@@ -88,6 +88,7 @@ export const DEFAULT_KOSYNC_SETTINGS = {
 export const DEFAULT_BOOKORBIT_SETTINGS = {
   enabled: false,
   serverUrl: '',
+  allowSelfSignedCertificate: false,
   username: '',
   userkey: '',
   deviceId: '',
