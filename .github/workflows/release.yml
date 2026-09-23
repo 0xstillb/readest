@@ -203,9 +203,9 @@ jobs:
       attestations: write
     strategy:
       fail-fast: false
-      # tauri-action read-modify-writes latest.json for each target. Serialize
-      # release legs so concurrent asset replacement cannot drop platform keys.
-      max-parallel: 1
+      # Build every release target concurrently. Updater metadata is assembled
+      # once after the matrix, so the tauri-action legs cannot race on latest.json.
+      max-parallel: 5
       matrix:
         config:
           - os: ubuntu-latest
@@ -465,7 +465,7 @@ jobs:
           releaseId: ${{ needs.get-release.outputs.release_id }}
           tagName: ${{ needs.get-release.outputs.release_tag }}
           releaseBody: ${{ needs.get-release.outputs.release_note }}
-          uploadUpdaterJson: true
+          uploadUpdaterJson: false
           args: ${{ matrix.config.args || '' }}
 
       # quick-sharun skips what it cannot find without failing; catch that
@@ -556,67 +556,92 @@ jobs:
         with:
           subject-path: Readest_*-portable.exe
 
-  update-android-updater-manifest:
+  update-updater-manifest:
     needs: [get-release, build-tauri]
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: add the signed Android APK to latest.json
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: assemble signed updater manifest after all platform builds
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.get-release.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.get-release.outputs.release_version }}
+          RELEASE_NOTES: ${{ needs.get-release.outputs.release_note }}
         run: |
           set -euo pipefail
           apk_name="Readest_${RELEASE_VERSION}_arm64.apk"
-          apk_sig="${apk_name}.sig"
+          x64_setup="Readest_${RELEASE_VERSION}_x64-setup.exe"
+          arm64_setup="Readest_${RELEASE_VERSION}_arm64-setup.exe"
+          amd64_appimage="Readest_${RELEASE_VERSION}_amd64.AppImage"
+          arm64_appimage="Readest_${RELEASE_VERSION}_aarch64.AppImage"
           x64_portable="Readest_${RELEASE_VERSION}_x64-portable.exe"
-          x64_portable_sig="${x64_portable}.sig"
           arm64_portable="Readest_${RELEASE_VERSION}_arm64-portable.exe"
-          arm64_portable_sig="${arm64_portable}.sig"
           release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')
           gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --paginate \
             --jq '.[].name' > "$RUNNER_TEMP/release-assets.txt"
+          artifacts=(
+            "$apk_name" "$x64_setup" "$arm64_setup" "$amd64_appimage" "$arm64_appimage"
+            "$x64_portable" "$arm64_portable"
+          )
+          signatures=()
+          for artifact in "${artifacts[@]}"; do
+            signatures+=("${artifact}.sig")
+          done
+          for asset in "${artifacts[@]}" "${signatures[@]}"; do
+            grep -Fxq "$asset" "$RUNNER_TEMP/release-assets.txt" || {
+              echo "::error::Missing updater asset: $asset"
+              exit 1
+            }
+          done
+          patterns=()
+          for signature in "${signatures[@]}"; do
+            patterns+=(--pattern "$signature")
+          done
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern latest.json \
-            --pattern "$apk_sig" \
-            --pattern "$x64_portable_sig" \
-            --pattern "$arm64_portable_sig" \
-            --dir "$RUNNER_TEMP"
-          grep -Fxq "$apk_name" "$RUNNER_TEMP/release-assets.txt"
-          grep -Fxq "$x64_portable" "$RUNNER_TEMP/release-assets.txt"
-          grep -Fxq "$arm64_portable" "$RUNNER_TEMP/release-assets.txt"
-          for signature in "$apk_sig" "$x64_portable_sig" "$arm64_portable_sig"; do
+            "${patterns[@]}" --dir "$RUNNER_TEMP"
+          for signature in "${signatures[@]}"; do
             grep -Fxq "$signature" "$RUNNER_TEMP/release-assets.txt"
           done
           node - "$RUNNER_TEMP/latest.json" "$GITHUB_REPOSITORY" "$RELEASE_TAG" \
-            "$apk_name" "$x64_portable" "$arm64_portable" <<'NODE'
+            "$RELEASE_VERSION" "$RELEASE_NOTES" "$apk_name" "$x64_setup" "$arm64_setup" \
+            "$amd64_appimage" "$arm64_appimage" "$x64_portable" "$arm64_portable" <<'NODE'
           const fs = require('node:fs');
           const path = require('node:path');
-          const [file, repository, tag, apk, x64Portable, arm64Portable] = process.argv.slice(2);
-          const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const [file, repository, tag, version, notes, apk, x64Setup, arm64Setup,
+            amd64AppImage, arm64AppImage, x64Portable, arm64Portable] = process.argv.slice(2);
           const signatureFor = (name) =>
             fs.readFileSync(path.join(path.dirname(file), `${name}.sig`), 'utf8').trim();
-          manifest.platforms ??= {};
-          manifest.platforms['android-arm64'] = {
-            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(apk)}`,
-            signature: signatureFor(apk),
+          const entry = (asset) => ({
+            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(asset)}`,
+            signature: signatureFor(asset),
+          });
+          const platforms = {
+            'windows-x86_64': entry(x64Setup),
+            'windows-aarch64': entry(arm64Setup),
+            'linux-x86_64-appimage': entry(amd64AppImage),
+            'linux-aarch64-appimage': entry(arm64AppImage),
+            'android-arm64': entry(apk),
+            'windows-x86_64-portable': entry(x64Portable),
+            'windows-aarch64-portable': entry(arm64Portable),
           };
-          manifest.platforms['windows-x86_64-portable'] = {
-            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(x64Portable)}`,
-            signature: signatureFor(x64Portable),
-          };
-          manifest.platforms['windows-aarch64-portable'] = {
-            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(arm64Portable)}`,
-            signature: signatureFor(arm64Portable),
+          for (const [platform, item] of Object.entries(platforms)) {
+            if (!item.signature) throw new Error(`Missing signature for ${platform}`);
+          }
+          const manifest = {
+            version,
+            notes,
+            pub_date: new Date().toISOString(),
+            platforms,
           };
           fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
           NODE
           bash scripts/release-upload.sh "$RELEASE_TAG" "$RUNNER_TEMP/latest.json"
 
   verify-release-assets:
-    needs: [get-release, build-tauri, update-android-updater-manifest]
+    needs: [get-release, build-tauri, update-updater-manifest]
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -668,6 +693,10 @@ jobs:
             'linux-x86_64-appimage', 'linux-aarch64-appimage',
           ];
           const expectedAssets = {
+            'windows-x86_64': `Readest_${version}_x64-setup.exe`,
+            'windows-aarch64': `Readest_${version}_arm64-setup.exe`,
+            'linux-x86_64-appimage': `Readest_${version}_amd64.AppImage`,
+            'linux-aarch64-appimage': `Readest_${version}_aarch64.AppImage`,
             'android-arm64': `Readest_${version}_arm64.apk`,
             'windows-x86_64-portable': `Readest_${version}_x64-portable.exe`,
             'windows-aarch64-portable': `Readest_${version}_arm64-portable.exe`,
