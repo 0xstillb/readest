@@ -53,6 +53,76 @@ describe('GrimmLink durable outbox', () => {
     await expect(restartedProcess.ready('progress')).resolves.toEqual([]);
   });
 
+  it('retries schema initialization after a temporary database failure without losing queued rows', async () => {
+    const firstProcess = new GrimmLinkSyncStore(service, 'connection-a');
+    await firstProcess.enqueueProgress('book-a', { percentage: 64 });
+
+    const restartedService = new NodeAppService(root);
+    await restartedService.init();
+    const openDatabase = restartedService.openDatabase.bind(restartedService);
+    let failNextOpen = true;
+    restartedService.openDatabase = async (...args) => {
+      if (failNextOpen) {
+        failNextOpen = false;
+        throw new Error('simulated temporary database unavailability');
+      }
+      return await openDatabase(...args);
+    };
+    const restartedProcess = new GrimmLinkSyncStore(restartedService, 'connection-a');
+
+    await expect(restartedProcess.enqueueProgress('book-b', { percentage: 20 })).rejects.toThrow(
+      'simulated temporary database unavailability',
+    );
+    await restartedProcess.enqueueProgress('book-b', { percentage: 20 });
+
+    await expect(restartedProcess.ready('progress')).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ bookHash: 'book-a', payload: { percentage: 64 } }),
+        expect.objectContaining({ bookHash: 'book-b', payload: { percentage: 20 } }),
+      ]),
+    );
+  });
+
+  it('surfaces a failed outbox write and preserves existing rows for a safe retry', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueProgress('book-a', { percentage: 64 });
+    const openDatabase = service.openDatabase.bind(service);
+    let failNextInsert = true;
+    service.openDatabase = async (...args) => {
+      const database = await openDatabase(...args);
+      return new Proxy(database, {
+        get: (target, property) => {
+          if (property === 'execute') {
+            return async (sql: string, params?: unknown[]) => {
+              if (failNextInsert && /^INSERT INTO outbox/.test(sql)) {
+                failNextInsert = false;
+                throw new Error('simulated database write failure');
+              }
+              return await target.execute(sql, params);
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+
+    await expect(store.enqueueProgress('book-b', { percentage: 20 })).rejects.toThrow(
+      'simulated database write failure',
+    );
+    await expect(store.ready('progress')).resolves.toEqual([
+      expect.objectContaining({ bookHash: 'book-a', payload: { percentage: 64 } }),
+    ]);
+
+    await store.enqueueProgress('book-b', { percentage: 20 });
+    await expect(store.ready('progress')).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ bookHash: 'book-a', payload: { percentage: 64 } }),
+        expect.objectContaining({ bookHash: 'book-b', payload: { percentage: 20 } }),
+      ]),
+    );
+  });
+
   it('recovers after a process stops between remote acknowledgement and local queue removal', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueProgress('book-a', { percentage: 35 });
@@ -77,6 +147,39 @@ describe('GrimmLink durable outbox', () => {
     await new GrimmLinkOutbox(restartedProcess, client).replay();
     expect(client.updateProgress).toHaveBeenCalledTimes(2);
     await expect(restartedProcess.ready('progress')).resolves.toEqual([]);
+  });
+
+  it('rolls back an interrupted outbox transaction and preserves the queued row', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueProgress('book-a', { percentage: 55 });
+    const [queued] = await store.all('progress');
+    const openDatabase = service.openDatabase.bind(service);
+    let interruptDelete = true;
+    service.openDatabase = async (...args) => {
+      const database = await openDatabase(...args);
+      return new Proxy(database, {
+        get: (target, property) => {
+          if (property === 'execute') {
+            return async (sql: string, params?: unknown[]) => {
+              if (interruptDelete && /^DELETE FROM outbox/.test(sql)) {
+                interruptDelete = false;
+                throw new Error('simulated interruption during transaction');
+              }
+              return await target.execute(sql, params);
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+
+    await expect(store.remove([queued!.id])).rejects.toThrow(
+      'simulated interruption during transaction',
+    );
+    await expect(store.ready('progress')).resolves.toHaveLength(1);
+    await store.remove([queued!.id]);
+    await expect(store.ready('progress')).resolves.toEqual([]);
   });
 
   it('backs off a failed category without blocking a different ready category', async () => {
@@ -162,6 +265,76 @@ describe('GrimmLink durable outbox', () => {
     expect(client.postSessionBatch).toHaveBeenCalledTimes(2);
     expect(client.postSessionBatch.mock.calls[1]?.[1]).toBe(sessionRequestKey);
     expect(await nextProcess.readyAll()).toEqual([]);
+  });
+
+  it('keeps multi-device progress conflicts durable until local or remote is explicitly chosen', async () => {
+    const firstProcess = new GrimmLinkSyncStore(service, 'connection-a');
+    await firstProcess.enqueueProgress('book-local-choice', {
+      percentage: 40,
+      device_id: 'device-a',
+      bookHash: 'book-local-choice',
+    });
+    await firstProcess.enqueueProgress('book-local-choice', {
+      percentage: 70,
+      device_id: 'device-a',
+      bookHash: 'book-local-choice',
+    });
+    await firstProcess.enqueueProgress('book-remote-choice', {
+      percentage: 80,
+      device_id: 'device-a',
+      bookHash: 'book-remote-choice',
+    });
+
+    const attempted: Array<{ bookHash: string; percentage: number }> = [];
+    const attemptsByBook = new Map<string, number>();
+    const client = {
+      updateProgress: async (payload: Record<string, unknown>) => {
+        const bookHash = String(payload['bookHash']);
+        attempted.push({ bookHash, percentage: Number(payload['percentage']) });
+        const count = (attemptsByBook.get(bookHash) ?? 0) + 1;
+        attemptsByBook.set(bookHash, count);
+        if (count === 1) throw new GrimmLinkRequestError('conflict', 'stale revision', 409);
+        return { ok: true };
+      },
+    };
+
+    await new GrimmLinkOutbox(firstProcess, client).replay();
+    expect(attempted).toEqual([
+      { bookHash: 'book-local-choice', percentage: 70 },
+      { bookHash: 'book-remote-choice', percentage: 80 },
+    ]);
+
+    const restartedProcess = new GrimmLinkSyncStore(service, 'connection-a');
+    expect(await restartedProcess.readyAll()).toEqual([]);
+    expect(await restartedProcess.all('progress')).toHaveLength(2);
+
+    // Choosing local reactivates the coalesced row with the latest local
+    // position. Choosing remote leaves its conflicting row invalid, so a
+    // restart/replay cannot push it over the remote 80% position.
+    await restartedProcess.enqueueProgress('book-local-choice', {
+      percentage: 70,
+      device_id: 'device-a',
+      bookHash: 'book-local-choice',
+    });
+    await new GrimmLinkOutbox(restartedProcess, client).replay();
+
+    expect(attempted).toEqual([
+      { bookHash: 'book-local-choice', percentage: 70 },
+      { bookHash: 'book-remote-choice', percentage: 80 },
+      { bookHash: 'book-local-choice', percentage: 70 },
+    ]);
+    expect(await restartedProcess.all('progress')).toEqual([
+      expect.objectContaining({
+        bookHash: 'book-remote-choice',
+        payload: {
+          percentage: 80,
+          device_id: 'device-a',
+          bookHash: 'book-remote-choice',
+        },
+        errorCategory: 'conflict',
+      }),
+    ]);
+    await expect(restartedProcess.readyAll()).resolves.toEqual([]);
   });
 
   it('pauses only the affected connection after an authentication failure', async () => {
@@ -402,7 +575,12 @@ describe('GrimmLink lifecycle sessions', () => {
     const beforeBackground = new GrimmLinkSessionTracker();
     beforeBackground.startSession({ progress: 0.4 }, 1_000);
     const queued = beforeBackground.finish({ progress: 0.7 }, link, 61_000);
-    expect(queued?.session).toMatchObject({ durationSeconds: 60, progressDelta: 0.3 });
+    expect(queued?.session).toMatchObject({
+      durationSeconds: 60,
+      startProgress: 0.4,
+      endProgress: 0.7,
+    });
+    expect(queued?.session['progressDelta']).toBeCloseTo(0.3);
 
     // A new process has no active session to accidentally extend across sleep.
     const afterRestart = new GrimmLinkSessionTracker();
