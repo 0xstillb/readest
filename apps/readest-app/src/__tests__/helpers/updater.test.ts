@@ -246,10 +246,11 @@ describe('updater', () => {
       mockOsArch.mockReturnValue('aarch64');
       mockAppVersion = '1.0.0';
       mockTauriFetch.mockResolvedValue({
-        json: () => Promise.resolve({
-          version: '2.0.0',
-          platforms: { 'android-arm64': { url: 'https://x/app.apk' } },
-        }),
+        json: () =>
+          Promise.resolve({
+            version: '2.0.0',
+            platforms: { 'android-arm64': { url: 'https://x/app.apk' } },
+          }),
       });
 
       const result = await checkForAppUpdates(dummyTranslate, false);

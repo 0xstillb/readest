@@ -25,10 +25,7 @@ import { join } from '@tauri-apps/api/path';
 import { getLocale } from '@/utils/misc';
 import { setLastShownReleaseNotesVersion } from '@/helpers/updater';
 import type { ResolvedNightlyUpdate } from '@/helpers/updater';
-import {
-  READEST_UPDATER_FILE,
-  READEST_CHANGELOG_FILE,
-} from '@/services/constants';
+import { READEST_UPDATER_FILE, READEST_CHANGELOG_FILE } from '@/services/constants';
 import Dialog from '@/components/Dialog';
 import Link from './Link';
 
