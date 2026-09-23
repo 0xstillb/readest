@@ -222,6 +222,7 @@ describe('GrimmLink durable outbox', () => {
         bookHash: 'book-a',
         sessions: [expect.objectContaining({ durationSeconds: 11 })],
       }),
+      expect.stringMatching(/^readest-session-/),
     );
   });
 
