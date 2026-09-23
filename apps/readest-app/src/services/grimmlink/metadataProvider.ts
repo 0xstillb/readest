@@ -12,7 +12,10 @@ type MetadataConfig = { capabilities: string[]; device: string; deviceId: string
 const itemDedupeKey = (item: unknown): string => {
   if (!item || typeof item !== 'object') throw new Error('Invalid GrimmLink metadata note');
   const record = item as Record<string, unknown>;
-  const payload = record['payload'] && typeof record['payload'] === 'object' ? record['payload'] as Record<string, unknown> : record;
+  const payload =
+    record['payload'] && typeof record['payload'] === 'object'
+      ? (record['payload'] as Record<string, unknown>)
+      : record;
   const key = record['dedupeKey'] ?? payload['dedupeKey'];
   if (typeof key !== 'string' || !key) throw new Error('Invalid GrimmLink metadata note');
   return key;
@@ -25,28 +28,60 @@ export class GrimmLinkMetadataProvider {
     private readonly config: MetadataConfig,
   ) {}
 
-  async queuePush(bookHash: string, bookId: number, notes: BookNote[], bookFileId?: number, fileFormat?: string): Promise<boolean> {
+  async queuePush(
+    bookHash: string,
+    bookId: number,
+    notes: BookNote[],
+    bookFileId?: number,
+    fileFormat?: string,
+  ): Promise<boolean> {
     if (!hasGrimmLinkCapability(this.config.capabilities, 'metadata')) return false;
-    const annotationPairs = notes.filter((note) => note.type === 'annotation').map((note) => ({
-      note, payload: toGrimmLinkMetadataNote(note, this.store.connectionId, bookHash),
-    }));
-    const bookmarkPairs = notes.filter((note) => note.type === 'bookmark').map((note) => ({
-      note, payload: toGrimmLinkMetadataNote(note, this.store.connectionId, bookHash),
-    }));
+    const annotationPairs = notes
+      .filter((note) => note.type === 'annotation')
+      .map((note) => ({
+        note,
+        payload: toGrimmLinkMetadataNote(note, this.store.connectionId, bookHash),
+      }));
+    const bookmarkPairs = notes
+      .filter((note) => note.type === 'bookmark')
+      .map((note) => ({
+        note,
+        payload: toGrimmLinkMetadataNote(note, this.store.connectionId, bookHash),
+      }));
     const annotations = annotationPairs.map(({ payload }) => payload);
     const bookmarks = bookmarkPairs.map(({ payload }) => payload);
     if (!annotations.length && !bookmarks.length) return false;
     await this.store.enqueueMetadata(bookHash, {
-      schemaVersion: 1, syncMode: 'incremental', bookId, bookHash, bookFileId, fileFormat,
-      device: this.config.device, deviceId: this.config.deviceId, timestamp: new Date().toISOString(),
-      annotations, bookmarks,
+      schemaVersion: 1,
+      syncMode: 'incremental',
+      bookId,
+      bookHash,
+      bookFileId,
+      fileFormat,
+      device: this.config.device,
+      deviceId: this.config.deviceId,
+      timestamp: new Date().toISOString(),
+      annotations,
+      bookmarks,
     });
-    await this.store.applyMetadataPage(bookHash, 'annotation', annotationPairs.map(({ note, payload }) => ({
-      noteId: note.id, dedupeKey: payload.dedupeKey,
-    })), null);
-    await this.store.applyMetadataPage(bookHash, 'bookmark', bookmarkPairs.map(({ note, payload }) => ({
-      noteId: note.id, dedupeKey: payload.dedupeKey,
-    })), null);
+    await this.store.applyMetadataPage(
+      bookHash,
+      'annotation',
+      annotationPairs.map(({ note, payload }) => ({
+        noteId: note.id,
+        dedupeKey: payload.dedupeKey,
+      })),
+      null,
+    );
+    await this.store.applyMetadataPage(
+      bookHash,
+      'bookmark',
+      bookmarkPairs.map(({ note, payload }) => ({
+        noteId: note.id,
+        dedupeKey: payload.dedupeKey,
+      })),
+      null,
+    );
     return true;
   }
 
@@ -64,7 +99,8 @@ export class GrimmLinkMetadataProvider {
         const query: Record<string, string | number> = { bookHash, type, limit: 500 };
         if (cursor) query['cursor'] = cursor;
         const response = await this.client.getMetadata(query);
-        if (!Array.isArray(response['items'])) throw new Error('Invalid GrimmLink metadata response');
+        if (!Array.isArray(response['items']))
+          throw new Error('Invalid GrimmLink metadata response');
         const mappings: { noteId: string; dedupeKey: string }[] = [];
         const next = new Map(merged.map((note) => [note.id, note]));
         for (const item of response['items']) {
@@ -75,7 +111,11 @@ export class GrimmLinkMetadataProvider {
           const remote = fromGrimmLinkMetadataNote(item, local, localId);
           if (remote) {
             if (!remote.cfi) {
-              await this.store.recordUnresolvedMetadata(bookHash, dedupeKey, item as Record<string, unknown>);
+              await this.store.recordUnresolvedMetadata(
+                bookHash,
+                dedupeKey,
+                item as Record<string, unknown>,
+              );
               onUnresolved?.(remote);
               continue;
             }
@@ -86,7 +126,10 @@ export class GrimmLinkMetadataProvider {
         const candidate = [...next.values()];
         await apply(candidate);
         merged = candidate;
-        const nextCursor = typeof response['nextCursor'] === 'string' && response['nextCursor'] ? response['nextCursor'] : null;
+        const nextCursor =
+          typeof response['nextCursor'] === 'string' && response['nextCursor']
+            ? response['nextCursor']
+            : null;
         await this.store.applyMetadataPage(bookHash, type, mappings, nextCursor);
         if (!nextCursor || nextCursor === cursor) break;
         cursor = nextCursor;

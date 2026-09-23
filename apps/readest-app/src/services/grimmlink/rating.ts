@@ -13,17 +13,31 @@ export class GrimmLinkRatingProvider {
     private readonly config: { capabilities: string[]; device: string; deviceId: string },
   ) {}
 
-  async queuePush(bookHash: string, bookId: number, rating: GrimmLinkRating, bookFileId?: number, fileFormat?: string): Promise<boolean> {
+  async queuePush(
+    bookHash: string,
+    bookId: number,
+    rating: GrimmLinkRating,
+    bookFileId?: number,
+    fileFormat?: string,
+  ): Promise<boolean> {
     if (!hasGrimmLinkCapability(this.config.capabilities, 'metadata')) return false;
     if (!Number.isFinite(rating.value) || rating.value < 1 || rating.value > rating.scale) {
       throw new Error('Invalid GrimmLink rating');
     }
     await this.store.applyRatingPage(bookHash, rating, null);
     await this.store.enqueueRating(bookHash, {
-      schemaVersion: 1, syncMode: 'incremental', bookId, bookHash, bookFileId, fileFormat,
-      device: this.config.device, deviceId: this.config.deviceId,
+      schemaVersion: 1,
+      syncMode: 'incremental',
+      bookId,
+      bookHash,
+      bookFileId,
+      fileFormat,
+      device: this.config.device,
+      deviceId: this.config.deviceId,
       timestamp: new Date(rating.updatedAt).toISOString(),
-      rating: toGrimmLinkRating(rating, this.store.connectionId, bookHash), annotations: [], bookmarks: [],
+      rating: toGrimmLinkRating(rating, this.store.connectionId, bookHash),
+      annotations: [],
+      bookmarks: [],
     });
     return true;
   }
@@ -42,7 +56,8 @@ export class GrimmLinkRatingProvider {
       for (const candidate of ratings) {
         if (!winner || candidate.updatedAt > winner.updatedAt) winner = candidate;
       }
-      const nextCursor = typeof data['nextCursor'] === 'string' && data['nextCursor'] ? data['nextCursor'] : null;
+      const nextCursor =
+        typeof data['nextCursor'] === 'string' && data['nextCursor'] ? data['nextCursor'] : null;
       await this.store.applyRatingPage(bookHash, winner, nextCursor);
       if (!nextCursor || nextCursor === cursor) break;
       cursor = nextCursor;

@@ -26,11 +26,7 @@ describe('GrimmLink settings', () => {
     ]) {
       expect(SETTINGS_WHITELIST).toContain(field);
     }
-    for (const field of [
-      'grimmlink.username',
-      'grimmlink.userkey',
-      'grimmlink.customHeaders',
-    ]) {
+    for (const field of ['grimmlink.username', 'grimmlink.userkey', 'grimmlink.customHeaders']) {
       expect(SETTINGS_ENCRYPTED_FIELDS).toContain(field);
     }
     for (const field of ['grimmlink.enabled', 'grimmlink.deviceId', 'grimmlink.deviceName']) {

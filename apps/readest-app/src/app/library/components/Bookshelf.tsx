@@ -645,22 +645,32 @@ const Bookshelf: React.FC<BookshelfProps> = ({
     eventDispatcher.dispatch('localsend-send-books', { books });
   };
 
-  const queueGrimmLinkReadStatuses = useCallback(async (books: Book[], status: ReadingStatus | undefined) => {
-    const config = settings.grimmlink;
-    if (!appService || !config.enabled || !config.syncReadStatus || !config.serverUrl || !config.userkey) return;
-    const connectionId = `${config.serverUrl}\u0000${config.username}`;
-    const store = new GrimmLinkSyncStore(appService, connectionId);
-    const client = new GrimmLinkClient(config);
-    for (const book of books) {
-      try {
-        await queueExplicitGrimmLinkReadStatus(book, status, config, store, client);
-      } catch (error) {
-        // The local library update already succeeded. A later explicit change
-        // retries normally; do not let an unavailable server interrupt it.
-        console.warn('[GrimmLink] failed to queue reading status', error);
+  const queueGrimmLinkReadStatuses = useCallback(
+    async (books: Book[], status: ReadingStatus | undefined) => {
+      const config = settings.grimmlink;
+      if (
+        !appService ||
+        !config.enabled ||
+        !config.syncReadStatus ||
+        !config.serverUrl ||
+        !config.userkey
+      )
+        return;
+      const connectionId = `${config.serverUrl}\u0000${config.username}`;
+      const store = new GrimmLinkSyncStore(appService, connectionId);
+      const client = new GrimmLinkClient(config);
+      for (const book of books) {
+        try {
+          await queueExplicitGrimmLinkReadStatus(book, status, config, store, client);
+        } catch (error) {
+          // The local library update already succeeded. A later explicit change
+          // retries normally; do not let an unavailable server interrupt it.
+          console.warn('[GrimmLink] failed to queue reading status', error);
+        }
       }
-    }
-  }, [appService, settings.grimmlink]);
+    },
+    [appService, settings.grimmlink],
+  );
 
   const updateBooksStatus = async (status: ReadingStatus | undefined) => {
     const selectedIds = getSelectedBooks();

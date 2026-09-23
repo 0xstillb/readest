@@ -952,8 +952,7 @@ export const SHARE_TOKEN_LENGTH = 22;
 export const SHARE_PRESIGN_TTL_SECONDS = 300;
 export const SHARE_CFI_MAX_LENGTH = 512;
 
-const LATEST_DOWNLOAD_BASE_URL =
-  'https://github.com/0xstillb/readest/releases/latest/download';
+const LATEST_DOWNLOAD_BASE_URL = 'https://github.com/0xstillb/readest/releases/latest/download';
 
 export const READEST_UPDATER_FILE = `${LATEST_DOWNLOAD_BASE_URL}/latest.json`;
 

@@ -1,6 +1,9 @@
 import type { ReadingStatus } from '@/types/book';
 
-export const mapReadStatus = (status: ReadingStatus | undefined, available: string[]): string | null => {
+export const mapReadStatus = (
+  status: ReadingStatus | undefined,
+  available: string[],
+): string | null => {
   if (!status) return null;
   // Grimmory calls a completed book READ, while Readest calls it finished.
   // Match the server's advertised enum value rather than sending Readest's
@@ -21,7 +24,13 @@ export const fromGrimmoryReadStatus = (status: string | undefined): ReadingStatu
   if (normalized === 'UNREAD') return 'unread';
   if (normalized === 'READING' || normalized === 'RE_READING') return 'reading';
   if (normalized === 'READ' || normalized === 'FINISHED') return 'finished';
-  if (normalized === 'ABANDONED' || normalized === 'WONT_READ' || normalized === 'PAUSED' || normalized === 'ON_HOLD') return 'abandoned';
+  if (
+    normalized === 'ABANDONED' ||
+    normalized === 'WONT_READ' ||
+    normalized === 'PAUSED' ||
+    normalized === 'ON_HOLD'
+  )
+    return 'abandoned';
   return null;
 };
 

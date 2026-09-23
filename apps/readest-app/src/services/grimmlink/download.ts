@@ -12,7 +12,9 @@ const beginsWith = (data: Uint8Array, signature: number[]): boolean =>
 export const repairMalformedEpubOpfNamespace = async (data: ArrayBuffer): Promise<ArrayBuffer> => {
   const { configureZip } = await import('@/utils/zip');
   await configureZip();
-  const { BlobReader, BlobWriter, TextReader, TextWriter, ZipReader, ZipWriter } = await import('@zip.js/zip.js');
+  const { BlobReader, BlobWriter, TextReader, TextWriter, ZipReader, ZipWriter } = await import(
+    '@zip.js/zip.js'
+  );
   const reader = new ZipReader(new BlobReader(new Blob([data])));
   try {
     const entries = await reader.getEntries();
@@ -24,8 +26,12 @@ export const repairMalformedEpubOpfNamespace = async (data: ArrayBuffer): Promis
     const opfEntry = rootfile ? byName.get(rootfile.toLowerCase()) : undefined;
     if (!opfEntry || opfEntry.directory || !opfEntry.getData) return data;
     const opf = await opfEntry.getData(new TextWriter());
-    if (!/\bopf:/.test(opf) || /\bxmlns:opf\s*=/.test(opf.match(/<package\b[^>]*>/i)?.[0] ?? '')) return data;
-    const repairedOpf = opf.replace(/<package\b/i, '<package xmlns:opf="http://www.idpf.org/2007/opf"');
+    if (!/\bopf:/.test(opf) || /\bxmlns:opf\s*=/.test(opf.match(/<package\b[^>]*>/i)?.[0] ?? ''))
+      return data;
+    const repairedOpf = opf.replace(
+      /<package\b/i,
+      '<package xmlns:opf="http://www.idpf.org/2007/opf"',
+    );
     if (repairedOpf === opf) return data;
 
     const writer = new ZipWriter(new BlobWriter('application/epub+zip'));
@@ -39,7 +45,11 @@ export const repairMalformedEpubOpfNamespace = async (data: ArrayBuffer): Promis
         continue;
       }
       const blob = await entry.getData!(new BlobWriter());
-      await writer.add(entry.filename, new BlobReader(blob), entry.filename === 'mimetype' ? { level: 0 } : undefined);
+      await writer.add(
+        entry.filename,
+        new BlobReader(blob),
+        entry.filename === 'mimetype' ? { level: 0 } : undefined,
+      );
     }
     return await (await writer.close()).arrayBuffer();
   } finally {
@@ -48,13 +58,19 @@ export const repairMalformedEpubOpfNamespace = async (data: ArrayBuffer): Promis
 };
 
 /** Rejects obvious corruption before an import can create a library record. */
-export const validateShelfDownload = (filename: string, data: ArrayBuffer, expectedSize?: number): void => {
+export const validateShelfDownload = (
+  filename: string,
+  data: ArrayBuffer,
+  expectedSize?: number,
+): void => {
   const file = filename.toLowerCase();
   const value = bytes(data);
   if (value.byteLength === 0) throw new Error('Empty download');
-  if (expectedSize !== undefined && expectedSize >= 0 && value.byteLength !== expectedSize) throw new Error('Unexpected download size');
+  if (expectedSize !== undefined && expectedSize >= 0 && value.byteLength !== expectedSize)
+    throw new Error('Unexpected download size');
   if (file.endsWith('.epub') && !beginsWith(value, [0x50, 0x4b])) throw new Error('Invalid EPUB');
-  if (file.endsWith('.pdf') && !beginsWith(value, [0x25, 0x50, 0x44, 0x46])) throw new Error('Invalid PDF');
+  if (file.endsWith('.pdf') && !beginsWith(value, [0x25, 0x50, 0x44, 0x46]))
+    throw new Error('Invalid PDF');
   if (file.endsWith('.cbz') && !beginsWith(value, [0x50, 0x4b])) throw new Error('Invalid CBZ');
 };
 

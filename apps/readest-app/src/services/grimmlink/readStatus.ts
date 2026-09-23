@@ -13,7 +13,11 @@ type StatusClient = { getReadStatuses(): Promise<{ statuses: string[] }> };
 export class GrimmLinkReadStatusProvider {
   private statuses: string[] | null = null;
 
-  constructor(private readonly client: StatusClient, private readonly store: GrimmLinkSyncStore, private readonly capabilities: string[]) {}
+  constructor(
+    private readonly client: StatusClient,
+    private readonly store: GrimmLinkSyncStore,
+    private readonly capabilities: string[],
+  ) {}
 
   private async available(): Promise<string[]> {
     if (!hasGrimmLinkCapability(this.capabilities, 'read-status')) return [];
@@ -28,12 +32,18 @@ export class GrimmLinkReadStatusProvider {
     return true;
   }
 
-  async mergeRemote<T extends { readingStatus?: ReadingStatus; readingStatusUpdatedAt?: number }>(local: T, remote: { status?: string; updatedAt?: string }): Promise<T> {
+  async mergeRemote<T extends { readingStatus?: ReadingStatus; readingStatusUpdatedAt?: number }>(
+    local: T,
+    remote: { status?: string; updatedAt?: string },
+  ): Promise<T> {
     return { ...local, ...mergeRemoteReadStatus(local, remote, await this.available()) };
   }
 }
 
-type ReadStatusSyncClient = Pick<GrimmLinkClient, 'getCapabilities' | 'getReadStatuses' | 'matchBook' | 'updateReadStatus'>;
+type ReadStatusSyncClient = Pick<
+  GrimmLinkClient,
+  'getCapabilities' | 'getReadStatuses' | 'matchBook' | 'updateReadStatus'
+>;
 
 /**
  * Queues an explicit local status change for Grimmory. Shelf imports use their
@@ -48,14 +58,20 @@ export const queueExplicitGrimmLinkReadStatus = async (
   store: GrimmLinkSyncStore,
   client: ReadStatusSyncClient,
 ): Promise<boolean> => {
-  if (!config.enabled || !config.syncReadStatus || config.strategy === 'receive' || !status) return false;
+  if (!config.enabled || !config.syncReadStatus || config.strategy === 'receive' || !status)
+    return false;
 
   const shelfEntry = await store.getShelfEntryByLocalPath(getLocalBookFilename(book));
-  const link: Pick<GrimmLinkBookLink, 'bookId'> | null = shelfEntry ?? await client.matchBook(book.hash);
+  const link: Pick<GrimmLinkBookLink, 'bookId'> | null =
+    shelfEntry ?? (await client.matchBook(book.hash));
   if (!link) return false;
 
   const { capabilities } = await client.getCapabilities();
-  const provider = new GrimmLinkReadStatusProvider(client, store, Array.isArray(capabilities) ? capabilities : []);
+  const provider = new GrimmLinkReadStatusProvider(
+    client,
+    store,
+    Array.isArray(capabilities) ? capabilities : [],
+  );
   const queued = await provider.queueExplicit(book.hash, link.bookId, status);
   if (queued) {
     void new GrimmLinkOutbox(store, client).replay().catch((error) => {

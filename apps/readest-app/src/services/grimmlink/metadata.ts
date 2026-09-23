@@ -1,6 +1,10 @@
 import type { BookNote } from '@/types/book';
 
-export interface GrimmLinkRating { value: number; scale: 5 | 10; updatedAt: number; }
+export interface GrimmLinkRating {
+  value: number;
+  scale: 5 | 10;
+  updatedAt: number;
+}
 
 type GrimmLinkNoteType = Extract<BookNote['type'], 'annotation' | 'bookmark'>;
 
@@ -22,7 +26,11 @@ export interface GrimmLinkMetadataNote {
 const timestamp = (value: unknown): number | null =>
   typeof value === 'string' && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 
-export const stableMetadataDedupeKey = (connectionId: string, bookHash: string, note: BookNote): string =>
+export const stableMetadataDedupeKey = (
+  connectionId: string,
+  bookHash: string,
+  note: BookNote,
+): string =>
   `${connectionId}:${bookHash}:${note.id}:${note.type}:${note.updatedAt}:${note.deletedAt ?? ''}`;
 
 export const toGrimmLinkMetadataNote = (
@@ -34,7 +42,7 @@ export const toGrimmLinkMetadataNote = (
   type: note.type === 'bookmark' ? 'bookmark' : 'annotation',
   text: note.text,
   note: note.note,
-  title: note.type === 'bookmark' ? (note.note || note.text) : undefined,
+  title: note.type === 'bookmark' ? note.note || note.text : undefined,
   color: note.color,
   style: note.style,
   page: note.page,
@@ -42,8 +50,11 @@ export const toGrimmLinkMetadataNote = (
   updatedAt: new Date(note.updatedAt).toISOString(),
   deleted: !!note.deletedAt,
   location: {
-    cfi: note.cfi || undefined, pos0: note.xpointer0, pos1: note.xpointer1,
-    pageno: note.page, raw: !note.cfi ? note.xpointer0 : undefined,
+    cfi: note.cfi || undefined,
+    pos0: note.xpointer0,
+    pos1: note.xpointer1,
+    pageno: note.page,
+    raw: !note.cfi ? note.xpointer0 : undefined,
   },
 });
 
@@ -55,34 +66,56 @@ export const fromGrimmLinkMetadataNote = (
 ): BookNote | null => {
   if (!item || typeof item !== 'object') throw new Error('Invalid GrimmLink metadata note');
   const record = item as Record<string, unknown>;
-  const payload = record['payload'] && typeof record['payload'] === 'object'
-    ? record['payload'] as Record<string, unknown> : record;
+  const payload =
+    record['payload'] && typeof record['payload'] === 'object'
+      ? (record['payload'] as Record<string, unknown>)
+      : record;
   const type = payload['type'] ?? record['type'];
-  if (type !== 'annotation' && type !== 'bookmark') throw new Error('Invalid GrimmLink metadata note');
+  if (type !== 'annotation' && type !== 'bookmark')
+    throw new Error('Invalid GrimmLink metadata note');
   const updatedAt = timestamp(payload['updatedAt'] ?? record['updatedAt']);
   if (updatedAt === null) throw new Error('Invalid GrimmLink metadata note');
   if (local && local.updatedAt >= updatedAt) return local;
   if (payload['deleted'] === true || payload['deletedAt']) {
     return local ? { ...local, updatedAt, deletedAt: updatedAt } : null;
   }
-  const location = payload['location'] && typeof payload['location'] === 'object'
-    ? payload['location'] as Record<string, unknown> : {};
+  const location =
+    payload['location'] && typeof payload['location'] === 'object'
+      ? (payload['location'] as Record<string, unknown>)
+      : {};
   const cfi = typeof location['cfi'] === 'string' ? location['cfi'] : '';
-  const page = typeof location['pageno'] === 'number' ? location['pageno'] :
-    typeof payload['page'] === 'number' ? payload['page'] : undefined;
+  const page =
+    typeof location['pageno'] === 'number'
+      ? location['pageno']
+      : typeof payload['page'] === 'number'
+        ? payload['page']
+        : undefined;
   return {
-    id: localId, type, cfi,
+    id: localId,
+    type,
+    cfi,
     xpointer0: typeof location['pos0'] === 'string' ? location['pos0'] : undefined,
     xpointer1: typeof location['pos1'] === 'string' ? location['pos1'] : undefined,
     text: typeof payload['text'] === 'string' ? payload['text'] : undefined,
     note: typeof payload['note'] === 'string' ? payload['note'] : '',
-    style: payload['style'] === 'highlight' || payload['style'] === 'underline' || payload['style'] === 'squiggly' ? payload['style'] : undefined,
+    style:
+      payload['style'] === 'highlight' ||
+      payload['style'] === 'underline' ||
+      payload['style'] === 'squiggly'
+        ? payload['style']
+        : undefined,
     color: typeof payload['color'] === 'string' ? payload['color'] : undefined,
-    page, createdAt: timestamp(payload['createdAt']) ?? updatedAt, updatedAt,
+    page,
+    createdAt: timestamp(payload['createdAt']) ?? updatedAt,
+    updatedAt,
   };
 };
 
-export const toGrimmLinkRating = (rating: GrimmLinkRating, connectionId: string, bookHash: string) => ({
+export const toGrimmLinkRating = (
+  rating: GrimmLinkRating,
+  connectionId: string,
+  bookHash: string,
+) => ({
   dedupeKey: `${connectionId}:${bookHash}:rating:${rating.updatedAt}`,
   value: rating.scale === 5 ? rating.value * 2 : rating.value,
   scale: 10,
@@ -101,17 +134,24 @@ export const fromGrimmLinkRating = (
 export const parseGrimmLinkRating = (item: unknown): GrimmLinkRating => {
   if (!item || typeof item !== 'object') throw new Error('Invalid GrimmLink rating');
   const record = item as Record<string, unknown>;
-  if (record['type'] !== undefined && record['type'] !== 'rating') throw new Error('Invalid GrimmLink rating');
-  const payload = record['payload'] && typeof record['payload'] === 'object'
-    ? record['payload'] as Record<string, unknown>
-    : record;
+  if (record['type'] !== undefined && record['type'] !== 'rating')
+    throw new Error('Invalid GrimmLink rating');
+  const payload =
+    record['payload'] && typeof record['payload'] === 'object'
+      ? (record['payload'] as Record<string, unknown>)
+      : record;
   const value = payload['value'];
   const scale = payload['scale'];
   const updatedAt = payload['updatedAt'];
   if (
-    typeof value !== 'number' || !Number.isFinite(value) ||
-    (scale !== 5 && scale !== 10) || value < 1 || value > scale ||
-    typeof updatedAt !== 'string' || !Number.isFinite(Date.parse(updatedAt))
-  ) throw new Error('Invalid GrimmLink rating');
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    (scale !== 5 && scale !== 10) ||
+    value < 1 ||
+    value > scale ||
+    typeof updatedAt !== 'string' ||
+    !Number.isFinite(Date.parse(updatedAt))
+  )
+    throw new Error('Invalid GrimmLink rating');
   return { value: scale === 10 ? value / 2 : value, scale: 5, updatedAt: Date.parse(updatedAt) };
 };
