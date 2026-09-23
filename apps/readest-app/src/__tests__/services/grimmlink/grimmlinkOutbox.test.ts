@@ -96,6 +96,74 @@ describe('GrimmLink durable outbox', () => {
     expect((await store.all('progress'))[0]).toMatchObject({ attempts: 1 });
   });
 
+  it('replays every offline category after restart and retries only the failed category', async () => {
+    const firstProcess = new GrimmLinkSyncStore(service, 'connection-a');
+    await firstProcess.enqueueProgress('book-a', { percentage: 70, device_id: 'device-a' });
+    await firstProcess.enqueueSession({
+      bookId: 4,
+      bookHash: 'book-a',
+      bookType: 'EPUB',
+      device: 'Readest Test',
+      deviceId: 'device-a',
+      session: { durationSeconds: 60, startProgress: 0.4, endProgress: 0.7 },
+    });
+    await firstProcess.enqueueRating('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      rating: { value: 8, scale: 10 },
+      annotations: [],
+      bookmarks: [],
+    });
+    await firstProcess.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      rating: null,
+      annotations: [{ dedupeKey: 'highlight-a', text: 'quoted text' }],
+      bookmarks: [{ dedupeKey: 'bookmark-a', location: 'chapter 2' }],
+    });
+    await firstProcess.enqueueStatus('book-a', 4, 'reading');
+
+    let sessionRequestKey: string | undefined;
+    let sessionAttempts = 0;
+    const client = {
+      updateProgress: vi.fn().mockResolvedValue({ ok: true }),
+      postSessionBatch: vi.fn(async (_payload: Record<string, unknown>, key?: string) => {
+        sessionAttempts += 1;
+        sessionRequestKey ??= key;
+        if (sessionAttempts === 1) {
+          throw new GrimmLinkRequestError('server', 'temporarily unavailable', 503);
+        }
+        return { ok: true };
+      }),
+      syncMetadata: vi.fn().mockResolvedValue({ ok: true }),
+      updateReadStatus: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    // The first process was offline: its durable outbox is the source of truth
+    // after reopening, not the in-memory providers that queued each change.
+    const restartedProcess = new GrimmLinkSyncStore(service, 'connection-a');
+    await new GrimmLinkOutbox(restartedProcess, client).replay();
+
+    expect(client.updateProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ percentage: 70, device_id: 'device-a' }),
+    );
+    expect(client.syncMetadata).toHaveBeenCalledTimes(2);
+    expect(client.updateReadStatus).toHaveBeenCalledWith(4, 'reading');
+    expect(await restartedProcess.all('progress')).toEqual([]);
+    expect(await restartedProcess.all('metadata')).toEqual([]);
+    expect(await restartedProcess.all('status')).toEqual([]);
+    expect(await restartedProcess.all('sessions')).toHaveLength(1);
+    expect((await restartedProcess.all('sessions'))[0]).toMatchObject({ attempts: 1 });
+
+    await restartedProcess.retryPending();
+    const nextProcess = new GrimmLinkSyncStore(service, 'connection-a');
+    await new GrimmLinkOutbox(nextProcess, client).replay();
+
+    expect(client.postSessionBatch).toHaveBeenCalledTimes(2);
+    expect(client.postSessionBatch.mock.calls[1]?.[1]).toBe(sessionRequestKey);
+    expect(await nextProcess.readyAll()).toEqual([]);
+  });
+
   it('pauses only the affected connection after an authentication failure', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueProgress('book-a', { percentage: 10 });
@@ -321,6 +389,25 @@ describe('GrimmLink lifecycle sessions', () => {
     );
     const second = tracker.finish({ progress: 0.3 }, link, 10 * 60 * 60 * 1000 + 50 * 60 * 1000);
     expect(second?.session).toMatchObject({ durationSeconds: 600 });
+  });
+
+  it('does not restore an open in-memory session after a simulated process restart', () => {
+    const link = {
+      bookId: 1,
+      bookHash: 'book',
+      bookType: 'EPUB',
+      device: 'Readest',
+      deviceId: 'device',
+    };
+    const beforeBackground = new GrimmLinkSessionTracker();
+    beforeBackground.startSession({ progress: 0.4 }, 1_000);
+    const queued = beforeBackground.finish({ progress: 0.7 }, link, 61_000);
+    expect(queued?.session).toMatchObject({ durationSeconds: 60, progressDelta: 0.3 });
+
+    // A new process has no active session to accidentally extend across sleep.
+    const afterRestart = new GrimmLinkSessionTracker();
+    expect(afterRestart.isActive()).toBe(false);
+    expect(afterRestart.finish({ progress: 0.9 }, link, 3_661_000)).toBeNull();
   });
 });
 
