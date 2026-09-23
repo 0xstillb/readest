@@ -161,7 +161,6 @@ rustPlatform.buildRustPackage (finalAttrs: {
       --replace-fail \
         '"beforeBuildCommand": "pnpm build && pnpm upload-sourcemaps"' \
         '"beforeBuildCommand": "pnpm build"' \
-      --replace-fail '"createUpdaterArtifacts": true' '"createUpdaterArtifacts": false' \
       --replace-fail '"productName": "Readest"' '"productName": "readest"'
     jq 'del(.plugins."deep-link")' src-tauri/tauri.conf.json | sponge src-tauri/tauri.conf.json
     substituteInPlace src/services/constants.ts \
