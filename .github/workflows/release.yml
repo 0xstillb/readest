@@ -572,21 +572,20 @@ jobs:
           x64_portable_sig="${x64_portable}.sig"
           arm64_portable="Readest_${RELEASE_VERSION}_arm64-portable.exe"
           arm64_portable_sig="${arm64_portable}.sig"
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --paginate \
+            --jq '.[].name' > "$RUNNER_TEMP/release-assets.txt"
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern latest.json \
             --pattern "$apk_sig" \
             --pattern "$x64_portable_sig" \
             --pattern "$arm64_portable_sig" \
             --dir "$RUNNER_TEMP"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq ".assets[].name" | grep -Fxq "$apk_name"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq ".assets[].name" | grep -Fxq "$x64_portable"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq ".assets[].name" | grep -Fxq "$arm64_portable"
+          grep -Fxq "$apk_name" "$RUNNER_TEMP/release-assets.txt"
+          grep -Fxq "$x64_portable" "$RUNNER_TEMP/release-assets.txt"
+          grep -Fxq "$arm64_portable" "$RUNNER_TEMP/release-assets.txt"
           for signature in "$apk_sig" "$x64_portable_sig" "$arm64_portable_sig"; do
-            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-              --jq '.assets[].name' | grep -Fxq "$signature"
+            grep -Fxq "$signature" "$RUNNER_TEMP/release-assets.txt"
           done
           node - "$RUNNER_TEMP/latest.json" "$GITHUB_REPOSITORY" "$RELEASE_TAG" \
             "$apk_name" "$x64_portable" "$arm64_portable" <<'NODE'
@@ -626,8 +625,9 @@ jobs:
           RELEASE_VERSION: ${{ needs.get-release.outputs.release_version }}
         run: |
           set -euo pipefail
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq '.assets[].name' > "$RUNNER_TEMP/release-assets.txt"
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --paginate \
+            --jq '.[].name' > "$RUNNER_TEMP/release-assets.txt"
           for asset in \
             "Readest_${RELEASE_VERSION}_x64-setup.exe" \
             "Readest_${RELEASE_VERSION}_x64-setup.exe.sig" \

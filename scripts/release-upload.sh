@@ -17,7 +17,8 @@ for asset_path in "$@"; do
   fi
 done
 
-existing_assets=$(gh release view "$release_tag" --repo "$repository" --json assets --jq '.assets[].name')
+release_id=$(gh api "repos/$repository/releases/tags/$release_tag" --jq '.id')
+existing_assets=$(gh api "repos/$repository/releases/$release_id/assets" --paginate --jq '.[].name')
 for asset_path in "$@"; do
   asset_name=$(basename -- "$asset_path")
   if grep -Fxq -- "$asset_name" <<<"$existing_assets"; then
