@@ -538,7 +538,7 @@ describe('resolveNightlyUpdate', () => {
   });
 
   test('ignores an unsigned update entry', async () => {
-    const fetchFn = vi.fn(async (url: string) =>
+    const fetchFn = vi.fn(async () =>
       mkRes({
         version: '0.11.5',
         platforms: { [platformKey]: { url: 'https://x/app.tar.gz' } },

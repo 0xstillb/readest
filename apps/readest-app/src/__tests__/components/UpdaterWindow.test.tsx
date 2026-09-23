@@ -151,6 +151,7 @@ describe('UpdaterContent — auto-translated changelog', () => {
         latestVersion='0.11.20'
         nightlyUpdate={{
           endpoint: 'https://example.com/nightly.json',
+          signingChannel: 'nightly',
           version: '0.11.20',
           platformKey: 'windows-x86_64',
           url: 'https://example.com/readest.exe',

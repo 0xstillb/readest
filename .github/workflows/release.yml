@@ -132,7 +132,7 @@ jobs:
           cd ..
 
           echo "Uploading ${plugin_zip} to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} ${plugin_zip} --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" "$plugin_zip"
 
   build-calibre-plugin:
     needs: get-release
@@ -159,7 +159,7 @@ jobs:
           plugin_zip="apps/readest-calibre-plugin/dist/Readest-${version}.calibre-plugin.zip"
 
           echo "Uploading ${plugin_zip} to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} ${plugin_zip} --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" "$plugin_zip"
 
   build-browser-extension:
     needs: get-release
@@ -191,7 +191,7 @@ jobs:
           extension_zip="apps/readest-app/extensions/send-to-readest/send-to-readest-${extension_version}.zip"
 
           echo "Uploading ${extension_zip} to GitHub release"
-          gh release upload "${{ needs.get-release.outputs.release_tag }}" "${extension_zip}" --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" "${extension_zip}"
 
   build-tauri:
     needs: get-release
@@ -430,8 +430,8 @@ jobs:
           fi
 
           echo "Uploading $arm64_apk to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} \
-            "$arm64_apk" "$arm64_apk.sig" --clobber
+          bash ../../scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" \
+            "$arm64_apk" "$arm64_apk.sig"
 
       - name: attest Android apks
         if: matrix.config.release == 'android'
@@ -502,7 +502,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Uploading release notes to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} apps/readest-app/release-notes.json --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" apps/readest-app/release-notes.json
 
       - name: build and upload portable binaries (Windows only)
         if: matrix.config.os == 'windows-latest'
@@ -541,8 +541,8 @@ jobs:
           popd
 
           echo "Uploading $bin_file to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} \
-            "$bin_file" "$bin_file.sig" --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" \
+            "$bin_file" "$bin_file.sig"
 
       # The portable rebuild above is not produced by tauri-action, so it is not
       # covered by the "attest desktop bundles" step; attest it here. Exactly one
@@ -611,8 +611,7 @@ jobs:
           };
           fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
           NODE
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/latest.json" \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          bash scripts/release-upload.sh "$RELEASE_TAG" "$RUNNER_TEMP/latest.json"
 
   verify-release-assets:
     needs: [get-release, build-tauri, update-android-updater-manifest]
