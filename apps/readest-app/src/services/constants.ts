@@ -960,7 +960,8 @@ export const READEST_CHANGELOG_FILE = `${LATEST_DOWNLOAD_BASE_URL}/release-notes
 
 export const READEST_NIGHTLY_UPDATER_FILE = 'https://download.readest.com/nightly/latest.json';
 
-// Public (verification) key, identical to src-tauri/tauri.conf.json `updater.pubkey`.
+// Public key for the shared upstream nightly feed. The stable Tauri updater
+// uses the fork-specific key embedded in src-tauri/tauri.conf.json instead.
 // Used to verify nightly artifacts in the custom install flows (portable /
 // AppImage / Android). Safe to embed — it is a public key.
 export const READEST_UPDATER_PUBKEY =
