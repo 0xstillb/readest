@@ -12,6 +12,7 @@ export interface GrimmLinkOutboxRow {
   attempts: number;
   createdAt: number;
   nextRetryAt: number;
+  errorCategory: GrimmLinkDiagnosticsErrorCategory | null;
 }
 
 export type GrimmLinkDiagnosticsErrorCategory =
@@ -40,6 +41,15 @@ export interface GrimmLinkPersistedDiagnostics {
   } | null;
 }
 
+export interface GrimmLinkBookStatusSnapshot {
+  shelfCount: number;
+  managedDownload: boolean;
+  pending: boolean;
+  conflict: boolean;
+  error: boolean;
+  lastSuccessAt: number | null;
+}
+
 type Row = {
   id: string;
   category: GrimmLinkOutboxCategory;
@@ -49,6 +59,7 @@ type Row = {
   attempts: number;
   created_at: number;
   next_retry_at: number;
+  error_category: GrimmLinkDiagnosticsErrorCategory | null;
 };
 
 const DB_SCHEMA = 'grimmlink-sync';
@@ -58,9 +69,10 @@ const schema = [
     id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, category TEXT NOT NULL, book_hash TEXT,
     payload TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, attempts INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, next_retry_at INTEGER NOT NULL,
-    state TEXT NOT NULL DEFAULT 'ready'
+    state TEXT NOT NULL DEFAULT 'ready', error_category TEXT
   )`,
   'CREATE INDEX IF NOT EXISTS outbox_ready ON outbox(connection_id, category, state, next_retry_at)',
+  'CREATE INDEX IF NOT EXISTS outbox_book_state ON outbox(connection_id, book_hash, state)',
   `CREATE TABLE IF NOT EXISTS grimmlink_connections (
     connection_id TEXT PRIMARY KEY, paused_at INTEGER, pause_reason TEXT
   )`,
@@ -97,6 +109,8 @@ const schema = [
     book_hash TEXT NOT NULL, local_path TEXT, managed_by_grimmlink INTEGER NOT NULL DEFAULT 0, last_seen_at INTEGER NOT NULL,
     PRIMARY KEY (connection_id, shelf_type, shelf_id, book_id)
   )`,
+  'CREATE INDEX IF NOT EXISTS shelf_entries_book_hash ON shelf_entries(connection_id, book_hash)',
+  'CREATE INDEX IF NOT EXISTS shelf_entries_local_path ON shelf_entries(connection_id, local_path)',
 ];
 
 const outboxId = (connectionId: string, category: GrimmLinkOutboxCategory, bookHash?: string) =>
@@ -106,25 +120,63 @@ const outboxId = (connectionId: string, category: GrimmLinkOutboxCategory, bookH
 
 /** Provider-private SQLite state. It intentionally opens per operation so writes survive abrupt reader teardown. */
 export class GrimmLinkSyncStore {
+  private static readonly initialized = new WeakMap<object, Promise<void>>();
+
   constructor(
     private readonly appService: AppService,
     readonly connectionId = 'default',
   ) {}
 
-  private async withDb<T>(
-    fn: (db: Awaited<ReturnType<AppService['openDatabase']>>) => Promise<T>,
-  ): Promise<T> {
+  private async initializeSchema(): Promise<void> {
     await this.appService.createDir('', 'Data', true);
     const db = await this.appService.openDatabase(DB_SCHEMA, DB_PATH, 'Data');
     try {
       for (const statement of schema) await db.execute(statement);
-      // Additive migration for databases created before download policy was
-      // persisted. SQLite has no IF NOT EXISTS form for ADD COLUMN.
       await db
-        .execute(
-          "ALTER TABLE shelf_subscriptions ADD COLUMN download_policy TEXT NOT NULL DEFAULT 'always'",
-        )
-        .catch(() => {});
+        .execute("ALTER TABLE shelf_subscriptions ADD COLUMN download_policy TEXT NOT NULL DEFAULT 'always'")
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/duplicate column|already exists/i.test(message)) throw error;
+        });
+      await db
+        .execute('ALTER TABLE outbox ADD COLUMN error_category TEXT')
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/duplicate column|already exists/i.test(message)) throw error;
+        });
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS outbox_book_state ON outbox(connection_id, book_hash, state)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS shelf_entries_book_hash ON shelf_entries(connection_id, book_hash)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS shelf_entries_local_path ON shelf_entries(connection_id, local_path)',
+      );
+    } finally {
+      await db.close();
+    }
+  }
+
+  private ensureSchema(): Promise<void> {
+    const owner = this.appService as object;
+    const existing = GrimmLinkSyncStore.initialized.get(owner);
+    if (existing) return existing;
+    const initialization = this.initializeSchema().catch((error) => {
+      GrimmLinkSyncStore.initialized.delete(owner);
+      throw error;
+    });
+    GrimmLinkSyncStore.initialized.set(owner, initialization);
+    return initialization;
+  }
+
+  private async withDb<T>(
+    fn: (db: Awaited<ReturnType<AppService['openDatabase']>>) => Promise<T>,
+  ): Promise<T> {
+    await this.ensureSchema();
+    await this.appService.createDir('', 'Data', true);
+    const db = await this.appService.openDatabase(DB_SCHEMA, DB_PATH, 'Data');
+    try {
       return await fn(db);
     } finally {
       await db.close();
@@ -143,7 +195,7 @@ export class GrimmLinkSyncStore {
       db.execute(
         `INSERT INTO outbox (id, connection_id, category, book_hash, payload, idempotency_key, attempts, created_at, updated_at, next_retry_at, state)
        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'ready')
-       ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at, next_retry_at=excluded.next_retry_at, attempts=0, state='ready'`,
+       ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at, next_retry_at=excluded.next_retry_at, attempts=0, state='ready', error_category=NULL`,
         [
           id,
           this.connectionId,
@@ -261,6 +313,22 @@ export class GrimmLinkSyncStore {
     });
   }
 
+  async getManagedShelfReferenceCounts(localPaths: string[]): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (!localPaths.length) return result;
+    await this.withDb(async (db) => {
+      const placeholders = localPaths.map(() => '?').join(', ');
+      const rows = await db.select<{ local_path: string; count: number | string }>(
+        `SELECT local_path, COUNT(*) AS count FROM shelf_entries
+         WHERE connection_id = ? AND managed_by_grimmlink = 1 AND local_path IN (${placeholders})
+         GROUP BY local_path`,
+        [this.connectionId, ...localPaths],
+      );
+      for (const row of rows) result.set(row.local_path, Number(row.count) || 0);
+    });
+    return result;
+  }
+
   async getManagedShelfEntryReferences(localPath: string): Promise<number> {
     return this.withDb(async (db) => {
       const row = (
@@ -282,39 +350,80 @@ export class GrimmLinkSyncStore {
     localPath: string | null,
     managedByGrimmLink: boolean,
   ): Promise<void> {
-    await this.withDb((db) =>
-      db.execute(
+    await this.markShelfEntries([
+      { shelfType, shelfId, bookId, bookHash, localPath, managedByGrimmLink },
+    ]);
+  }
+
+  async markShelfEntries(
+    entries: {
+      shelfType: string;
+      shelfId: number;
+      bookId: number;
+      bookHash: string;
+      localPath: string | null;
+      managedByGrimmLink: boolean;
+    }[],
+  ): Promise<void> {
+    if (!entries.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (const entry of entries) {
+          await db.execute(
         `INSERT INTO shelf_entries (connection_id, shelf_type, shelf_id, book_id, book_hash, local_path, managed_by_grimmlink, last_seen_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(connection_id, shelf_type, shelf_id, book_id) DO UPDATE SET book_hash=excluded.book_hash, local_path=excluded.local_path, managed_by_grimmlink=excluded.managed_by_grimmlink, last_seen_at=excluded.last_seen_at`,
         [
           this.connectionId,
-          shelfType,
-          shelfId,
-          bookId,
-          bookHash,
-          localPath,
-          managedByGrimmLink ? 1 : 0,
+          entry.shelfType,
+          entry.shelfId,
+          entry.bookId,
+          entry.bookHash,
+          entry.localPath,
+          entry.managedByGrimmLink ? 1 : 0,
           Date.now(),
         ],
-      ),
-    );
+          );
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
   }
 
   async removeShelfEntry(shelfType: string, shelfId: number, bookId: number): Promise<void> {
-    await this.withDb((db) =>
-      db.execute(
-        'DELETE FROM shelf_entries WHERE connection_id = ? AND shelf_type = ? AND shelf_id = ? AND book_id = ?',
-        [this.connectionId, shelfType, shelfId, bookId],
-      ),
-    );
+    await this.removeShelfEntries([{ shelfType, shelfId, bookId }]);
+  }
+
+  async removeShelfEntries(
+    entries: { shelfType: string; shelfId: number; bookId: number }[],
+  ): Promise<void> {
+    if (!entries.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (const entry of entries) {
+          await db.execute(
+            'DELETE FROM shelf_entries WHERE connection_id = ? AND shelf_type = ? AND shelf_id = ? AND book_id = ?',
+            [this.connectionId, entry.shelfType, entry.shelfId, entry.bookId],
+          );
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
   }
 
   async ready(category: GrimmLinkOutboxCategory, now = Date.now()): Promise<GrimmLinkOutboxRow[]> {
     return this.withDb(async (db) =>
       (
         await db.select<Row>(
-          `SELECT id, category, book_hash, payload, idempotency_key, attempts, created_at, next_retry_at FROM outbox
+          `SELECT id, category, book_hash, payload, idempotency_key, attempts, created_at, next_retry_at, error_category FROM outbox
        WHERE connection_id = ? AND category = ? AND state = 'ready' AND next_retry_at <= ? ORDER BY created_at`,
           [this.connectionId, category, now],
         )
@@ -327,6 +436,29 @@ export class GrimmLinkSyncStore {
         attempts: row.attempts,
         createdAt: row.created_at,
         nextRetryAt: row.next_retry_at,
+        errorCategory: row.error_category,
+      })),
+    );
+  }
+
+  async readyAll(now = Date.now()): Promise<GrimmLinkOutboxRow[]> {
+    return this.withDb(async (db) =>
+      (
+        await db.select<Row>(
+          `SELECT id, category, book_hash, payload, idempotency_key, attempts, created_at, next_retry_at, error_category FROM outbox
+           WHERE connection_id = ? AND state = 'ready' AND next_retry_at <= ? ORDER BY created_at`,
+          [this.connectionId, now],
+        )
+      ).map((row) => ({
+        id: row.id,
+        category: row.category,
+        bookHash: row.book_hash,
+        payload: JSON.parse(row.payload) as Record<string, unknown>,
+        idempotencyKey: row.idempotency_key,
+        attempts: row.attempts,
+        createdAt: row.created_at,
+        nextRetryAt: row.next_retry_at,
+        errorCategory: row.error_category,
       })),
     );
   }
@@ -335,7 +467,7 @@ export class GrimmLinkSyncStore {
     return this.withDb(async (db) =>
       (
         await db.select<Row>(
-          `SELECT id, category, book_hash, payload, idempotency_key, attempts, created_at, next_retry_at FROM outbox WHERE connection_id = ? AND category = ? ORDER BY created_at`,
+          `SELECT id, category, book_hash, payload, idempotency_key, attempts, created_at, next_retry_at, error_category FROM outbox WHERE connection_id = ? AND category = ? ORDER BY created_at`,
           [this.connectionId, category],
         )
       ).map((row) => ({
@@ -347,6 +479,7 @@ export class GrimmLinkSyncStore {
         attempts: row.attempts,
         createdAt: row.created_at,
         nextRetryAt: row.next_retry_at,
+        errorCategory: row.error_category,
       })),
     );
   }
@@ -364,19 +497,52 @@ export class GrimmLinkSyncStore {
   async retry(id: string, attempts: number, nextRetryAt: number): Promise<void> {
     await this.withDb((db) =>
       db.execute(
-        'UPDATE outbox SET attempts = ?, next_retry_at = ? WHERE connection_id = ? AND id = ?',
+        'UPDATE outbox SET attempts = ?, next_retry_at = ?, error_category = NULL WHERE connection_id = ? AND id = ?',
         [attempts, nextRetryAt, this.connectionId, id],
       ),
     );
   }
 
-  async invalidate(id: string): Promise<void> {
+  async invalidate(
+    id: string,
+    category: GrimmLinkDiagnosticsErrorCategory = 'invalid-data',
+  ): Promise<void> {
     await this.withDb((db) =>
-      db.execute("UPDATE outbox SET state = 'invalid' WHERE connection_id = ? AND id = ?", [
+      db.execute("UPDATE outbox SET state = 'invalid', error_category = ? WHERE connection_id = ? AND id = ?", [
+        category,
         this.connectionId,
         id,
       ]),
     );
+  }
+
+  async invalidateMany(ids: string[], category: GrimmLinkDiagnosticsErrorCategory): Promise<void> {
+    if (!ids.length) return;
+    await this.withDb((db) =>
+      db.execute(
+        `UPDATE outbox SET state = 'invalid', error_category = ? WHERE connection_id = ? AND id IN (${ids.map(() => '?').join(', ')})`,
+        [category, this.connectionId, ...ids],
+      ),
+    );
+  }
+
+  async retryMany(rows: { id: string; attempts: number; nextRetryAt: number }[]): Promise<void> {
+    if (!rows.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (const row of rows) {
+          await db.execute(
+            'UPDATE outbox SET attempts = ?, next_retry_at = ?, error_category = NULL WHERE connection_id = ? AND id = ?',
+            [row.attempts, row.nextRetryAt, this.connectionId, row.id],
+          );
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
   }
 
   async pause(reason: string): Promise<void> {
@@ -549,6 +715,43 @@ export class GrimmLinkSyncStore {
                 retryable: row.last_error_retryable === 1,
               }
             : null,
+      };
+    });
+  }
+
+  async getBookStatusSnapshot(bookHash: string, localPath: string | null): Promise<GrimmLinkBookStatusSnapshot> {
+    return this.withDb(async (db) => {
+      const shelfRow = (
+        await db.select<{ shelf_count: number | string; managed_download: number | string }>(
+          `SELECT COUNT(*) AS shelf_count,
+             MAX(CASE WHEN managed_by_grimmlink = 1 AND local_path IS NOT NULL THEN 1 ELSE 0 END) AS managed_download
+           FROM shelf_entries WHERE connection_id = ? AND (book_hash = ? OR (? IS NOT NULL AND local_path = ?))`,
+          [this.connectionId, bookHash, localPath, localPath],
+        )
+      )[0];
+      const queueRow = (
+        await db.select<{ pending: number | string; conflict: number | string; error: number | string }>(
+          `SELECT
+             SUM(CASE WHEN state = 'ready' THEN 1 ELSE 0 END) AS pending,
+             SUM(CASE WHEN state = 'invalid' AND error_category = 'conflict' THEN 1 ELSE 0 END) AS conflict,
+             SUM(CASE WHEN state = 'invalid' AND (error_category = 'invalid-data' OR error_category IS NULL) THEN 1 ELSE 0 END) AS error
+           FROM outbox WHERE connection_id = ? AND book_hash = ?`,
+          [this.connectionId, bookHash],
+        )
+      )[0];
+      const diagnostic = (
+        await db.select<{ last_success_at: number | null }>(
+          'SELECT last_success_at FROM grimmlink_diagnostics WHERE connection_id = ?',
+          [this.connectionId],
+        )
+      )[0];
+      return {
+        shelfCount: Number(shelfRow?.shelf_count ?? 0),
+        managedDownload: Number(shelfRow?.managed_download ?? 0) === 1,
+        pending: Number(queueRow?.pending ?? 0) > 0,
+        conflict: Number(queueRow?.conflict ?? 0) > 0,
+        error: Number(queueRow?.error ?? 0) > 0,
+        lastSuccessAt: diagnostic?.last_success_at ?? null,
       };
     });
   }

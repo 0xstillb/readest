@@ -40,6 +40,95 @@ type ShelfSyncAppService = Pick<
   | 'deleteBook'
 >;
 
+export interface GrimmLinkLibraryPresenceIndex {
+  hashes: Set<string>;
+  paths: Set<string>;
+  booksByHash: Map<string, Book>;
+  booksByPath: Map<string, Book>;
+}
+
+export const buildGrimmLinkLibraryPresenceIndex = async (
+  library: Book[],
+  appService: Pick<AppService, 'exists'>,
+): Promise<GrimmLinkLibraryPresenceIndex> => {
+  const present = await Promise.all(
+    library
+      .filter((book) => !book.deletedAt)
+      .map(async (book) => ({
+        book,
+        path: getLocalBookFilename(book),
+        present: await appService.exists(getLocalBookFilename(book), 'Books'),
+      })),
+  );
+  const index: GrimmLinkLibraryPresenceIndex = {
+    hashes: new Set(),
+    paths: new Set(),
+    booksByHash: new Map(),
+    booksByPath: new Map(),
+  };
+  for (const item of present) {
+    if (!item.present) continue;
+    index.hashes.add(item.book.hash);
+    index.paths.add(item.path);
+    index.booksByHash.set(item.book.hash, item.book);
+    index.booksByPath.set(item.path, item.book);
+  }
+  return index;
+};
+
+type ShelfEntryWrite = {
+  shelfType: string;
+  shelfId: number;
+  bookId: number;
+  bookHash: string;
+  localPath: string | null;
+  managedByGrimmLink: boolean;
+};
+
+const markShelfEntries = async (store: GrimmLinkSyncStore, entries: ShelfEntryWrite[]) => {
+  const batchStore = store as GrimmLinkSyncStore & {
+    markShelfEntries?: (entries: ShelfEntryWrite[]) => Promise<void>;
+  };
+  if (batchStore.markShelfEntries) return batchStore.markShelfEntries(entries);
+  for (const entry of entries)
+    await store.markShelfEntry(
+      entry.shelfType,
+      entry.shelfId,
+      entry.bookId,
+      entry.bookHash,
+      entry.localPath,
+      entry.managedByGrimmLink,
+    );
+};
+
+const removeShelfEntries = async (
+  store: GrimmLinkSyncStore,
+  entries: { shelfType: string; shelfId: number; bookId: number }[],
+) => {
+  const batchStore = store as GrimmLinkSyncStore & {
+    removeShelfEntries?: (entries: { shelfType: string; shelfId: number; bookId: number }[]) => Promise<void>;
+  };
+  if (batchStore.removeShelfEntries) return batchStore.removeShelfEntries(entries);
+  for (const entry of entries)
+    await store.removeShelfEntry(entry.shelfType, entry.shelfId, entry.bookId);
+};
+
+const addToPresenceIndex = (index: GrimmLinkLibraryPresenceIndex, book: Book) => {
+  const path = getLocalBookFilename(book);
+  index.hashes.add(book.hash);
+  index.paths.add(path);
+  index.booksByHash.set(book.hash, book);
+  index.booksByPath.set(path, book);
+};
+
+const removeFromPresenceIndex = (index: GrimmLinkLibraryPresenceIndex, book: Book) => {
+  const path = getLocalBookFilename(book);
+  index.hashes.delete(book.hash);
+  index.paths.delete(path);
+  index.booksByHash.delete(book.hash);
+  index.booksByPath.delete(path);
+};
+
 const NATIVE_IMPORT_THRESHOLD_BYTES = 8 * 1024 * 1024;
 
 export interface GrimmLinkShelfSyncResult {
@@ -179,6 +268,7 @@ export class GrimmLinkShelfProvider {
     onRemoved?: (book: Book, library: Book[]) => Promise<void> | void,
     cleanupPolicy: GrimmLinkShelfCleanupPolicy = 'keep_local',
     downloadPolicy: GrimmLinkShelfDownloadPolicy = 'always',
+    presenceIndex?: GrimmLinkLibraryPresenceIndex,
   ): Promise<GrimmLinkShelfSyncResult> {
     const remote = await this.client.getShelfBooks(type, shelfId);
     const existing = await this.store.getShelfEntries(type, shelfId);
@@ -187,18 +277,20 @@ export class GrimmLinkShelfProvider {
     // can process it safely.  GrimmLink is download-only, though: its shelf
     // must treat that tombstone (and any stale shelf path) as absent so Sync
     // restores the book from Grimmory without ever requesting a remote delete.
-    const presentBooks = (
-      await Promise.all(
-        localLibrary
-          .filter((book) => !book.deletedAt)
-          .map(async (book) => ({
-            book,
-            present: await appService.exists(getLocalBookFilename(book), 'Books'),
-          })),
-      )
-    )
-      .filter(({ present }) => present)
-      .map(({ book }) => book);
+    const presentBooks = presenceIndex
+      ? [...presenceIndex.booksByHash.values()]
+      : (
+          await Promise.all(
+            localLibrary
+              .filter((book) => !book.deletedAt)
+              .map(async (book) => ({
+                book,
+                present: await appService.exists(getLocalBookFilename(book), 'Books'),
+              })),
+          )
+        )
+          .filter(({ present }) => present)
+          .map(({ book }) => book);
     const plan = planShelfSync(
       remote,
       existing,
@@ -211,20 +303,23 @@ export class GrimmLinkShelfProvider {
       new Set(presentBooks.map((book) => book.hash)),
       new Set(presentBooks.map(getLocalBookFilename)),
     );
-    for (const bookId of plan.reuse) {
-      const remoteBook = remote.find((book) => book.bookId === bookId)!;
-      const tracked = existing.find(
-        (entry) => entry.bookId === bookId && entry.bookHash === remoteBook.bookHash,
-      );
-      await this.store.markShelfEntry(
-        type,
-        shelfId,
-        bookId,
-        remoteBook.bookHash,
-        tracked?.localPath ?? null,
-        tracked?.managedByGrimmLink ?? false,
-      );
-    }
+    await markShelfEntries(
+      this.store,
+      plan.reuse.map((bookId) => {
+        const remoteBook = remote.find((book) => book.bookId === bookId)!;
+        const tracked = existing.find(
+          (entry) => entry.bookId === bookId && entry.bookHash === remoteBook.bookHash,
+        );
+        return {
+          shelfType: type,
+          shelfId,
+          bookId,
+          bookHash: remoteBook.bookHash,
+          localPath: tracked?.localPath ?? null,
+          managedByGrimmLink: tracked?.managedByGrimmLink ?? false,
+        };
+      }),
+    );
     const needsDownload = [
       ...reconciliation.added,
       ...reconciliation.changed.map((item) => item.next),
@@ -235,7 +330,7 @@ export class GrimmLinkShelfProvider {
       // Deliberately serial: one import at a time bounds memory and prevents
       // duplicate records on Android/WebView readers.
       for (const remoteBook of needsDownload) {
-        await this.downloadAndImport(
+          await this.downloadAndImport(
           type,
           shelfId,
           remoteBook,
@@ -243,23 +338,39 @@ export class GrimmLinkShelfProvider {
           onImported,
           appService,
           transfer,
+          presenceIndex,
         );
       }
     } else {
       // Persist a remote-only membership so a later policy change can retry
       // it, while keeping localPath null so cleanup can never delete a file.
-      for (const remoteBook of needsDownload) {
-        await this.store.markShelfEntry(
-          type,
+      await markShelfEntries(
+        this.store,
+        needsDownload.map((remoteBook) => ({
+          shelfType: type,
           shelfId,
-          remoteBook.bookId,
-          remoteBook.bookHash,
-          null,
-          false,
-        );
-      }
+          bookId: remoteBook.bookId,
+          bookHash: remoteBook.bookHash,
+          localPath: null,
+          managedByGrimmLink: false,
+        })),
+      );
     }
     let removed = 0;
+    const referenceCounts = new Map<string, number>();
+    if (cleanupPolicy === 'remove_managed_copy') {
+      const paths = plan.absent.flatMap((entry) => (entry.localPath ? [entry.localPath] : []));
+      const batchStore = this.store as GrimmLinkSyncStore & {
+        getManagedShelfReferenceCounts?: (localPaths: string[]) => Promise<Map<string, number>>;
+      };
+      if (batchStore.getManagedShelfReferenceCounts) {
+        for (const [path, count] of await batchStore.getManagedShelfReferenceCounts(paths))
+          referenceCounts.set(path, count);
+      } else {
+        for (const path of paths)
+          referenceCounts.set(path, (await this.store.getManagedShelfEntryReferences?.(path)) ?? 1);
+      }
+    }
     for (const entry of plan.absent) {
       // Only remove files that this integration imported. User-owned books and
       // books imported by another source are never touched by shelf cleanup.
@@ -269,25 +380,31 @@ export class GrimmLinkShelfProvider {
       const book = bookIndex >= 0 ? localLibrary[bookIndex] : undefined;
       if (cleanupPolicy === 'remove_managed_copy' && entry.managedByGrimmLink && entry.localPath) {
         if (book) {
-          const references =
-            (await this.store.getManagedShelfEntryReferences?.(entry.localPath)) ?? 1;
+          const references = referenceCounts.get(entry.localPath) ?? 1;
           if (references <= 1) {
             await appService.deleteBook(book, 'purge');
             localLibrary.splice(bookIndex, 1);
+            if (presenceIndex) removeFromPresenceIndex(presenceIndex, book);
             await onRemoved?.(book, [...localLibrary]);
             removed += 1;
+          } else {
+            referenceCounts.set(entry.localPath, references - 1);
           }
         } else if (await appService.exists(entry.localPath, 'Books')) {
-          const references =
-            (await this.store.getManagedShelfEntryReferences?.(entry.localPath)) ?? 1;
+          const references = referenceCounts.get(entry.localPath) ?? 1;
           if (references <= 1) {
             await appService.deleteFile(entry.localPath, 'Books');
             removed += 1;
+          } else {
+            referenceCounts.set(entry.localPath, references - 1);
           }
         }
       }
-      await this.store.removeShelfEntry(type, shelfId, entry.bookId);
     }
+    await removeShelfEntries(
+      this.store,
+      plan.absent.map((entry) => ({ shelfType: type, shelfId, bookId: entry.bookId })),
+    );
     return {
       reused: reconciliation.unchanged.length,
       downloaded: downloadsBlocked ? 0 : needsDownload.length,
@@ -303,6 +420,7 @@ export class GrimmLinkShelfProvider {
     onImported: (book: Book, library: Book[]) => Promise<void> | void,
     appService: ShelfSyncAppService,
     transfer?: ShelfSyncTransfer,
+    presenceIndex?: GrimmLinkLibraryPresenceIndex,
   ): Promise<void> {
     transfer?.onStage?.({ stage: 'downloading', book: remote });
 
@@ -342,6 +460,7 @@ export class GrimmLinkShelfProvider {
             getLocalBookFilename(imported),
             true,
           );
+          if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
           return;
         } finally {
           await appService.deleteFile(tempPath, 'Temp').catch(() => {});
@@ -382,6 +501,7 @@ export class GrimmLinkShelfProvider {
       if (existingIndex === -1) library.push(imported);
       else library[existingIndex] = imported;
       await onImported(imported, [...library]);
+      if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
       await this.store.markShelfEntry(
         type,
         shelfId,
@@ -448,6 +568,7 @@ async function syncSubscribedGrimmLinkShelvesInternal(
   let reused = 0;
   let downloaded = 0;
   let removed = 0;
+  const presenceIndex = await buildGrimmLinkLibraryPresenceIndex(getLibrary(), appService);
   for (const subscription of subscriptions) {
     if (subscription.shelfType !== 'regular' && subscription.shelfType !== 'magic') continue;
     const result = await new GrimmLinkShelfProvider(client, store).sync(
@@ -460,6 +581,7 @@ async function syncSubscribedGrimmLinkShelvesInternal(
       onRemoved,
       subscription.cleanupPolicy as GrimmLinkShelfCleanupPolicy,
       subscription.downloadPolicy as GrimmLinkShelfDownloadPolicy,
+      presenceIndex,
     );
     reused += result.reused;
     downloaded += result.downloaded;

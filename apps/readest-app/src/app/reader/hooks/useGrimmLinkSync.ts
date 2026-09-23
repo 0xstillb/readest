@@ -22,6 +22,7 @@ import {
 } from '@/services/grimmlink/progress';
 import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
 import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
+import { GrimmLinkReplayScheduler } from '@/services/grimmlink/replayScheduler';
 import { GrimmLinkSessionTracker } from '@/services/grimmlink/sessions';
 import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
 import { GrimmLinkMetadataProvider } from '@/services/grimmlink/metadataProvider';
@@ -130,8 +131,11 @@ export const useGrimmLinkSync = (bookKey: string) => {
       : null;
   }, [appService, grimmlink]);
 
-  const outbox = useMemo(
-    () => (client && store ? new GrimmLinkOutbox(store, client) : null),
+  const replayScheduler = useMemo(
+    () =>
+      client && store
+        ? new GrimmLinkReplayScheduler(new GrimmLinkOutbox(store, client))
+        : null,
     [client, store],
   );
 
@@ -222,7 +226,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     if (!provider || !pulled.current || grimmlink.strategy === 'receive') return;
     const book = getBookData(bookKey)?.book;
     const position = await makePosition();
-    if (book && position && store && outbox) {
+    if (book && position && store && replayScheduler) {
       try {
         const link = await provider.resolveLink(book);
         if (!link) return;
@@ -232,7 +236,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
           toGrimmLinkProgressPayload(book, link, position, grimmlink),
         );
         setSyncState('queued');
-        void outbox.replay();
+        void replayScheduler.requestReplay(12_000);
       } catch (error) {
         setSyncState(
           error instanceof GrimmLinkRequestError && error.category === 'network'
@@ -241,7 +245,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         );
       }
     }
-  }, [bookKey, getBookData, makePosition, outbox, provider, grimmlink.strategy, store]);
+  }, [bookKey, getBookData, makePosition, replayScheduler, provider, grimmlink.strategy, store]);
 
   const pushProgress = useMemo(
     () =>
@@ -401,7 +405,8 @@ export const useGrimmLinkSync = (bookKey: string) => {
   }, [bookKey, client, getBookData, grimmlink, store]);
 
   useEffect(() => {
-    if (!client || !store || !outbox || !grimmlink.syncMetadata || metadataPulled.current) return;
+    if (!client || !store || !replayScheduler || !grimmlink.syncMetadata || metadataPulled.current)
+      return;
     const data = getBookData(bookKey);
     const book = data?.book;
     if (!book) return;
@@ -435,20 +440,20 @@ export const useGrimmLinkSync = (bookKey: string) => {
               link.bookFileId,
               book.format,
             );
-            void outbox.replay();
+            void replayScheduler.requestReplay();
           }
         }
       })
       .catch(() => {
         metadataPulled.current = false;
       });
-  }, [bookKey, client, getBookData, outbox, provider, grimmlink, store, updateBooknotes]);
+  }, [bookKey, client, getBookData, replayScheduler, provider, grimmlink, store, updateBooknotes]);
 
   const startSession = useCallback(async () => {
     if (
       !provider ||
       !store ||
-      !outbox ||
+      !replayScheduler ||
       !grimmlink.syncSessions ||
       sessionTracker.current.isActive()
     )
@@ -466,7 +471,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       currentPage: value?.currentPage,
       totalPages: value?.totalPages,
     });
-  }, [makePosition, outbox, provider, grimmlink.syncSessions, store]);
+  }, [makePosition, replayScheduler, provider, grimmlink.syncSessions, store]);
 
   const closeSession = useCallback(async () => {
     if (sessionClosing.current) return sessionClosing.current;
@@ -474,7 +479,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       if (
         !provider ||
         !store ||
-        !outbox ||
+        !replayScheduler ||
         !grimmlink.syncSessions ||
         !sessionTracker.current.isActive()
       )
@@ -521,7 +526,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       if (session) {
         await store.enqueueSession(session);
         setSyncState('queued');
-        void outbox.replay();
+        void replayScheduler.flushNow();
       }
     })();
     sessionClosing.current = run;
@@ -530,7 +535,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     } finally {
       if (sessionClosing.current === run) sessionClosing.current = null;
     }
-  }, [bookKey, getBookData, makePosition, outbox, provider, grimmlink, store]);
+  }, [bookKey, getBookData, makePosition, replayScheduler, provider, grimmlink, store]);
 
   useEffect(() => {
     void startSession();
@@ -544,7 +549,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       pulled.current = false;
       metadataPulled.current = false;
       void startSession();
-      void outbox?.replay();
+      void replayScheduler?.requestReplay();
       void pullProgress();
     } else {
       pushProgress.flush();
@@ -553,15 +558,15 @@ export const useGrimmLinkSync = (bookKey: string) => {
   });
 
   useEffect(() => {
-    if (!outbox) return;
+    if (!replayScheduler) return;
     const onOnline = () => {
       setSyncState('retrying');
-      void outbox.replay();
+      void replayScheduler.requestReplay();
       void pullProgress();
     };
     window.addEventListener('online', onOnline);
     return () => window.removeEventListener('online', onOnline);
-  }, [outbox, pullProgress]);
+  }, [replayScheduler, pullProgress]);
 
   return {
     syncState,
@@ -570,13 +575,23 @@ export const useGrimmLinkSync = (bookKey: string) => {
       await queueProgress();
       pushProgress.cancel();
       setConflictDetails(null);
-      setSyncState('synced');
+      if (store) {
+        const summary = await store.getOutboxSummary();
+        setSyncState(summary.totalPending > 0 ? 'queued' : 'synced');
+      } else {
+        setSyncState('queued');
+      }
     },
     resolveWithRemote: async () => {
       if (conflictDetails) await applyRemote(conflictDetails.remote);
       suppressNextPush.current = true;
       setConflictDetails(null);
-      setSyncState('synced');
+      if (store) {
+        const summary = await store.getOutboxSummary();
+        setSyncState(summary.totalPending > 0 ? 'queued' : 'synced');
+      } else {
+        setSyncState('synced');
+      }
     },
     // Closing the dialog is a dismissal, not a choice. Keep the remote
     // position untouched so an explicit Pull can show the same conflict again.

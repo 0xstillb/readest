@@ -5,6 +5,7 @@ import { hasGrimmLinkCapability } from './capabilities';
 import { GrimmLinkClient } from './GrimmLinkClient';
 import { GrimmLinkSyncStore } from './GrimmLinkSyncStore';
 import { GrimmLinkOutbox } from './outbox';
+import { GrimmLinkReplayScheduler } from './replayScheduler';
 import { mapReadStatus, mergeRemoteReadStatus } from './status';
 import type { GrimmLinkBookLink } from './types';
 
@@ -45,6 +46,16 @@ type ReadStatusSyncClient = Pick<
   'getCapabilities' | 'getReadStatuses' | 'matchBook' | 'updateReadStatus'
 >;
 
+const replaySchedulers = new WeakMap<object, { client: object; scheduler: GrimmLinkReplayScheduler }>();
+
+const schedulerFor = (store: GrimmLinkSyncStore, client: ReadStatusSyncClient) => {
+  const current = replaySchedulers.get(store);
+  if (current?.client === client) return current.scheduler;
+  const scheduler = new GrimmLinkReplayScheduler(new GrimmLinkOutbox(store, client));
+  replaySchedulers.set(store, { client, scheduler });
+  return scheduler;
+};
+
 /**
  * Queues an explicit local status change for Grimmory. Shelf imports use their
  * persisted local-path mapping first because Readest's content hash can differ
@@ -74,7 +85,7 @@ export const queueExplicitGrimmLinkReadStatus = async (
   );
   const queued = await provider.queueExplicit(book.hash, link.bookId, status);
   if (queued) {
-    void new GrimmLinkOutbox(store, client).replay().catch((error) => {
+    void schedulerFor(store, client).requestReplay().catch((error) => {
       console.warn('[GrimmLink] failed to replay reading status queue', error);
     });
   }

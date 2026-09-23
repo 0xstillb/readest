@@ -21,24 +21,33 @@ export class GrimmLinkOutbox {
   async replay(): Promise<void> {
     if (await this.store.isPaused()) return;
     await this.store.recordAttempt();
+    const rows = await this.store.readyAll();
+    const byCategory = new Map<GrimmLinkOutboxRow['category'], GrimmLinkOutboxRow[]>();
+    for (const row of rows) {
+      const categoryRows = byCategory.get(row.category) ?? [];
+      categoryRows.push(row);
+      byCategory.set(row.category, categoryRows);
+    }
     let hadFailure = false;
     for (const category of ['progress', 'sessions', 'metadata', 'status'] as const) {
-      const rows = await this.store.ready(category);
+      const categoryRows = byCategory.get(category) ?? [];
+      const successfulIds: string[] = [];
       if (category === 'sessions') {
-        const categoryFailed = await this.replaySessions(rows);
+        const categoryFailed = await this.replaySessions(categoryRows, successfulIds);
         hadFailure = hadFailure || categoryFailed;
       } else {
-        for (const row of rows) {
-          const rowFailed = await this.replayRow(row);
+        for (const row of categoryRows) {
+          const rowFailed = await this.replayRow(row, successfulIds);
           hadFailure = hadFailure || rowFailed;
         }
       }
+      await this.store.remove(successfulIds);
       if (await this.store.isPaused()) break;
     }
     if (!hadFailure) await this.store.recordSuccess();
   }
 
-  private async replaySessions(rows: GrimmLinkOutboxRow[]): Promise<boolean> {
+  private async replaySessions(rows: GrimmLinkOutboxRow[], successfulIds: string[]): Promise<boolean> {
     let hadFailure = false;
     const byBook = new Map<string, GrimmLinkOutboxRow[]>();
     for (const row of rows) {
@@ -60,7 +69,7 @@ export class GrimmLinkOutbox {
         };
         try {
           await this.client.postSessionBatch(payload);
-          await this.store.remove(batch.map((row) => row.id));
+          successfulIds.push(...batch.map((row) => row.id));
         } catch (error) {
           hadFailure = true;
           await this.handleFailure(batch, error);
@@ -70,7 +79,7 @@ export class GrimmLinkOutbox {
     return hadFailure;
   }
 
-  private async replayRow(row: GrimmLinkOutboxRow): Promise<boolean> {
+  private async replayRow(row: GrimmLinkOutboxRow, successfulIds: string[]): Promise<boolean> {
     try {
       if (row.category === 'progress') {
         if (!this.client.updateProgress) return false;
@@ -87,7 +96,7 @@ export class GrimmLinkOutbox {
         if (!this.client.syncMetadata) return false;
         await this.client.syncMetadata(row.payload);
       }
-      await this.store.remove([row.id]);
+      successfulIds.push(row.id);
       return false;
     } catch (error) {
       await this.handleFailure([row], error);
@@ -116,10 +125,19 @@ export class GrimmLinkOutbox {
       action: rows[0]?.category ?? 'sync',
       retryable: requestError.category === 'network' || requestError.category === 'server',
     });
-    for (const row of rows) {
-      if (requestError.category === 'invalid-data' || requestError.category === 'conflict')
-        await this.store.invalidate(row.id);
-      else await this.store.retry(row.id, row.attempts + 1, retryAt(row.attempts + 1));
+    if (requestError.category === 'invalid-data' || requestError.category === 'conflict') {
+      await this.store.invalidateMany(
+        rows.map((row) => row.id),
+        requestError.category,
+      );
+    } else {
+      await this.store.retryMany(
+        rows.map((row) => ({
+          id: row.id,
+          attempts: row.attempts + 1,
+          nextRetryAt: retryAt(row.attempts + 1),
+        })),
+      );
     }
   }
 }

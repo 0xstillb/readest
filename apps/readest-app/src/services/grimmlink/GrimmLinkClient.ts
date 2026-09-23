@@ -25,6 +25,17 @@ export const GRIMMLINK_DOWNLOAD_TIMEOUT_MS = 120_000;
 export const GRIMMLINK_MAX_RETRIES = 3;
 export const GRIMMLINK_RETRY_BACKOFF_MS = [250, 500, 1_000] as const;
 
+export interface GrimmLinkHealthCheck {
+  authentication: 'ok' | 'failed';
+  capabilities: 'ok' | 'failed';
+  progress: 'available' | 'unsupported';
+  metadata: 'available' | 'unsupported';
+  sessions: 'available' | 'unsupported';
+  shelves: 'available' | 'unsupported' | 'failed';
+  download: 'available' | 'unsupported';
+  capabilityNames: string[];
+}
+
 const RETRYABLE_STATUSES = new Set([408, 425, 429]);
 
 const isRetryableStatus = (status: number): boolean =>
@@ -613,5 +624,30 @@ export class GrimmLinkClient {
         errorCategory: cause instanceof GrimmLinkRequestError ? cause.category : 'network',
       };
     }
+  }
+
+  /** Read-only probes used by diagnostics. It never writes or creates a session. */
+  async healthCheck(): Promise<GrimmLinkHealthCheck> {
+    await this.authenticate();
+    const { capabilities } = await this.getCapabilities();
+    const has = (name: string) => capabilities.some((item) => item.toLowerCase() === name);
+    let shelves: GrimmLinkHealthCheck['shelves'] = has('shelves') ? 'available' : 'unsupported';
+    if (shelves === 'available') {
+      try {
+        await this.getShelves('regular');
+      } catch {
+        shelves = 'failed';
+      }
+    }
+    return {
+      authentication: 'ok',
+      capabilities: 'ok',
+      progress: has('progress') ? 'available' : 'unsupported',
+      metadata: has('metadata') ? 'available' : 'unsupported',
+      sessions: has('sessions') ? 'available' : 'unsupported',
+      shelves,
+      download: has('shelves') ? 'available' : 'unsupported',
+      capabilityNames: capabilities,
+    };
   }
 }

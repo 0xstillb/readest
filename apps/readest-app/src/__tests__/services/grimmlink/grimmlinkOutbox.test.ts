@@ -6,6 +6,7 @@ import { NodeAppService } from '@/services/nodeAppService';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
 import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
+import { GrimmLinkReplayScheduler } from '@/services/grimmlink/replayScheduler';
 import {
   fromGrimmoryReadStatus,
   mapReadStatus,
@@ -147,6 +148,46 @@ describe('GrimmLink durable outbox', () => {
     });
     await store.clearInvalid();
     expect((await store.getOutboxSummary()).invalid).toBe(0);
+  });
+
+  it('isolates book-level invalid state from connection diagnostics', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueProgress('book-a', { percentage: 10 });
+    await store.enqueueProgress('book-b', { percentage: 20 });
+    const [bookA, bookB] = await store.all('progress');
+    await store.invalidate(bookA!.id, 'conflict');
+
+    await expect(store.getBookStatusSnapshot('book-a', null)).resolves.toMatchObject({
+      pending: false,
+      conflict: true,
+      error: false,
+    });
+    await expect(store.getBookStatusSnapshot('book-b', null)).resolves.toMatchObject({
+      pending: true,
+      conflict: false,
+      error: false,
+    });
+    expect(bookB?.bookHash).toBe('book-b');
+  });
+
+  it('coalesces concurrent replay requests and runs one trailing replay', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const replay = vi
+      .fn()
+      .mockImplementationOnce(() => gate)
+      .mockResolvedValue(undefined);
+    const scheduler = new GrimmLinkReplayScheduler({ replay } as unknown as GrimmLinkOutbox);
+
+    const first = scheduler.requestReplay();
+    const second = scheduler.requestReplay();
+    expect(second).toBe(first);
+    expect(replay).toHaveBeenCalledTimes(1);
+    release();
+    await first;
+    expect(replay).toHaveBeenCalledTimes(2);
   });
 });
 
