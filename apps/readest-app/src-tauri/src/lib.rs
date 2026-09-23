@@ -603,6 +603,7 @@ pub fn run() {
             #[cfg(desktop)]
             spawn_fresh_browser::spawn_fresh_browser,
             nightly_update::verify_update_signature,
+            nightly_update::install_portable_update,
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             nightly_update::install_nightly_update,
         ])
@@ -686,6 +687,22 @@ pub fn run() {
 
     builder
         .setup(|#[allow(unused_variables)] app| {
+            #[cfg(desktop)]
+            {
+                // Older versions recursively persisted this grant. Forbid it
+                // after persisted scopes are restored so generic filesystem
+                // APIs cannot keep writing arbitrary siblings beside the app.
+                if let Ok(executable) = std::env::current_exe() {
+                    if let Some(directory) = executable.parent() {
+                        if let Err(error) = app.fs_scope().forbid_directory(directory, true) {
+                            log::warn!(
+                                "Failed to forbid the executable directory in fs_scope: {error}"
+                            );
+                        }
+                    }
+                }
+            }
+
             // When running with the webdriver feature (E2E/integration tests),
             // grant all default permissions to remote URLs (http://127.0.0.1:*)
             // so that Vitest browser-mode tests can call plugin commands.
@@ -713,11 +730,6 @@ pub fn run() {
                         set_window_open_with_files(&app_handle, files.clone());
                     });
                 }
-            }
-
-            #[cfg(desktop)]
-            {
-                allow_dir_in_scopes(app.handle(), &PathBuf::from(get_executable_dir()));
             }
 
             #[cfg(target_os = "android")]

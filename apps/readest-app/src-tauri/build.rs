@@ -69,6 +69,7 @@ fn main() {
             "extract_web_browser_archive",
             "spawn_fresh_browser",
             "verify_update_signature",
+            "install_portable_update",
             "install_nightly_update",
             "localsend_start",
             "localsend_stop",

@@ -82,6 +82,7 @@ vi.mock('@tauri-apps/api/path', () => ({ desktopDir: vi.fn(), join: vi.fn() }));
 vi.mock('@/utils/transfer', () => ({ tauriDownload: vi.fn() }));
 vi.mock('@/utils/bridge', () => ({
   installPackage: vi.fn(),
+  installPortableUpdate: vi.fn(),
   verifyUpdateSignature: vi.fn(),
   installNightlyUpdate: mockInstallNightlyUpdate,
 }));

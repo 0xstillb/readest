@@ -50,6 +50,7 @@ export interface UpdateManifest {
 }
 export interface ResolvedNightlyUpdate {
   endpoint: string; // manifest URL (for the Tauri UpdaterBuilder path)
+  signingChannel: 'nightly' | 'stable';
   version: string;
   notes?: string;
   pubDate?: string;
@@ -121,6 +122,7 @@ export const resolveNightlyUpdate = async (
     if (!isUpdateNewer(manifest.version, currentVersion)) continue;
     candidates.push({
       endpoint,
+      signingChannel: endpoint === READEST_NIGHTLY_UPDATER_FILE ? 'nightly' : 'stable',
       version: manifest.version,
       notes: manifest.notes,
       pubDate: manifest.pub_date,
@@ -184,13 +186,13 @@ export const checkForAppUpdates = async (
         const response = await fetch(READEST_UPDATER_FILE, { connectTimeout: 5000 });
         const data = await response.json();
         const isNewer = semver.gt(data.version, getAppVersion());
-        if (
-          isNewer &&
-          ('android-arm64' in data.platforms || 'android-universal' in data.platforms)
-        ) {
+        const platformKey = osArch() === 'aarch64' ? 'android-arm64' : 'android-universal';
+        const entry = data.platforms?.[platformKey];
+        if (isNewer && entry?.url && entry?.signature) {
           setUpdaterWindowVisible(true, data.version!, getAppVersion());
+          return true;
         }
-        return isNewer;
+        return false;
       } catch (err) {
         console.warn('Failed to fetch Android update info', err);
         throw new Error('Failed to fetch Android update info');
