@@ -436,10 +436,9 @@ fn file_to_body(channel: Channel<ProgressPayload>, file: File, file_len: u64) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        has_disallowed_components, is_under_executable_directory, is_within_app_storage,
-        resolve_path,
-    };
+    #[cfg(unix)]
+    use super::resolve_path;
+    use super::{has_disallowed_components, is_under_executable_directory, is_within_app_storage};
     use std::path::{Path, PathBuf};
 
     #[test]
