@@ -1,5 +1,11 @@
 {
   "releases": {
+    "0.12.11": {
+      "date": "2026-09-24",
+      "notes": [
+        "GrimmLink: Includes the latest shelf synchronization and performance improvements, with hardened Linux packaging and release asset verification"
+      ]
+    },
     "0.12.10": {
       "date": "2026-09-22",
       "notes": [
