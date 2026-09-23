@@ -162,7 +162,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
         '"beforeBuildCommand": "pnpm build && pnpm upload-sourcemaps"' \
         '"beforeBuildCommand": "pnpm build"' \
       --replace-fail '"productName": "Readest"' '"productName": "readest"'
-    jq 'del(.plugins."deep-link")' src-tauri/tauri.conf.json | sponge src-tauri/tauri.conf.json
+    # Nix builds the native .deb, not Tauri updater bundles. Keep the updater
+    # public key embedded in the app, but skip generating signed updater
+    # artifacts here because CI intentionally has no updater private key.
+    jq '.bundle.createUpdaterArtifacts = false | del(.plugins."deep-link")' \
+      src-tauri/tauri.conf.json | sponge src-tauri/tauri.conf.json
     substituteInPlace src/services/constants.ts \
       --replace-fail "autoCheckUpdates: true" "autoCheckUpdates: false" \
       --replace-fail "telemetryEnabled: true" "telemetryEnabled: false"
