@@ -369,6 +369,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd apps/readest-app/
           rm -rf src-tauri/gen/android
@@ -376,11 +379,39 @@ jobs:
           pnpm tauri icon ../../data/icons/readest-book.png
           git checkout .
 
+          if [[ -z "$ANDROID_KEYSTORE_BASE64" || -z "$ANDROID_KEY_ALIAS" || -z "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "::error::Android release signing secrets are required"
+            exit 1
+          fi
+          keystore_path="$RUNNER_TEMP/readest-release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          cd src-tauri/gen/android
+          cat > keystore.properties <<EOF
+          keyAlias=$ANDROID_KEY_ALIAS
+          password=$ANDROID_KEY_PASSWORD
+          storeFile=$keystore_path
+          EOF
+          cd ../../..
+
           version=${{ needs.get-release.outputs.release_version }}
-          apk_path=src-tauri/gen/android/app/build/outputs/apk/universal/debug
-          arm64_apk=Readest_${version}_arm64-debug.apk
-          pnpm tauri android build --debug -t aarch64
-          cp ${apk_path}/app-universal-debug.apk $arm64_apk
+          arm64_apk=Readest_${version}_arm64.apk
+          pnpm tauri android build -t aarch64 --split-per-abi --apk
+          apk_path="$(find src-tauri/gen/android/app/build/outputs/apk \
+            -type f -path '*/arm64-v8a/release/*.apk' -print -quit)"
+          if [[ -z "$apk_path" ]]; then
+            echo "::error::Could not find the split arm64-v8a release APK"
+            exit 1
+          fi
+          test -s "$apk_path"
+          apk_bytes=$(stat -c '%s' "$apk_path")
+          if (( apk_bytes >= 2147483648 )); then
+            echo "::error::Android APK exceeds GitHub's 2 GiB asset limit ($apk_bytes bytes)"
+            exit 1
+          fi
+          cp "$apk_path" "$arm64_apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$apksigner"
+          "$apksigner" verify --verbose --print-certs "$arm64_apk"
 
           echo "Uploading $arm64_apk to GitHub release"
           gh release upload ${{ needs.get-release.outputs.release_tag }} $arm64_apk --clobber
@@ -389,14 +420,15 @@ jobs:
         if: matrix.config.release == 'android'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: |
-            apps/readest-app/Readest_${{ needs.get-release.outputs.release_version }}_arm64-debug.apk
+          subject-path: apps/readest-app/Readest_${{ needs.get-release.outputs.release_version }}_arm64.apk
 
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         id: tauri
         if: matrix.config.release != 'android'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_CEF_CARGO: '1'
           # quick-sharun would otherwise run the app under Xvfb to find dlopen'ed
           # libraries and hung CI (#4906). The CLI now runs it with bash and
@@ -411,7 +443,9 @@ jobs:
           # bundles CEF into the deb, rpm and (sharun) AppImage.
           tauriScript: pnpm tauri
           releaseId: ${{ needs.get-release.outputs.release_id }}
+          tagName: ${{ needs.get-release.outputs.release_tag }}
           releaseBody: ${{ needs.get-release.outputs.release_note }}
+          uploadUpdaterJson: true
           args: ${{ matrix.config.args || '' }}
 
       # quick-sharun skips what it cannot find without failing; catch that
@@ -494,3 +528,108 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: Readest_*-portable.exe
+
+  update-android-updater-manifest:
+    needs: [get-release, build-tauri]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: add the signed Android APK to latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.get-release.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.get-release.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          apk_name="Readest_${RELEASE_VERSION}_arm64.apk"
+          x64_portable="Readest_${RELEASE_VERSION}_x64-portable.exe"
+          arm64_portable="Readest_${RELEASE_VERSION}_arm64-portable.exe"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern latest.json --dir "$RUNNER_TEMP"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq ".assets[].name" | grep -Fxq "$apk_name"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq ".assets[].name" | grep -Fxq "$x64_portable"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq ".assets[].name" | grep -Fxq "$arm64_portable"
+          node - "$RUNNER_TEMP/latest.json" "$GITHUB_REPOSITORY" "$RELEASE_TAG" \
+            "$apk_name" "$x64_portable" "$arm64_portable" <<'NODE'
+          const fs = require('node:fs');
+          const [file, repository, tag, apk, x64Portable, arm64Portable] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+          manifest.platforms ??= {};
+          manifest.platforms['android-arm64'] = {
+            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(apk)}`,
+          };
+          manifest.platforms['windows-x86_64-portable'] = {
+            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(x64Portable)}`,
+          };
+          manifest.platforms['windows-aarch64-portable'] = {
+            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(arm64Portable)}`,
+          };
+          fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/latest.json" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  verify-release-assets:
+    needs: [get-release, build-tauri, update-android-updater-manifest]
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: verify Windows, Linux, Android and updater assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.get-release.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.get-release.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' > "$RUNNER_TEMP/release-assets.txt"
+          for asset in \
+            "Readest_${RELEASE_VERSION}_x64-setup.exe" \
+            "Readest_${RELEASE_VERSION}_arm64-setup.exe" \
+            "Readest_${RELEASE_VERSION}_amd64.AppImage" \
+            "Readest_${RELEASE_VERSION}_aarch64.AppImage" \
+            "Readest_${RELEASE_VERSION}_x64-portable.exe" \
+            "Readest_${RELEASE_VERSION}_arm64-portable.exe" \
+            "Readest_${RELEASE_VERSION}_arm64.apk" \
+            latest.json; do
+            grep -Fxq "$asset" "$RUNNER_TEMP/release-assets.txt" || {
+              echo "::error::Missing release asset: $asset"
+              exit 1
+            }
+          done
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern latest.json --dir "$RUNNER_TEMP"
+          node - "$RUNNER_TEMP/latest.json" <<'NODE'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const requiredSigned = [
+            'windows-x86_64', 'windows-aarch64',
+            'linux-x86_64-appimage', 'linux-aarch64-appimage',
+          ];
+          let failed = false;
+          for (const platform of requiredSigned) {
+            const entry = manifest.platforms?.[platform];
+            if (!entry?.url || !entry?.signature) {
+              console.error(`::error::latest.json lacks a signed ${platform} updater entry`);
+              failed = true;
+            }
+          }
+          for (const platform of ['windows-x86_64-portable', 'windows-aarch64-portable']) {
+            if (!manifest.platforms?.[platform]?.url) {
+              console.error(`::error::latest.json lacks the ${platform} download entry`);
+              failed = true;
+            }
+          }
+          const android = manifest.platforms?.['android-arm64'];
+          if (!android?.url || !android.url.endsWith('.apk')) {
+            console.error('::error::latest.json lacks the Android arm64 APK entry');
+            failed = true;
+          }
+          if (failed) process.exit(1);
+          NODE
+# Required updater and installer assets are now validated before the run passes.

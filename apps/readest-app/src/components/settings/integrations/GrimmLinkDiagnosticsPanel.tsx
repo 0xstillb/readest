@@ -8,8 +8,9 @@ import {
 } from 'react-icons/md';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
-import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
+import { GrimmLinkClient, type GrimmLinkHealthCheck } from '@/services/grimmlink/GrimmLinkClient';
 import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
+import { GrimmLinkReplayScheduler } from '@/services/grimmlink/replayScheduler';
 import {
   GrimmLinkSyncStore,
   type GrimmLinkPersistedDiagnostics,
@@ -20,7 +21,9 @@ import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestErro
 import { SectionTitle, Tips } from '../primitives';
 import {
   collectGrimmLinkRuntimeDiagnostics,
+  redactGrimmLinkDiagnosticSecrets,
   startGrimmLinkRuntimeDiagnostics,
+  type GrimmLinkRuntimeDiagnostics,
 } from '@/services/grimmlink/einkDiagnostics';
 
 const emptySummary: GrimmLinkOutboxSummary = {
@@ -58,16 +61,29 @@ const GrimmLinkDiagnosticsPanel = () => {
       config.enabled && config.serverUrl && config.userkey ? new GrimmLinkClient(config) : null,
     [config],
   );
+  const replayScheduler = useMemo(
+    () =>
+      client && store ? new GrimmLinkReplayScheduler(new GrimmLinkOutbox(store, client)) : null,
+    [client, store],
+  );
   const [summary, setSummary] = useState(emptySummary);
   const [diagnostics, setDiagnostics] = useState<GrimmLinkPersistedDiagnostics>({
     lastSuccessAt: null,
     lastAttemptAt: null,
+    lastReplayDurationMs: null,
+    lastReplayRows: 0,
+    lastReplaySucceeded: 0,
+    lastReplayFailed: 0,
     lastError: null,
   });
   const [connection, setConnection] = useState<
-    'idle' | 'checking' | 'connected' | 'offline' | 'error'
+    'idle' | 'checking' | 'connected' | 'offline' | 'auth-error' | 'server-error' | 'error'
   >('idle');
+  const [health, setHealth] = useState<GrimmLinkHealthCheck | null>(null);
   const [busy, setBusy] = useState(false);
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<GrimmLinkRuntimeDiagnostics>(() =>
+    collectGrimmLinkRuntimeDiagnostics(),
+  );
 
   const refresh = useCallback(async () => {
     if (!store) return;
@@ -77,20 +93,31 @@ const GrimmLinkDiagnosticsPanel = () => {
     ]);
     setSummary(nextSummary);
     setDiagnostics(nextDiagnostics);
+    setRuntimeDiagnostics(collectGrimmLinkRuntimeDiagnostics());
   }, [store]);
 
   const checkConnection = useCallback(async () => {
     if (!client) return;
     setConnection('checking');
+    setHealth(null);
     try {
-      const result = await client.connect();
-      if (result.success) setConnection('connected');
-      else setConnection(result.errorCategory === 'network' ? 'offline' : 'error');
+      setHealth(await client.healthCheck());
+      setConnection('connected');
     } catch (error) {
       const category = error instanceof GrimmLinkRequestError ? error.category : 'error';
-      setConnection(category === 'network' ? 'offline' : 'error');
+      setConnection(
+        category === 'network'
+          ? 'offline'
+          : category === 'auth'
+            ? 'auth-error'
+            : category === 'server'
+              ? 'server-error'
+              : 'error',
+      );
     }
   }, [client]);
+
+  useEffect(() => startGrimmLinkRuntimeDiagnostics(), []);
 
   useEffect(() => {
     void refresh();
@@ -100,8 +127,6 @@ const GrimmLinkDiagnosticsPanel = () => {
     }, 30_000);
     return () => window.clearInterval(timer);
   }, [checkConnection, refresh]);
-
-  useEffect(() => startGrimmLinkRuntimeDiagnostics(), []);
 
   if (!client || !store) return null;
 
@@ -125,9 +150,13 @@ const GrimmLinkDiagnosticsPanel = () => {
         ? 'Checking…'
         : connection === 'offline'
           ? 'Offline'
-          : connection === 'error'
-            ? 'Connection problem'
-            : 'Not checked',
+          : connection === 'auth-error'
+            ? 'Authentication required'
+            : connection === 'server-error'
+              ? 'Server problem'
+              : connection === 'error'
+                ? 'Connection problem'
+                : 'Not checked',
   );
   const syncStatusLabel = _(
     syncStatus === 'auth-error'
@@ -167,7 +196,7 @@ const GrimmLinkDiagnosticsPanel = () => {
     setBusy(true);
     try {
       await store.retryPending();
-      await new GrimmLinkOutbox(store, client).replay();
+      await replayScheduler?.flushNow();
       await refresh();
       await checkConnection();
     } finally {
@@ -182,13 +211,22 @@ const GrimmLinkDiagnosticsPanel = () => {
   };
 
   const exportDiagnostics = async () => {
+    const secrets = [config.username, config.userkey, ...Object.values(config.customHeaders ?? {})];
     const payload = {
       generatedAt: new Date().toISOString(),
       serverOrigin: safeOrigin(config.serverUrl),
       connection: { enabled: config.enabled, strategy: config.strategy },
       runtime: { status: connection, ...collectGrimmLinkRuntimeDiagnostics() },
       queue: summary,
-      diagnostics,
+      diagnostics: {
+        ...diagnostics,
+        lastError: diagnostics.lastError
+          ? {
+              ...diagnostics.lastError,
+              message: redactGrimmLinkDiagnosticSecrets(diagnostics.lastError.message, secrets),
+            }
+          : null,
+      },
     };
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
@@ -233,7 +271,9 @@ const GrimmLinkDiagnosticsPanel = () => {
           <MdCheckCircle aria-hidden='true' className='h-6 w-6 shrink-0' />
         ) : connection === 'offline' ? (
           <MdCloudOff aria-hidden='true' className='h-6 w-6 shrink-0' />
-        ) : connection === 'error' ? (
+        ) : connection === 'error' ||
+          connection === 'auth-error' ||
+          connection === 'server-error' ? (
           <MdSyncProblem aria-hidden='true' className='h-6 w-6 shrink-0' />
         ) : (
           <MdRefresh
@@ -258,12 +298,96 @@ const GrimmLinkDiagnosticsPanel = () => {
           />
           <DiagnosticRow label={_('Invalid items')} value={String(summary.invalid)} />
           <DiagnosticRow
+            label={_('Last replay')}
+            value={
+              diagnostics.lastReplayDurationMs == null
+                ? '—'
+                : `${diagnostics.lastReplayDurationMs} ms`
+            }
+            description={
+              diagnostics.lastReplayDurationMs == null
+                ? _('No replay recorded')
+                : _('{{succeeded}} succeeded, {{failed}} failed of {{rows}}', {
+                    succeeded: diagnostics.lastReplaySucceeded,
+                    failed: diagnostics.lastReplayFailed,
+                    rows: diagnostics.lastReplayRows,
+                  })
+            }
+          />
+          <DiagnosticRow
             label={_('Last successful sync')}
             value={formatTime(diagnostics.lastSuccessAt)}
           />
           <DiagnosticRow label={_('Last attempt')} value={formatTime(diagnostics.lastAttemptAt)} />
         </div>
       </div>
+      {health && (
+        <div className='card eink-bordered border-base-200 bg-base-100 border text-sm'>
+          <div className='border-base-200 border-b px-4 py-3 font-medium'>
+            {_('GrimmLink Health')}
+          </div>
+          <div className='divide-base-200 divide-y px-4'>
+            <DiagnosticRow
+              label={_('Authentication')}
+              value={health.authentication === 'ok' ? _('Available') : _('Failed')}
+            />
+            <DiagnosticRow
+              label={_('Capabilities')}
+              value={health.capabilities === 'ok' ? _('Loaded') : _('Failed')}
+            />
+            <DiagnosticRow
+              label={_('Progress API')}
+              value={health.progress === 'available' ? _('Available') : _('Unsupported')}
+            />
+            <DiagnosticRow
+              label={_('Metadata API')}
+              value={health.metadata === 'available' ? _('Available') : _('Unsupported')}
+            />
+            <DiagnosticRow
+              label={_('Sessions API')}
+              value={health.sessions === 'available' ? _('Available') : _('Unsupported')}
+            />
+            <DiagnosticRow
+              label={_('Shelves API')}
+              value={
+                health.shelves === 'available'
+                  ? _('Available')
+                  : health.shelves === 'failed'
+                    ? _('Failed')
+                    : _('Unsupported')
+              }
+            />
+            <DiagnosticRow
+              label={_('Download')}
+              value={health.download === 'available' ? _('Available') : _('Unsupported')}
+            />
+            <DiagnosticRow label={_('Outbox')} value={String(summary.totalPending)} />
+            <DiagnosticRow label={_('Last sync')} value={formatTime(diagnostics.lastSuccessAt)} />
+            <DiagnosticRow
+              label={_('Database activity')}
+              value={`${runtimeDiagnostics.performance.dbOpens} / ${runtimeDiagnostics.performance.dbQueries} / ${runtimeDiagnostics.performance.dbWrites}`}
+              description={_('Opens / queries / writes while diagnostics is open')}
+            />
+            <DiagnosticRow
+              label={_('Replay activity')}
+              value={`${runtimeDiagnostics.performance.replayRequested} / ${runtimeDiagnostics.performance.replayExecuted}`}
+              description={_('Requested / executed')}
+            />
+            <DiagnosticRow
+              label={_('Network requests')}
+              value={String(runtimeDiagnostics.performance.networkRequests)}
+            />
+            <DiagnosticRow
+              label={_('Shelf file checks')}
+              value={String(runtimeDiagnostics.performance.shelfFileChecks)}
+            />
+            <DiagnosticRow
+              label={_('Shelf sync duration')}
+              value={`${runtimeDiagnostics.performance.shelfSyncDurationMs} ms`}
+            />
+          </div>
+        </div>
+      )}
       {diagnostics.lastError && (
         <div
           role='alert'

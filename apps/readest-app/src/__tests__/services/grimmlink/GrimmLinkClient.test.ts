@@ -72,6 +72,34 @@ describe('GrimmLinkClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('runs a read-only health check without creating a session or writing data', async () => {
+    const fetchMock = setFetch(async (url: unknown) => {
+      const path = String(url);
+      if (path.endsWith('/auth')) return jsonResponse(200, { user: 'alice' });
+      if (path.endsWith('/capabilities'))
+        return jsonResponse(200, { capabilities: ['progress', 'metadata', 'sessions', 'shelves'] });
+      return jsonResponse(200, []);
+    });
+
+    await expect(new GrimmLinkClient(makeConfig()).healthCheck()).resolves.toEqual({
+      authentication: 'ok',
+      capabilities: 'ok',
+      progress: 'available',
+      metadata: 'available',
+      sessions: 'available',
+      shelves: 'available',
+      download: 'available',
+      capabilityNames: ['progress', 'metadata', 'sessions', 'shelves'],
+    });
+    expect(
+      fetchMock.mock.calls.map(([url, init]) => [String(url), (init as RequestInit).method]),
+    ).toEqual([
+      ['http://192.168.1.50:3000/api/grimmlink/v1/auth', 'GET'],
+      ['http://192.168.1.50:3000/api/grimmlink/v1/capabilities', 'GET'],
+      ['http://192.168.1.50:3000/api/grimmlink/v1/shelves?type=regular', 'GET'],
+    ]);
+  });
+
   it('does not weaken TLS by default, and only opts into invalid certificates for LAN', async () => {
     const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: [] }));
     await new GrimmLinkClient(makeConfig()).getCapabilities();
@@ -248,6 +276,19 @@ describe('GrimmLinkClient', () => {
         'GET',
       ],
     ]);
+  });
+
+  it('sends a stable idempotency key with replayable session batches', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { ok: true }));
+    await new GrimmLinkClient(makeConfig()).postSessionBatch(
+      { bookId: 4, sessions: [{ startTime: '2026-09-23T00:00:00.000Z' }] },
+      'readest-session-session-a-session-z',
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toMatchObject({
+      'Idempotency-Key': 'readest-session-session-a-session-z',
+    });
   });
 
   it('normalizes Grimmory shelf-book fields before downloading or importing', async () => {

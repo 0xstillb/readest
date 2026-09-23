@@ -51,6 +51,16 @@ export const BACKUP_SETTINGS_BLACKLIST = [
   'replicaDeviceId',
   'kosync.deviceId',
   'bookorbit.deviceId',
+  // GrimmLink connections must be explicitly enabled on a restored device;
+  // identity and LAN-only TLS exceptions are device-local security settings.
+  'grimmlink.enabled',
+  'grimmlink.deviceId',
+  'grimmlink.allowSelfSignedCertificate',
+  // GrimmLink credentials are restored only through encrypted settings sync;
+  // backup zips remain credential-free even when other credentials are opted in.
+  'grimmlink.username',
+  'grimmlink.userkey',
+  'grimmlink.customHeaders',
   // Sync cursors — stale values make sync skip pulls or re-push everything.
   'lastSyncedAtBooks',
   'lastSyncedAtConfigs',

@@ -4,6 +4,7 @@ import { normalizeCustomHeaders } from '@/utils/customHeaders';
 import { isLanAddress } from '@/utils/network';
 import { getAPIBaseUrl, isTauriAppPlatform } from '../environment';
 import { GrimmLinkRequestError, type GrimmLinkErrorCategory } from './GrimmLinkRequestError';
+import { recordGrimmLinkPerformance } from './einkDiagnostics';
 import type { ProgressHandler } from '@/utils/transfer';
 import { tauriDownload } from '@/utils/transfer';
 import type {
@@ -24,6 +25,17 @@ export const GRIMMLINK_REQUEST_TIMEOUT_MS = 15_000;
 export const GRIMMLINK_DOWNLOAD_TIMEOUT_MS = 120_000;
 export const GRIMMLINK_MAX_RETRIES = 3;
 export const GRIMMLINK_RETRY_BACKOFF_MS = [250, 500, 1_000] as const;
+
+export interface GrimmLinkHealthCheck {
+  authentication: 'ok' | 'failed';
+  capabilities: 'ok' | 'failed';
+  progress: 'available' | 'unsupported';
+  metadata: 'available' | 'unsupported';
+  sessions: 'available' | 'unsupported';
+  shelves: 'available' | 'unsupported' | 'failed';
+  download: 'available' | 'unsupported';
+  capabilityNames: string[];
+}
 
 const RETRYABLE_STATUSES = new Set([408, 425, 429]);
 
@@ -168,8 +180,11 @@ export class GrimmLinkClient {
     method: string,
     body?: string,
     signal?: AbortSignal,
+    additionalHeaders?: Record<string, string>,
   ): Promise<Response> {
+    recordGrimmLinkPerformance('networkRequests');
     const headers = this.headers();
+    Object.assign(headers, additionalHeaders);
     if (body) headers['Content-Type'] = 'application/json';
     if (isLanAddress(serverUrl) || isTauriAppPlatform()) {
       const request = isTauriAppPlatform() ? tauriFetch : window.fetch;
@@ -206,6 +221,7 @@ export class GrimmLinkClient {
     body: string | undefined,
     signal: AbortSignal | undefined,
     timeoutMs: number,
+    additionalHeaders?: Record<string, string>,
   ): Promise<Response> {
     const controller = new AbortController();
     const abortFromCaller = () => controller.abort();
@@ -213,7 +229,14 @@ export class GrimmLinkClient {
     else signal?.addEventListener('abort', abortFromCaller, { once: true });
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await this.send(serverUrl, endpoint, method, body, controller.signal);
+      return await this.send(
+        serverUrl,
+        endpoint,
+        method,
+        body,
+        controller.signal,
+        additionalHeaders,
+      );
     } catch (cause) {
       if (cause instanceof GrimmLinkRequestError) throw cause;
       if (signal?.aborted) throw new GrimmLinkRequestError('transport', 'Request was cancelled.');
@@ -234,6 +257,7 @@ export class GrimmLinkClient {
     body: string | undefined,
     signal: AbortSignal | undefined,
     timeoutMs: number,
+    additionalHeaders?: Record<string, string>,
   ): Promise<Response> {
     let lastError: GrimmLinkRequestError | undefined;
     for (let attempt = 0; attempt <= GRIMMLINK_MAX_RETRIES; attempt += 1) {
@@ -245,6 +269,7 @@ export class GrimmLinkClient {
           body,
           signal,
           timeoutMs,
+          additionalHeaders,
         );
         if (attempt < GRIMMLINK_MAX_RETRIES && isRetryableStatus(response.status)) {
           const delay =
@@ -296,9 +321,18 @@ export class GrimmLinkClient {
     body: string | undefined,
     signal?: AbortSignal,
     timeoutMs = GRIMMLINK_REQUEST_TIMEOUT_MS,
+    additionalHeaders?: Record<string, string>,
   ): Promise<Response> {
     try {
-      return await this.requestWithRetry(this.serverUrl, endpoint, method, body, signal, timeoutMs);
+      return await this.requestWithRetry(
+        this.serverUrl,
+        endpoint,
+        method,
+        body,
+        signal,
+        timeoutMs,
+        additionalHeaders,
+      );
     } catch (error) {
       if (
         !(error instanceof GrimmLinkRequestError) ||
@@ -313,6 +347,7 @@ export class GrimmLinkClient {
         body,
         signal,
         timeoutMs,
+        additionalHeaders,
       );
     }
   }
@@ -322,9 +357,17 @@ export class GrimmLinkClient {
     method = 'GET',
     body?: object,
     signal?: AbortSignal,
+    additionalHeaders?: Record<string, string>,
   ): Promise<T> {
     const serializedBody = body ? JSON.stringify(body) : undefined;
-    const response = await this.requestWithFallback(endpoint, method, serializedBody, signal);
+    const response = await this.requestWithFallback(
+      endpoint,
+      method,
+      serializedBody,
+      signal,
+      GRIMMLINK_REQUEST_TIMEOUT_MS,
+      additionalHeaders,
+    );
     if (!response.ok) {
       const data: unknown = await response.json().catch(() => null);
       const message =
@@ -395,8 +438,14 @@ export class GrimmLinkClient {
     return this.requestJson('/syncs/progress', 'PUT', payload);
   }
 
-  postSessionBatch(payload: object): Promise<Record<string, unknown>> {
-    return this.requestJson('/reading-sessions/batch', 'POST', payload);
+  postSessionBatch(payload: object, idempotencyKey?: string): Promise<Record<string, unknown>> {
+    return this.requestJson(
+      '/reading-sessions/batch',
+      'POST',
+      payload,
+      undefined,
+      idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    );
   }
 
   getReadStatuses(): Promise<{ statuses: string[] }> {
@@ -556,6 +605,7 @@ export class GrimmLinkClient {
       let lastError: unknown;
       for (let attempt = 0; attempt <= GRIMMLINK_MAX_RETRIES; attempt += 1) {
         try {
+          recordGrimmLinkPerformance('networkRequests');
           await this.withTimeout(
             tauriDownload(
               `${serverUrl}${API_PREFIX}/books/${bookId}/download`,
@@ -613,5 +663,30 @@ export class GrimmLinkClient {
         errorCategory: cause instanceof GrimmLinkRequestError ? cause.category : 'network',
       };
     }
+  }
+
+  /** Read-only probes used by diagnostics. It never writes or creates a session. */
+  async healthCheck(): Promise<GrimmLinkHealthCheck> {
+    await this.authenticate();
+    const { capabilities } = await this.getCapabilities();
+    const has = (name: string) => capabilities.some((item) => item.toLowerCase() === name);
+    let shelves: GrimmLinkHealthCheck['shelves'] = has('shelves') ? 'available' : 'unsupported';
+    if (shelves === 'available') {
+      try {
+        await this.getShelves('regular');
+      } catch {
+        shelves = 'failed';
+      }
+    }
+    return {
+      authentication: 'ok',
+      capabilities: 'ok',
+      progress: has('progress') ? 'available' : 'unsupported',
+      metadata: has('metadata') ? 'available' : 'unsupported',
+      sessions: has('sessions') ? 'available' : 'unsupported',
+      shelves,
+      download: has('shelves') ? 'available' : 'unsupported',
+      capabilityNames: capabilities,
+    };
   }
 }

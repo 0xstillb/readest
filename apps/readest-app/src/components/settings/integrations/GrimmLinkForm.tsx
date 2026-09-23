@@ -5,6 +5,9 @@ import { MdCheckCircle, MdErrorOutline, MdLink } from 'react-icons/md';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
+import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
+import { GrimmLinkReplayScheduler } from '@/services/grimmlink/replayScheduler';
+import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { KOSyncStrategy } from '@/types/settings';
 import { eventDispatcher } from '@/utils/event';
@@ -20,7 +23,7 @@ interface GrimmLinkFormProps {
 
 const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
   const _ = useTranslation();
-  const { envConfig } = useEnv();
+  const { appService, envConfig } = useEnv();
   const { settings, setSettings, saveSettings } = useSettingsStore();
   const [serverUrl, setServerUrl] = useState(settings.grimmlink.serverUrl);
   const [fallbackUrl, setFallbackUrl] = useState(settings.grimmlink.fallbackUrl ?? '');
@@ -59,7 +62,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
         ? settings.grimmlink.allowSelfSignedCertificate === true
         : false,
       username,
-      userkey: md5(password),
+      userkey: password ? md5(password) : settings.grimmlink.userkey,
       deviceName: deviceName.trim() || 'Readest',
     };
     try {
@@ -68,6 +71,25 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
         const next = { ...settings, grimmlink };
         setSettings(next);
         await saveSettings(envConfig, next);
+        if (appService) {
+          try {
+            const store = new GrimmLinkSyncStore(
+              appService,
+              `${grimmlink.serverUrl}\u0000${grimmlink.username}`,
+            );
+            // An auth failure pauses the durable queue. A successful
+            // reconnect is an explicit recovery point, so resume and flush
+            // it without requiring the user to open Diagnostics.
+            await store.retryPending();
+            void new GrimmLinkReplayScheduler(
+              new GrimmLinkOutbox(store, new GrimmLinkClient(grimmlink)),
+            )
+              .flushNow()
+              .catch((error) => console.warn('[GrimmLink] reconnect replay failed', error));
+          } catch (error) {
+            console.warn('[GrimmLink] could not resume queued changes', error);
+          }
+        }
         setConnectionFeedback({
           kind: 'success',
           title: _('Connected'),
@@ -192,7 +214,12 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
               </div>
               <button
                 type='submit'
-                disabled={isConnecting || !serverUrl || !username || !password}
+                disabled={
+                  isConnecting ||
+                  !serverUrl ||
+                  !username ||
+                  (!password && !settings.grimmlink.userkey)
+                }
                 className={clsx(
                   'btn btn-contrast h-11 min-h-11 rounded-lg px-5 text-sm sm:shrink-0',
                   isConnecting && 'opacity-60',
