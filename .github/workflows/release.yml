@@ -207,7 +207,9 @@ jobs:
         config:
           - os: ubuntu-latest
             release: android
-            rust_target: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+            # Build only the ABI we publish. A universal APK exceeds GitHub's
+            # 2 GiB release-asset limit for this app.
+            rust_target: aarch64-linux-android
           - os: ubuntu-22.04
             release: linux
             arch: x86_64
@@ -376,15 +378,10 @@ jobs:
 
           version=${{ needs.get-release.outputs.release_version }}
           apk_path=src-tauri/gen/android/app/build/outputs/apk/universal/debug
-          universial_apk=Readest_${version}_universal-debug.apk
           arm64_apk=Readest_${version}_arm64-debug.apk
-          pnpm tauri android build --debug
-          cp ${apk_path}/app-universal-debug.apk $universial_apk
           pnpm tauri android build --debug -t aarch64
           cp ${apk_path}/app-universal-debug.apk $arm64_apk
 
-          echo "Uploading $universial_apk to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} $universial_apk --clobber
           echo "Uploading $arm64_apk to GitHub release"
           gh release upload ${{ needs.get-release.outputs.release_tag }} $arm64_apk --clobber
 
@@ -393,7 +390,6 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            apps/readest-app/Readest_${{ needs.get-release.outputs.release_version }}_universal-debug.apk
             apps/readest-app/Readest_${{ needs.get-release.outputs.release_version }}_arm64-debug.apk
 
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
