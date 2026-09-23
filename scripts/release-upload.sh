@@ -18,12 +18,19 @@ for asset_path in "$@"; do
 done
 
 release_id=$(gh api "repos/$repository/releases/tags/$release_tag" --jq '.id')
-existing_assets=$(gh api "repos/$repository/releases/$release_id/assets" --paginate --jq '.[].name')
+existing_assets=$(gh api "repos/$repository/releases/$release_id/assets" --paginate --jq '.[] | [.name, (.id | tostring)] | @tsv')
 for asset_path in "$@"; do
   asset_name=$(basename -- "$asset_path")
-  if grep -Fxq -- "$asset_name" <<<"$existing_assets"; then
+  asset_id=
+  while IFS=$'\t' read -r existing_name existing_id; do
+    if [[ "$existing_name" == "$asset_name" ]]; then
+      asset_id=$existing_id
+      break
+    fi
+  done <<<"$existing_assets"
+  if [[ -n "$asset_id" ]]; then
     echo "Removing existing release asset before replacement: $asset_name"
-    gh release delete-asset "$release_tag" "$asset_name" --repo "$repository" --yes
+    gh api --method DELETE "repos/$repository/releases/assets/$asset_id"
   fi
 done
 
