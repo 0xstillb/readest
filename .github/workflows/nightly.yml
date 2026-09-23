@@ -182,6 +182,9 @@ jobs:
         if: matrix.config.release == 'linux'
         run: |
           set -euo pipefail
+          # The sharun repository was renamed; quick-sharun's pinned default
+          # still points at the retired pkgforge-dev/sharun URL.
+          echo "SHARUN_LINK=https://github.com/pkgforge-dev/Anylinux-sharun/releases/download/2.3.0/sharun-${{ matrix.config.arch }}" >> "$GITHUB_ENV"
           sudo apt-get install -y libnss3 libpulse0 libspeechd2 libxkbcommon-x11-0
           nss_dir=$(dirname "$(ls /usr/lib/*-linux-gnu/nss/libsoftokn3.so)")
           lib_dir=${nss_dir%/nss}
