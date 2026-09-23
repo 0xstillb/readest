@@ -8,7 +8,6 @@ import { check, Update } from '@tauri-apps/plugin-updater';
 import { relaunch, exit } from '@tauri-apps/plugin-process';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { Command } from '@tauri-apps/plugin-shell';
-import { invoke } from '@tauri-apps/api/core';
 import { desktopDir } from '@tauri-apps/api/path';
 import { isTauriAppPlatform } from '@/services/environment';
 import { useTranslator } from '@/hooks/useTranslator';
@@ -16,16 +15,17 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useSearchParams } from 'next/navigation';
 import { getAppVersion } from '@/utils/version';
 import { tauriDownload } from '@/utils/transfer';
-import { installPackage, verifyUpdateSignature, installNightlyUpdate } from '@/utils/bridge';
+import {
+  installPackage,
+  installPortableUpdate,
+  verifyUpdateSignature,
+  installNightlyUpdate,
+} from '@/utils/bridge';
 import { join } from '@tauri-apps/api/path';
 import { getLocale } from '@/utils/misc';
 import { setLastShownReleaseNotesVersion } from '@/helpers/updater';
 import type { ResolvedNightlyUpdate } from '@/helpers/updater';
-import {
-  READEST_UPDATER_FILE,
-  READEST_CHANGELOG_FILE,
-  READEST_UPDATER_PUBKEY,
-} from '@/services/constants';
+import { READEST_UPDATER_FILE, READEST_CHANGELOG_FILE } from '@/services/constants';
 import Dialog from '@/components/Dialog';
 import Link from './Link';
 
@@ -137,7 +137,10 @@ export const UpdaterContent = ({
         const OS_ARCH = osArch();
         const platformKey = OS_ARCH === 'aarch64' ? 'android-arm64' : 'android-universal';
         const arch = OS_ARCH === 'aarch64' ? 'arm64' : 'universal';
-        const downloadUrl = data.platforms[platformKey]?.url as string;
+        const entry = data.platforms[platformKey];
+        const downloadUrl = entry?.url as string | undefined;
+        const signature = entry?.signature as string | undefined;
+        if (!downloadUrl || !signature) return;
         const apkFilePath = await appService.resolveFilePath(
           `Readest_${data.version}_${arch}.apk`,
           'Cache',
@@ -178,6 +181,8 @@ export const UpdaterContent = ({
               });
             });
 
+            const signatureValid = await verifyUpdateSignature(apkFilePath, signature, 'stable');
+            if (!signatureValid) throw new Error('APK update signature verification failed');
             const res = await installPackage({
               path: apkFilePath,
             });
@@ -228,17 +233,25 @@ export const UpdaterContent = ({
         const platformKey =
           OS_ARCH === 'x86_64' ? 'windows-x86_64-portable' : 'windows-aarch64-portable';
         const arch = OS_ARCH === 'x86_64' ? 'x64' : 'arm64';
-        const downloadUrl = data.platforms[platformKey]?.url as string;
-        const execDir = await invoke<string>('get_executable_dir');
+        const entry = data.platforms[platformKey];
+        const downloadUrl = entry?.url as string | undefined;
+        const signature = entry?.signature as string | undefined;
+        if (!downloadUrl || !signature) return;
         const exeFileName = `Readest_${data.version}_${arch}-portable.exe`;
-        const exeFilePath = await join(execDir, exeFileName);
+        const cacheFilePath = await appService.resolveFilePath(exeFileName, 'Cache');
         setUpdate({
           currentVersion,
           version: data.version,
           date: data.pub_date,
           body: data.notes,
           downloadAndInstall: async (onEvent) => {
-            await downloadWithProgress(downloadUrl, exeFilePath, onEvent);
+            await downloadWithProgress(downloadUrl, cacheFilePath, onEvent);
+            const exeFilePath = await installPortableUpdate(
+              cacheFilePath,
+              data.version,
+              signature,
+              'stable',
+            );
             try {
               console.log('Launching new executable:', exeFilePath);
               const command = Command.create('start-readest', ['/C', 'start', '', exeFilePath]);
@@ -329,17 +342,9 @@ export const UpdaterContent = ({
         }
         // Windows-portable / Linux-AppImage / Android: download, verify, install.
         const fileName = n.url.split('/').pop() || `Readest_${n.version}`;
-        let filePath: string;
-        if (n.platformKey.includes('portable')) {
-          // Windows portable: write into the executable dir so the new exe
-          // replaces the running one in place (mirrors checkWindowsPortableUpdate).
-          const execDir = await invoke<string>('get_executable_dir');
-          filePath = await join(execDir, fileName);
-        } else {
-          filePath = await appService!.resolveFilePath(fileName, 'Cache');
-        }
+        const filePath = await appService!.resolveFilePath(fileName, 'Cache');
         await downloadWithProgress(n.url, filePath, onEvent);
-        const ok = await verifyUpdateSignature(filePath, n.signature, READEST_UPDATER_PUBKEY);
+        const ok = await verifyUpdateSignature(filePath, n.signature, n.signingChannel);
         if (!ok) {
           console.error('Nightly signature verification failed; aborting install');
           throw new Error('Signature verification failed');
@@ -357,7 +362,13 @@ export const UpdaterContent = ({
           }, 500);
         } else {
           // windows portable
-          const command = Command.create('start-readest', ['/C', 'start', '', filePath]);
+          const portablePath = await installPortableUpdate(
+            filePath,
+            n.version,
+            n.signature,
+            n.signingChannel,
+          );
+          const command = Command.create('start-readest', ['/C', 'start', '', portablePath]);
           await command.spawn();
           setTimeout(async () => {
             await exit(0);

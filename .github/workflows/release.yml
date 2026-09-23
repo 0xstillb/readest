@@ -132,7 +132,7 @@ jobs:
           cd ..
 
           echo "Uploading ${plugin_zip} to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} ${plugin_zip} --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" "$plugin_zip"
 
   build-calibre-plugin:
     needs: get-release
@@ -159,7 +159,7 @@ jobs:
           plugin_zip="apps/readest-calibre-plugin/dist/Readest-${version}.calibre-plugin.zip"
 
           echo "Uploading ${plugin_zip} to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} ${plugin_zip} --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" "$plugin_zip"
 
   build-browser-extension:
     needs: get-release
@@ -191,7 +191,7 @@ jobs:
           extension_zip="apps/readest-app/extensions/send-to-readest/send-to-readest-${extension_version}.zip"
 
           echo "Uploading ${extension_zip} to GitHub release"
-          gh release upload "${{ needs.get-release.outputs.release_tag }}" "${extension_zip}" --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" "${extension_zip}"
 
   build-tauri:
     needs: get-release
@@ -203,6 +203,9 @@ jobs:
       attestations: write
     strategy:
       fail-fast: false
+      # Build every release target concurrently. Updater metadata is assembled
+      # once after the matrix, so the tauri-action legs cannot race on latest.json.
+      max-parallel: 5
       matrix:
         config:
           - os: ubuntu-latest
@@ -340,6 +343,9 @@ jobs:
         if: matrix.config.release == 'linux'
         run: |
           set -euo pipefail
+          # The sharun repository was renamed; quick-sharun's pinned default
+          # still points at the retired pkgforge-dev/sharun URL.
+          echo "SHARUN_LINK=https://github.com/pkgforge-dev/Anylinux-sharun/releases/download/2.3.0/sharun-${{ matrix.config.arch }}" >> "$GITHUB_ENV"
           sudo apt-get install -y libnss3 libpulse0 libspeechd2 libxkbcommon-x11-0
           nss_dir=$(dirname "$(ls /usr/lib/*-linux-gnu/nss/libsoftokn3.so)")
           lib_dir=${nss_dir%/nss}
@@ -372,6 +378,9 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           cd apps/readest-app/
           rm -rf src-tauri/gen/android
@@ -397,7 +406,7 @@ jobs:
           arm64_apk=Readest_${version}_arm64.apk
           pnpm tauri android build -t aarch64 --split-per-abi --apk
           apk_path="$(find src-tauri/gen/android/app/build/outputs/apk \
-            -type f -path '*/arm64-v8a/release/*.apk' -print -quit)"
+            -type f -name 'app-arm64-release.apk' -print -quit)"
           if [[ -z "$apk_path" ]]; then
             echo "::error::Could not find the split arm64-v8a release APK"
             exit 1
@@ -412,9 +421,20 @@ jobs:
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -n "$apksigner"
           "$apksigner" verify --verbose --print-certs "$arm64_apk"
+          pnpm tauri signer sign "$arm64_apk"
+
+          # Sentry symbolicates Rust panics from these: the APK ships the
+          # library stripped (see gen/android/app/build.gradle.kts), while
+          # `target/` keeps the unstripped copy. Crash reporting must never
+          # fail a build, and forks have no token.
+          if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+            pnpm exec sentry-cli debug-files upload --org readest --project readest \
+              ../../target/*/release/libreadestlib.so || echo "::warning::Sentry debug file upload failed"
+          fi
 
           echo "Uploading $arm64_apk to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} $arm64_apk --clobber
+          bash ../../scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" \
+            "$arm64_apk" "$arm64_apk.sig"
 
       - name: attest Android apks
         if: matrix.config.release == 'android'
@@ -445,7 +465,7 @@ jobs:
           releaseId: ${{ needs.get-release.outputs.release_id }}
           tagName: ${{ needs.get-release.outputs.release_tag }}
           releaseBody: ${{ needs.get-release.outputs.release_note }}
-          uploadUpdaterJson: true
+          uploadUpdaterJson: false
           args: ${{ matrix.config.args || '' }}
 
       # quick-sharun skips what it cannot find without failing; catch that
@@ -480,16 +500,22 @@ jobs:
           subject-path: ${{ join(fromJSON(steps.tauri.outputs.artifactPaths), fromJSON('"\n"')) }}
 
       - name: upload release notes to GitHub release
+        if: matrix.config.release == 'linux' && matrix.config.arch == 'x86_64'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Uploading release notes to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} apps/readest-app/release-notes.json --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" apps/readest-app/release-notes.json
 
       - name: build and upload portable binaries (Windows only)
         if: matrix.config.os == 'windows-latest'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Keep the signer command's legacy variable names as well.
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         shell: bash
         run: |
           echo "Building Portable Binaries"
@@ -516,9 +542,13 @@ jobs:
           # so upload the exe files instead. This is totally stupid.
           # powershell.exe -Command "Compress-Archive -Path $exe_file -DestinationPath $bin_file -Force"
           cp $exe_file $bin_file
+          pushd apps/readest-app/
+          pnpm tauri signer sign "../../$bin_file"
+          popd
 
           echo "Uploading $bin_file to GitHub release"
-          gh release upload ${{ needs.get-release.outputs.release_tag }} $bin_file --clobber
+          bash scripts/release-upload.sh "${{ needs.get-release.outputs.release_tag }}" \
+            "$bin_file" "$bin_file.sig"
 
       # The portable rebuild above is not produced by tauri-action, so it is not
       # covered by the "attest desktop bundles" step; attest it here. Exactly one
@@ -529,52 +559,92 @@ jobs:
         with:
           subject-path: Readest_*-portable.exe
 
-  update-android-updater-manifest:
+  update-updater-manifest:
     needs: [get-release, build-tauri]
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: add the signed Android APK to latest.json
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: assemble signed updater manifest after all platform builds
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.get-release.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.get-release.outputs.release_version }}
+          RELEASE_NOTES: ${{ needs.get-release.outputs.release_note }}
         run: |
           set -euo pipefail
           apk_name="Readest_${RELEASE_VERSION}_arm64.apk"
+          x64_setup="Readest_${RELEASE_VERSION}_x64-setup.exe"
+          arm64_setup="Readest_${RELEASE_VERSION}_arm64-setup.exe"
+          amd64_appimage="Readest_${RELEASE_VERSION}_amd64.AppImage"
+          arm64_appimage="Readest_${RELEASE_VERSION}_aarch64.AppImage"
           x64_portable="Readest_${RELEASE_VERSION}_x64-portable.exe"
           arm64_portable="Readest_${RELEASE_VERSION}_arm64-portable.exe"
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --paginate \
+            --jq '.[].name' > "$RUNNER_TEMP/release-assets.txt"
+          artifacts=(
+            "$apk_name" "$x64_setup" "$arm64_setup" "$amd64_appimage" "$arm64_appimage"
+            "$x64_portable" "$arm64_portable"
+          )
+          signatures=()
+          for artifact in "${artifacts[@]}"; do
+            signatures+=("${artifact}.sig")
+          done
+          for asset in "${artifacts[@]}" "${signatures[@]}"; do
+            grep -Fxq "$asset" "$RUNNER_TEMP/release-assets.txt" || {
+              echo "::error::Missing updater asset: $asset"
+              exit 1
+            }
+          done
+          patterns=()
+          for signature in "${signatures[@]}"; do
+            patterns+=(--pattern "$signature")
+          done
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern latest.json --dir "$RUNNER_TEMP"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq ".assets[].name" | grep -Fxq "$apk_name"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq ".assets[].name" | grep -Fxq "$x64_portable"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq ".assets[].name" | grep -Fxq "$arm64_portable"
+            "${patterns[@]}" --dir "$RUNNER_TEMP"
+          for signature in "${signatures[@]}"; do
+            grep -Fxq "$signature" "$RUNNER_TEMP/release-assets.txt"
+          done
           node - "$RUNNER_TEMP/latest.json" "$GITHUB_REPOSITORY" "$RELEASE_TAG" \
-            "$apk_name" "$x64_portable" "$arm64_portable" <<'NODE'
+            "$RELEASE_VERSION" "$RELEASE_NOTES" "$apk_name" "$x64_setup" "$arm64_setup" \
+            "$amd64_appimage" "$arm64_appimage" "$x64_portable" "$arm64_portable" <<'NODE'
           const fs = require('node:fs');
-          const [file, repository, tag, apk, x64Portable, arm64Portable] = process.argv.slice(2);
-          const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
-          manifest.platforms ??= {};
-          manifest.platforms['android-arm64'] = {
-            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(apk)}`,
+          const path = require('node:path');
+          const [file, repository, tag, version, notes, apk, x64Setup, arm64Setup,
+            amd64AppImage, arm64AppImage, x64Portable, arm64Portable] = process.argv.slice(2);
+          const signatureFor = (name) =>
+            fs.readFileSync(path.join(path.dirname(file), `${name}.sig`), 'utf8').trim();
+          const entry = (asset) => ({
+            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(asset)}`,
+            signature: signatureFor(asset),
+          });
+          const platforms = {
+            'windows-x86_64': entry(x64Setup),
+            'windows-aarch64': entry(arm64Setup),
+            'linux-x86_64-appimage': entry(amd64AppImage),
+            'linux-aarch64-appimage': entry(arm64AppImage),
+            'android-arm64': entry(apk),
+            'windows-x86_64-portable': entry(x64Portable),
+            'windows-aarch64-portable': entry(arm64Portable),
           };
-          manifest.platforms['windows-x86_64-portable'] = {
-            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(x64Portable)}`,
-          };
-          manifest.platforms['windows-aarch64-portable'] = {
-            url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(arm64Portable)}`,
+          for (const [platform, item] of Object.entries(platforms)) {
+            if (!item.signature) throw new Error(`Missing signature for ${platform}`);
+          }
+          const manifest = {
+            version,
+            notes,
+            pub_date: new Date().toISOString(),
+            platforms,
           };
           fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
           NODE
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/latest.json" \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          bash scripts/release-upload.sh "$RELEASE_TAG" "$RUNNER_TEMP/latest.json"
 
   verify-release-assets:
-    needs: [get-release, build-tauri, update-android-updater-manifest]
+    needs: [get-release, build-tauri, update-updater-manifest]
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -586,16 +656,24 @@ jobs:
           RELEASE_VERSION: ${{ needs.get-release.outputs.release_version }}
         run: |
           set -euo pipefail
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq '.assets[].name' > "$RUNNER_TEMP/release-assets.txt"
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --paginate \
+            --jq '.[].name' > "$RUNNER_TEMP/release-assets.txt"
           for asset in \
             "Readest_${RELEASE_VERSION}_x64-setup.exe" \
+            "Readest_${RELEASE_VERSION}_x64-setup.exe.sig" \
             "Readest_${RELEASE_VERSION}_arm64-setup.exe" \
+            "Readest_${RELEASE_VERSION}_arm64-setup.exe.sig" \
             "Readest_${RELEASE_VERSION}_amd64.AppImage" \
+            "Readest_${RELEASE_VERSION}_amd64.AppImage.sig" \
             "Readest_${RELEASE_VERSION}_aarch64.AppImage" \
+            "Readest_${RELEASE_VERSION}_aarch64.AppImage.sig" \
             "Readest_${RELEASE_VERSION}_x64-portable.exe" \
+            "Readest_${RELEASE_VERSION}_x64-portable.exe.sig" \
             "Readest_${RELEASE_VERSION}_arm64-portable.exe" \
+            "Readest_${RELEASE_VERSION}_arm64-portable.exe.sig" \
             "Readest_${RELEASE_VERSION}_arm64.apk" \
+            "Readest_${RELEASE_VERSION}_arm64.apk.sig" \
             latest.json; do
             grep -Fxq "$asset" "$RUNNER_TEMP/release-assets.txt" || {
               echo "::error::Missing release asset: $asset"
@@ -604,13 +682,28 @@ jobs:
           done
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern latest.json --dir "$RUNNER_TEMP"
-          node - "$RUNNER_TEMP/latest.json" <<'NODE'
+          node - "$RUNNER_TEMP/latest.json" "$GITHUB_REPOSITORY" \
+            "$RELEASE_TAG" "$RELEASE_VERSION" <<'NODE'
           const fs = require('node:fs');
-          const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const [file, repository, tag, version] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (manifest.version !== version) {
+            console.error(`::error::latest.json version ${manifest.version} != release ${version}`);
+            process.exit(1);
+          }
           const requiredSigned = [
             'windows-x86_64', 'windows-aarch64',
             'linux-x86_64-appimage', 'linux-aarch64-appimage',
           ];
+          const expectedAssets = {
+            'windows-x86_64': `Readest_${version}_x64-setup.exe`,
+            'windows-aarch64': `Readest_${version}_arm64-setup.exe`,
+            'linux-x86_64-appimage': `Readest_${version}_amd64.AppImage`,
+            'linux-aarch64-appimage': `Readest_${version}_aarch64.AppImage`,
+            'android-arm64': `Readest_${version}_arm64.apk`,
+            'windows-x86_64-portable': `Readest_${version}_x64-portable.exe`,
+            'windows-aarch64-portable': `Readest_${version}_arm64-portable.exe`,
+          };
           let failed = false;
           for (const platform of requiredSigned) {
             const entry = manifest.platforms?.[platform];
@@ -619,16 +712,46 @@ jobs:
               failed = true;
             }
           }
-          for (const platform of ['windows-x86_64-portable', 'windows-aarch64-portable']) {
-            if (!manifest.platforms?.[platform]?.url) {
-              console.error(`::error::latest.json lacks the ${platform} download entry`);
+          for (const platform of [
+            'android-arm64',
+            'windows-x86_64-portable',
+            'windows-aarch64-portable',
+          ]) {
+            const entry = manifest.platforms?.[platform];
+            if (!entry?.url || !entry?.signature) {
+              console.error(`::error::latest.json lacks signed ${platform} entry`);
               failed = true;
             }
           }
-          const android = manifest.platforms?.['android-arm64'];
-          if (!android?.url || !android.url.endsWith('.apk')) {
-            console.error('::error::latest.json lacks the Android arm64 APK entry');
-            failed = true;
+          for (const [platform, entry] of Object.entries(manifest.platforms ?? {})) {
+            if (!entry?.url) continue;
+            try {
+              const url = new URL(entry.url);
+              if (!url.pathname.includes(`/${repository}/`)) {
+                console.error(`::error::${platform} URL is not hosted by ${repository}`);
+                failed = true;
+              }
+              if (url.pathname.includes('/releases/download/') && !url.pathname.includes(encodeURIComponent(tag))) {
+                console.error(`::error::${platform} URL is not pinned to ${tag}`);
+                failed = true;
+              }
+              if (url.pathname.includes('/readest/readest/')) {
+                console.error(`::error::${platform} URL points to upstream`);
+                failed = true;
+              }
+              const expectedAsset = expectedAssets[platform];
+              if (expectedAsset && decodeURIComponent(url.pathname.split('/').pop() ?? '') !== expectedAsset) {
+                console.error(`::error::${platform} URL does not target ${expectedAsset}`);
+                failed = true;
+              }
+              if (expectedAsset && !entry.signature?.trim()) {
+                console.error(`::error::${platform} signature is empty`);
+                failed = true;
+              }
+            } catch {
+              console.error(`::error::${platform} URL is invalid`);
+              failed = true;
+            }
           }
           if (failed) process.exit(1);
           NODE

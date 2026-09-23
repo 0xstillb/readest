@@ -82,6 +82,7 @@ vi.mock('@tauri-apps/api/path', () => ({ desktopDir: vi.fn(), join: vi.fn() }));
 vi.mock('@/utils/transfer', () => ({ tauriDownload: vi.fn() }));
 vi.mock('@/utils/bridge', () => ({
   installPackage: vi.fn(),
+  installPortableUpdate: vi.fn(),
   verifyUpdateSignature: vi.fn(),
   installNightlyUpdate: mockInstallNightlyUpdate,
 }));
@@ -128,7 +129,12 @@ describe('UpdaterContent — auto-translated changelog', () => {
       ok: true,
       json: async () => ({
         version: '0.11.20',
-        platforms: { 'android-arm64': { url: 'https://example.com/update.apk' } },
+        platforms: {
+          'android-arm64': {
+            url: 'https://example.com/update.apk',
+            signature: 'test-signature',
+          },
+        },
       }),
     } as Response);
 
@@ -150,6 +156,7 @@ describe('UpdaterContent — auto-translated changelog', () => {
         latestVersion='0.11.20'
         nightlyUpdate={{
           endpoint: 'https://example.com/nightly.json',
+          signingChannel: 'nightly',
           version: '0.11.20',
           platformKey: 'windows-x86_64',
           url: 'https://example.com/readest.exe',

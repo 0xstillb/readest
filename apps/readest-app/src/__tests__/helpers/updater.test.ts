@@ -205,13 +205,14 @@ describe('updater', () => {
 
     test('checks Android update via fetch when OS is android', async () => {
       mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('aarch64');
       mockAppVersion = '1.0.0';
 
       mockTauriFetch.mockResolvedValue({
         json: () =>
           Promise.resolve({
             version: '2.0.0',
-            platforms: { 'android-arm64': {} },
+            platforms: { 'android-arm64': { url: 'https://x/app.apk', signature: 'sig' } },
           }),
       });
 
@@ -223,13 +224,14 @@ describe('updater', () => {
 
     test('Android check with android-universal platform', async () => {
       mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('x86_64');
       mockAppVersion = '1.0.0';
 
       mockTauriFetch.mockResolvedValue({
         json: () =>
           Promise.resolve({
             version: '2.0.0',
-            platforms: { 'android-universal': {} },
+            platforms: { 'android-universal': { url: 'https://x/app.apk', signature: 'sig' } },
           }),
       });
 
@@ -237,6 +239,24 @@ describe('updater', () => {
 
       expect(result).toBe(true);
       expect(mockSetUpdaterWindowVisible).toHaveBeenCalled();
+    });
+
+    test('does not offer an unsigned Android update', async () => {
+      mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('aarch64');
+      mockAppVersion = '1.0.0';
+      mockTauriFetch.mockResolvedValue({
+        json: () =>
+          Promise.resolve({
+            version: '2.0.0',
+            platforms: { 'android-arm64': { url: 'https://x/app.apk' } },
+          }),
+      });
+
+      const result = await checkForAppUpdates(dummyTranslate, false);
+
+      expect(result).toBe(false);
+      expect(mockSetUpdaterWindowVisible).not.toHaveBeenCalled();
     });
 
     test('Android returns false when version is not newer', async () => {
@@ -493,6 +513,7 @@ describe('resolveNightlyUpdate', () => {
     const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
     expect(r?.version).toBe('0.11.4-2026061406');
     expect(r?.endpoint).toContain('nightly');
+    expect(r?.signingChannel).toBe('nightly');
   });
 
   test('picks higher-base stable over older nightly', async () => {
@@ -504,6 +525,7 @@ describe('resolveNightlyUpdate', () => {
     const r = await resolveNightlyUpdate('0.11.4-2026061406', platformKey, fetchFn as never);
     expect(r?.version).toBe('0.11.5');
     expect(r?.endpoint).not.toContain('nightly');
+    expect(r?.signingChannel).toBe('stable');
   });
 
   test('ignores a manifest missing the current platform key', async () => {
@@ -514,6 +536,17 @@ describe('resolveNightlyUpdate', () => {
     );
     const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
     expect(r?.version).toBe('0.11.4-2026061406');
+  });
+
+  test('ignores an unsigned update entry', async () => {
+    const fetchFn = vi.fn(async () =>
+      mkRes({
+        version: '0.11.5',
+        platforms: { [platformKey]: { url: 'https://x/app.tar.gz' } },
+      }),
+    );
+    const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
+    expect(r).toBeNull();
   });
 
   test('returns null when nothing is newer than installed', async () => {

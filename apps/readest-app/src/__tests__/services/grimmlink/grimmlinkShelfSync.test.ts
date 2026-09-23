@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Book } from '@/types/book';
 import {
   GrimmLinkShelfProvider,
   planShelfSync,
@@ -183,6 +184,128 @@ describe('GrimmLink shelf sync safety', () => {
 
     expect(stages).toEqual(['downloading', 'importing']);
     expect(importedFile).toBeInstanceOf(File);
+  });
+
+  it('removes a stale partial temp file before writing and cleans up after import failure', async () => {
+    const data = new ArrayBuffer(8 * 1024 * 1024);
+    new Uint8Array(data).set(new TextEncoder().encode('%PDF-1.7'));
+    const events: string[] = [];
+    let tempExists = true;
+    const client = {
+      getShelfBooks: async () => [
+        { bookId: 1, bookHash: 'remote-hash', filename: 'book.pdf', format: 'PDF' as const },
+      ],
+      downloadShelfBook: async () => data,
+    };
+    const store = {
+      getShelfEntries: async () => [],
+      markShelfEntry: async () => events.push('mapped'),
+      removeShelfEntry: async () => {},
+    };
+    const appService = {
+      exists: async (_path: string, folder?: string) => (folder === 'Temp' ? tempExists : false),
+      createDir: async () => {},
+      writeFile: async () => {
+        events.push('write');
+        expect(tempExists).toBe(false);
+      },
+      resolveFilePath: async () => '/tmp/book.pdf',
+      deleteFile: async () => {
+        events.push('delete');
+        tempExists = false;
+      },
+      importBook: async () => null,
+      deleteBook: async () => {},
+    };
+
+    await expect(
+      new GrimmLinkShelfProvider(client, store as never).sync(
+        'regular',
+        1,
+        [],
+        async () => {},
+        appService as never,
+      ),
+    ).rejects.toThrow('Failed to import GrimmLink shelf book');
+
+    expect(events).toEqual(['delete', 'write', 'delete']);
+    expect(events).not.toContain('mapped');
+  });
+
+  it('reconciles an imported book when shelf mapping persistence fails', async () => {
+    const data = new TextEncoder().encode('%PDF-1.7').buffer;
+    const library: Book[] = [];
+    const entries: Array<{
+      bookId: number;
+      bookHash: string;
+      localPath: string | null;
+      managedByGrimmLink: boolean;
+    }> = [];
+    let downloads = 0;
+    let imports = 0;
+    let failFirstMapping = true;
+    let localFileExists = false;
+    const client = {
+      getShelfBooks: async () => [
+        { bookId: 1, bookHash: 'remote-hash', filename: 'book.pdf', format: 'PDF' as const },
+      ],
+      downloadShelfBook: async () => {
+        downloads++;
+        return data;
+      },
+    };
+    const store = {
+      getShelfEntries: async () => entries,
+      markShelfEntry: async (
+        _type: string,
+        _shelfId: number,
+        bookId: number,
+        bookHash: string,
+        localPath: string | null,
+        managedByGrimmLink: boolean,
+      ) => {
+        if (failFirstMapping) {
+          failFirstMapping = false;
+          throw new Error('simulated temporary database failure');
+        }
+        entries.push({ bookId, bookHash, localPath, managedByGrimmLink });
+      },
+      removeShelfEntry: async () => {},
+    };
+    const appService = {
+      exists: async () => localFileExists,
+      createDir: async () => {},
+      writeFile: async () => {},
+      resolveFilePath: async () => '/tmp/book.pdf',
+      deleteFile: async () => {},
+      importBook: async () => {
+        imports++;
+        return {
+          hash: 'remote-hash',
+          title: 'Book',
+          author: '',
+          format: 'PDF',
+          createdAt: 0,
+          updatedAt: 0,
+        };
+      },
+      deleteBook: async () => {},
+    };
+    const onImported = async (_book: (typeof library)[number], books: typeof library) => {
+      library.splice(0, library.length, ...books);
+      localFileExists = true;
+    };
+    const provider = new GrimmLinkShelfProvider(client, store as never);
+
+    await expect(
+      provider.sync('regular', 1, library, onImported, appService as never),
+    ).rejects.toThrow('simulated temporary database failure');
+    await provider.sync('regular', 1, library, onImported, appService as never);
+
+    expect(downloads).toBe(1);
+    expect(imports).toBe(1);
+    expect(library).toHaveLength(1);
+    expect(entries).toHaveLength(1);
   });
 
   it('purges GrimmLink-managed books only with explicit cleanup policy', async () => {
