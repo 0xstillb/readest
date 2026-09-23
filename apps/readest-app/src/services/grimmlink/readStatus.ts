@@ -46,7 +46,10 @@ type ReadStatusSyncClient = Pick<
   'getCapabilities' | 'getReadStatuses' | 'matchBook' | 'updateReadStatus'
 >;
 
-const replaySchedulers = new WeakMap<object, { client: object; scheduler: GrimmLinkReplayScheduler }>();
+const replaySchedulers = new WeakMap<
+  object,
+  { client: object; scheduler: GrimmLinkReplayScheduler }
+>();
 
 const schedulerFor = (store: GrimmLinkSyncStore, client: ReadStatusSyncClient) => {
   const current = replaySchedulers.get(store);
@@ -85,9 +88,11 @@ export const queueExplicitGrimmLinkReadStatus = async (
   );
   const queued = await provider.queueExplicit(book.hash, link.bookId, status);
   if (queued) {
-    void schedulerFor(store, client).requestReplay().catch((error) => {
-      console.warn('[GrimmLink] failed to replay reading status queue', error);
-    });
+    void schedulerFor(store, client)
+      .requestReplay()
+      .catch((error) => {
+        console.warn('[GrimmLink] failed to replay reading status queue', error);
+      });
   }
   return queued;
 };

@@ -133,9 +133,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
 
   const replayScheduler = useMemo(
     () =>
-      client && store
-        ? new GrimmLinkReplayScheduler(new GrimmLinkOutbox(store, client))
-        : null,
+      client && store ? new GrimmLinkReplayScheduler(new GrimmLinkOutbox(store, client)) : null,
     [client, store],
   );
 
