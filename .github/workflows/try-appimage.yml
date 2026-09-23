@@ -130,8 +130,6 @@ jobs:
           TAURI_CEF_CARGO: '1'
           # See release.yml.
           STRACE_MODE: '0'
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           NODE_OPTIONS: '--max-old-space-size=8192'
         run: |
           cd apps/readest-app

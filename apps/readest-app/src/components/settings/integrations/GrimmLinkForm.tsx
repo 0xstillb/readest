@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import { md5 } from 'js-md5';
 import React, { useEffect, useState } from 'react';
+import { MdCheckCircle, MdErrorOutline, MdLink } from 'react-icons/md';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
@@ -27,7 +28,13 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
   const [password, setPassword] = useState('');
   const [deviceName, setDeviceName] = useState(settings.grimmlink.deviceName || 'Readest');
   const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionFeedback, setConnectionFeedback] = useState<{
+    kind: 'success' | 'error';
+    title: string;
+    message: string;
+  } | null>(null);
   const isLanServer = isLanAddress(serverUrl);
+  const isConfigured = Boolean(settings.grimmlink.enabled && settings.grimmlink.userkey);
 
   useEffect(() => {
     setDeviceName(settings.grimmlink.deviceName || 'Readest');
@@ -42,6 +49,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
 
   const connect = async () => {
     setIsConnecting(true);
+    setConnectionFeedback(null);
     const grimmlink = {
       ...settings.grimmlink,
       enabled: true,
@@ -54,20 +62,49 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
       userkey: md5(password),
       deviceName: deviceName.trim() || 'Readest',
     };
-    const result = await new GrimmLinkClient(grimmlink).connect();
-    if (result.success) {
-      const next = { ...settings, grimmlink };
-      setSettings(next);
-      await saveSettings(envConfig, next);
-      eventDispatcher.dispatch('toast', { message: _('Connected'), type: 'info' });
-    } else {
+    try {
+      const result = await new GrimmLinkClient(grimmlink).connect();
+      if (result.success) {
+        const next = { ...settings, grimmlink };
+        setSettings(next);
+        await saveSettings(envConfig, next);
+        setConnectionFeedback({
+          kind: 'success',
+          title: _('Connected'),
+          message: _('Your GrimmLink settings were verified and saved.'),
+        });
+        eventDispatcher.dispatch('toast', { message: _('Connected'), type: 'info' });
+      } else {
+        const category =
+          result.errorCategory === 'auth'
+            ? _('Authentication failed')
+            : result.errorCategory === 'network'
+              ? _('Network error')
+              : result.errorCategory === 'server'
+                ? _('Server error')
+                : result.errorCategory === 'conflict'
+                  ? _('Conflict')
+                  : result.errorCategory === 'invalid-data'
+                    ? _('Invalid data')
+                    : _('Connection error');
+        const message = _(result.message || 'Connection error');
+        setConnectionFeedback({ kind: 'error', title: category, message });
+        eventDispatcher.dispatch('toast', {
+          message: `${_('Failed to connect')}${result.errorCategory ? ` [${result.errorCategory}]` : ''}: ${message}`,
+          type: 'error',
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : _('Connection error');
+      setConnectionFeedback({ kind: 'error', title: _('Connection error'), message });
       eventDispatcher.dispatch('toast', {
-        message: `${_('Failed to connect')}${result.errorCategory ? ` [${result.errorCategory}]` : ''}: ${_(result.message || 'Connection error')}`,
+        message: `${_('Failed to connect')}: ${message}`,
         type: 'error',
       });
+    } finally {
+      setPassword('');
+      setIsConnecting(false);
     }
-    setPassword('');
-    setIsConnecting(false);
   };
 
   return (
@@ -75,7 +112,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
       <SubPageHeader
         parentLabel={_('Integrations')}
         currentLabel={_('GrimmLink')}
-        description={_('Connect Readest to a Grimmory server. Sync stays off until enabled later.')}
+        description={_('Connect Readest to Grimmory and choose what stays in sync')}
         onBack={onBack}
       />
       <form
@@ -85,31 +122,96 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
           void connect();
         }}
       >
-        <Field
-          label={_('Server URL')}
-          id='grimmlink-server-url'
-          value={serverUrl}
-          onChange={setServerUrl}
-        />
-        <Field
-          label={_('Fallback URL (optional)')}
-          id='grimmlink-fallback-url'
-          value={fallbackUrl}
-          onChange={setFallbackUrl}
-        />
-        <Field
-          label={_('Username')}
-          id='grimmlink-username'
-          value={username}
-          onChange={setUsername}
-        />
-        <Field
-          label={_('Password')}
-          id='grimmlink-password'
-          value={password}
-          onChange={setPassword}
-          type='password'
-        />
+        <section className='space-y-2'>
+          <div className='flex items-center justify-between gap-3'>
+            <SectionTitle>{_('Connection')}</SectionTitle>
+            {isConfigured && (
+              <span className='badge badge-outline gap-1 text-xs'>
+                <MdCheckCircle aria-hidden='true' className='h-3.5 w-3.5' />
+                {_('Configured')}
+              </span>
+            )}
+          </div>
+          <div className='card eink-bordered border-base-200 bg-base-100 space-y-4 border p-4'>
+            <Field
+              label={_('Server URL')}
+              id='grimmlink-server-url'
+              value={serverUrl}
+              onChange={setServerUrl}
+            />
+            <Field
+              label={_('Fallback URL (optional)')}
+              id='grimmlink-fallback-url'
+              value={fallbackUrl}
+              onChange={setFallbackUrl}
+            />
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <Field
+                label={_('Username')}
+                id='grimmlink-username'
+                value={username}
+                onChange={setUsername}
+              />
+              <Field
+                label={_('Password')}
+                id='grimmlink-password'
+                value={password}
+                onChange={setPassword}
+                type='password'
+              />
+            </div>
+            {connectionFeedback && (
+              <div
+                role={connectionFeedback.kind === 'error' ? 'alert' : 'status'}
+                aria-live='polite'
+                className={clsx(
+                  'eink-bordered flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm',
+                  connectionFeedback.kind === 'error'
+                    ? 'border-error/40 bg-error/10'
+                    : 'border-base-300 bg-base-200/40',
+                )}
+              >
+                {connectionFeedback.kind === 'error' ? (
+                  <MdErrorOutline
+                    aria-hidden='true'
+                    className='text-error mt-0.5 h-5 w-5 shrink-0'
+                  />
+                ) : (
+                  <MdCheckCircle aria-hidden='true' className='mt-0.5 h-5 w-5 shrink-0' />
+                )}
+                <div className='min-w-0'>
+                  <div className='font-medium'>{connectionFeedback.title}</div>
+                  <div className='break-words text-[0.9em]'>{connectionFeedback.message}</div>
+                </div>
+              </div>
+            )}
+            <div className='flex flex-col gap-2 border-t border-base-200 pt-4 sm:flex-row sm:items-center sm:justify-between'>
+              <div className='text-base-content/70 flex min-w-0 items-center gap-2 text-xs'>
+                <MdLink aria-hidden='true' className='h-4 w-4 shrink-0' />
+                <span className='truncate'>{serverUrl || _('Enter your Grimmory server URL')}</span>
+              </div>
+              <button
+                type='submit'
+                disabled={isConnecting || !serverUrl || !username || !password}
+                className={clsx(
+                  'btn btn-contrast h-11 min-h-11 rounded-lg px-5 text-sm sm:shrink-0',
+                  isConnecting && 'opacity-60',
+                )}
+              >
+                {isConnecting ? (
+                  <>
+                    <span className='loading loading-spinner loading-sm' />
+                    {_('Connecting…')}
+                  </>
+                ) : isConfigured ? (
+                  _('Update connection')
+                ) : (
+                  _('Connect')
+                )}
+              </button>
+            </div>
+          </div>
+        </section>
         {isLanServer && (
           <section className='space-y-2'>
             <SectionTitle>{_('LAN security')}</SectionTitle>
@@ -227,22 +329,6 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
         )}
         <GrimmLinkShelfPanel />
         <GrimmLinkDiagnosticsPanel />
-        <div className='flex justify-end pt-1'>
-          <button
-            type='submit'
-            disabled={isConnecting || !serverUrl || !username || !password}
-            className={clsx(
-              'btn btn-primary h-10 min-h-10 rounded-lg px-5 text-sm',
-              isConnecting && 'opacity-60',
-            )}
-          >
-            {isConnecting ? (
-              <span className='loading loading-spinner loading-sm' />
-            ) : (
-              _('Test connection')
-            )}
-          </button>
-        </div>
       </form>
     </div>
   );
@@ -270,7 +356,10 @@ const Field = ({
     <input
       id={id}
       type={type}
-      className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+      className={clsx(
+        'input input-bordered eink-bordered h-11 w-full text-sm',
+        'focus-visible:ring-base-content/20 focus-visible:outline-hidden focus-visible:ring-2',
+      )}
       value={value}
       onChange={(event) => onChange(event.target.value)}
       onBlur={onBlur}

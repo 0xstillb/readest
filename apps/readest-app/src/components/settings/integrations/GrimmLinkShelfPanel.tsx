@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MdClose, MdRefresh, MdSync } from 'react-icons/md';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
@@ -16,6 +17,8 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { eventDispatcher } from '@/utils/event';
 import { getLocalBookFilename } from '@/utils/book';
 import { SectionTitle, SettingsSelect, Tips } from '../primitives';
+import GrimmLinkShelfSyncStatus from './GrimmLinkShelfSyncStatus';
+import type { GrimmLinkShelfSyncStatus as GrimmLinkShelfSyncStatusValue } from '@/hooks/useGrimmLinkShelfSync';
 
 /** Subscription selection and an explicit shelf sync command. */
 const GrimmLinkShelfPanel = () => {
@@ -33,11 +36,7 @@ const GrimmLinkShelfPanel = () => {
   >(new Map());
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [progress, setProgress] = useState<number | null>(null);
-  const [syncStage, setSyncStage] = useState<{
-    stage: 'downloading' | 'importing';
-    filename: string;
-  } | null>(null);
+  const [syncStatus, setSyncStatus] = useState<GrimmLinkShelfSyncStatusValue | null>(null);
   const [preview, setPreview] = useState<GrimmLinkShelfPreview | null>(null);
   const abortController = useRef<AbortController | null>(null);
   const store = useMemo(
@@ -123,6 +122,12 @@ const GrimmLinkShelfPanel = () => {
         ),
       );
     } catch (error) {
+      if (abortController.current?.signal.aborted) {
+        const message = _('Shelf sync cancelled');
+        setSyncStatus({ stage: 'info', message });
+        eventDispatcher.dispatch('toast', { message, type: 'info' });
+        return;
+      }
       const category = error instanceof GrimmLinkRequestError ? `[${error.category}] ` : '';
       const message = error instanceof Error ? error.message : _('Connection error');
       eventDispatcher.dispatch('toast', {
@@ -192,10 +197,12 @@ const GrimmLinkShelfPanel = () => {
   const sync = async () => {
     if (!client || !store || !appService) return;
     setSyncing(true);
+    setSyncStatus({ stage: 'starting' });
     abortController.current = new AbortController();
     try {
       const subscriptions = await store.getShelfSubscriptions();
       if (subscriptions.length === 0) {
+        setSyncStatus({ stage: 'info', message: _('Select at least one Grimmory shelf first.') });
         eventDispatcher.dispatch('toast', {
           message: _('Select at least one Grimmory shelf first.'),
           type: 'info',
@@ -214,11 +221,13 @@ const GrimmLinkShelfPanel = () => {
         {
           signal: abortController.current.signal,
           onProgress: ({ progress: done, total }) =>
-            setProgress(total > 0 ? Math.round((done / total) * 100) : null),
-          onStage: ({ stage, book }) => {
-            setSyncStage({ stage, filename: book.filename });
-            if (stage === 'downloading') setProgress(0);
-          },
+            setSyncStatus((current) => ({
+              stage: current?.stage === 'importing' ? 'importing' : 'downloading',
+              book: current?.book,
+              progress: done,
+              total,
+            })),
+          onStage: ({ stage, book }) => setSyncStatus({ stage, book: book.title || book.filename }),
         },
         async (_book, nextLibrary) => {
           setLibrary(nextLibrary);
@@ -226,156 +235,200 @@ const GrimmLinkShelfPanel = () => {
         },
       );
       const { downloaded, reused, removed } = result;
+      const message =
+        downloaded > 0
+          ? _('Imported {{count}} books.', { count: downloaded })
+          : reused > 0
+            ? _('All selected shelf books are already in your library.')
+            : removed > 0
+              ? _('Removed {{count}} books no longer in selected shelves.', { count: removed })
+              : _('No books found in selected shelves.');
+      setSyncStatus({ stage: 'done', message });
       if (downloaded > 0) {
         eventDispatcher.dispatch('toast', {
-          message: _('Imported {{count}} books.', { count: downloaded }),
+          message,
           type: 'success',
         });
       } else if (reused > 0) {
         eventDispatcher.dispatch('toast', {
-          message: _('All selected shelf books are already in your library.'),
+          message,
           type: 'info',
         });
       } else if (removed > 0) {
         eventDispatcher.dispatch('toast', {
-          message: _('Removed {{count}} books no longer in selected shelves.', { count: removed }),
+          message,
           type: 'info',
         });
       } else {
         eventDispatcher.dispatch('toast', {
-          message: _('No books found in selected shelves.'),
+          message,
           type: 'info',
         });
       }
     } catch (error) {
       const category = error instanceof GrimmLinkRequestError ? `[${error.category}] ` : '';
       const message = error instanceof Error ? error.message : _('Connection error');
+      setSyncStatus({ stage: 'error', message: `${category}${message}` });
       eventDispatcher.dispatch('toast', {
         message: `${_('Shelf sync failed')}: ${category}${message}`,
         type: 'error',
       });
     } finally {
       abortController.current = null;
-      setProgress(null);
-      setSyncStage(null);
       setSyncing(false);
     }
   };
 
   return (
-    <section className='space-y-2 pt-2'>
-      <div className='flex items-center justify-between'>
-        <SectionTitle>{_('Grimmory Shelves')}</SectionTitle>
-        <div className='flex gap-1'>
+    <section className='space-y-3 pt-2'>
+      <div className='flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between'>
+        <div className='min-w-0'>
+          <SectionTitle>{_('Grimmory Shelves')}</SectionTitle>
+          <p className='text-base-content/65 mt-0.5 text-xs'>
+            {enabled.size > 0
+              ? _('{{count}} selected', { count: enabled.size })
+              : _('Choose the shelves to keep on this device')}
+          </p>
+        </div>
+        <div className='flex shrink-0 justify-end gap-1'>
           <button
             type='button'
-            className='btn btn-ghost btn-sm'
+            className='btn btn-ghost h-10 min-h-10 gap-1.5 px-3'
             disabled={loading || syncing}
             onClick={() => void refresh()}
           >
+            <MdRefresh aria-hidden='true' className={loading ? 'animate-spin' : ''} />
             {_('Refresh')}
           </button>
           {syncing ? (
             <button
               type='button'
-              className='btn btn-ghost btn-sm eink-bordered'
+              className='btn btn-ghost eink-bordered h-10 min-h-10 gap-1.5 px-3'
               onClick={() => abortController.current?.abort()}
             >
+              <MdClose aria-hidden='true' />
               {_('Cancel')}
             </button>
           ) : (
             <button
               type='button'
-              className='btn btn-contrast btn-sm'
-              disabled={loading}
+              className='btn btn-contrast h-10 min-h-10 gap-1.5 px-4'
+              disabled={loading || enabled.size === 0}
               onClick={() => void sync()}
             >
+              <MdSync aria-hidden='true' />
               {_('Sync')}
             </button>
           )}
         </div>
       </div>
-      {shelves.map((shelf) => {
-        const key = `${shelf.type}:${shelf.id}`;
-        return (
-          <label key={key} className='flex items-center gap-3 rounded-lg px-2 py-2 eink-bordered'>
-            <input
-              type='checkbox'
-              className='toggle toggle-sm'
-              checked={enabled.has(key)}
-              onChange={(event) => void toggle(shelf, event.target.checked)}
-            />
-            <span className='text-sm'>
-              {shelf.name}{' '}
-              <span className='opacity-60'>
-                ({shelf.type === 'magic' ? _('Magic Shelf') : _('Shelf')})
-              </span>
-            </span>
-            {enabled.has(key) && (
-              <div className='ms-auto flex flex-wrap justify-end gap-1'>
-                <SettingsSelect
-                  value={cleanupPolicies.get(key) ?? 'keep_local'}
-                  onChange={(event) =>
-                    void setCleanupPolicy(
-                      shelf,
-                      event.target.value as 'keep_local' | 'remove_managed_copy',
-                    )
-                  }
-                  ariaLabel={_('Cleanup policy')}
-                  options={[
-                    { value: 'keep_local', label: _('Keep local') },
-                    { value: 'remove_managed_copy', label: _('Remove managed copy') },
-                  ]}
-                />
-                <SettingsSelect
-                  value={downloadPolicies.get(key) ?? 'always'}
-                  onChange={(event) =>
-                    void setDownloadPolicy(
-                      shelf,
-                      event.target.value as 'off' | 'wifi_only' | 'always',
-                    )
-                  }
-                  ariaLabel={_('Download policy')}
-                  options={[
-                    { value: 'always', label: _('Always download') },
-                    { value: 'wifi_only', label: _('Wi-Fi only') },
-                    { value: 'off', label: _('Download off') },
-                  ]}
-                />
-              </div>
-            )}
-          </label>
-        );
-      })}
+      {loading && shelves.length === 0 && (
+        <div className='card eink-bordered border-base-200 bg-base-100 flex min-h-24 items-center justify-center gap-2 border text-sm'>
+          <span className='loading loading-spinner loading-sm' />
+          {_('Loading shelves…')}
+        </div>
+      )}
+      {shelves.length > 0 && (
+        <div className='card eink-bordered border-base-200 bg-base-100 border'>
+          <div className='divide-base-200 divide-y'>
+            {shelves.map((shelf) => {
+              const key = `${shelf.type}:${shelf.id}`;
+              const selected = enabled.has(key);
+              return (
+                <div key={key}>
+                  <label className='hover:bg-base-200/40 flex min-h-14 cursor-pointer items-center gap-3 px-4 py-3 transition-colors duration-150'>
+                    <input
+                      type='checkbox'
+                      className='toggle shrink-0'
+                      checked={selected}
+                      onChange={(event) => void toggle(shelf, event.target.checked)}
+                    />
+                    <span className='min-w-0 flex-1 truncate text-sm font-medium'>
+                      {shelf.name}
+                    </span>
+                    <span className='badge badge-ghost badge-sm shrink-0'>
+                      {shelf.type === 'magic' ? _('Magic Shelf') : _('Shelf')}
+                    </span>
+                  </label>
+                  {selected && (
+                    <div className='border-base-200 bg-base-200/30 grid gap-2 border-t px-4 py-3 sm:grid-cols-2'>
+                      <div className='flex min-h-9 items-center justify-between gap-3'>
+                        <span className='text-base-content/70 text-xs'>{_('Download')}</span>
+                        <SettingsSelect
+                          value={downloadPolicies.get(key) ?? 'always'}
+                          onChange={(event) =>
+                            void setDownloadPolicy(
+                              shelf,
+                              event.target.value as 'off' | 'wifi_only' | 'always',
+                            )
+                          }
+                          ariaLabel={_('Download policy')}
+                          options={[
+                            { value: 'always', label: _('Always download') },
+                            { value: 'wifi_only', label: _('Wi-Fi only') },
+                            { value: 'off', label: _('Download off') },
+                          ]}
+                        />
+                      </div>
+                      <div className='flex min-h-9 items-center justify-between gap-3'>
+                        <span className='text-base-content/70 text-xs'>{_('When removed')}</span>
+                        <SettingsSelect
+                          value={cleanupPolicies.get(key) ?? 'keep_local'}
+                          onChange={(event) =>
+                            void setCleanupPolicy(
+                              shelf,
+                              event.target.value as 'keep_local' | 'remove_managed_copy',
+                            )
+                          }
+                          ariaLabel={_('Cleanup policy')}
+                          options={[
+                            { value: 'keep_local', label: _('Keep local') },
+                            { value: 'remove_managed_copy', label: _('Remove managed copy') },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {!loading && shelves.length === 0 && (
         <Tips>
           <li>{_('No Grimmory shelves found.')}</li>
         </Tips>
       )}
       {preview && shelves.length > 0 && (
-        <div className='rounded-lg border border-base-300 px-3 py-2 text-xs eink-bordered'>
-          <strong>{_('Next sync')}</strong>{' '}
-          {_('{{total}} books · {{downloads}} downloads · {{removed}} removed', {
-            total: preview.total,
-            downloads: preview.downloads,
-            removed: preview.removed,
-          })}
+        <div className='eink-bordered border-base-200 bg-base-200/40 rounded-lg border p-3'>
+          <div className='mb-2 flex items-center justify-between gap-3 text-sm'>
+            <strong>{_('Next sync')}</strong>
+            <span className='text-base-content/70'>
+              {_('{{count}} books', { count: preview.total })}
+            </span>
+          </div>
+          <div className='grid grid-cols-3 gap-2 text-center'>
+            <SyncPreviewValue label={_('Downloads')} value={preview.downloads} />
+            <SyncPreviewValue label={_('Updates')} value={preview.changed} />
+            <SyncPreviewValue label={_('Removals')} value={preview.removed} />
+          </div>
         </div>
       )}
-      {syncing && (
-        <div className='text-xs opacity-70'>
-          {syncStage?.stage === 'importing'
-            ? _('Importing {{filename}}…', { filename: syncStage.filename })
-            : syncStage
-              ? _('Downloading {{filename}}: {{percent}}%', {
-                  filename: syncStage.filename,
-                  percent: progress ?? 0,
-                })
-              : _('Downloading…')}
-        </div>
-      )}
+      <GrimmLinkShelfSyncStatus
+        syncing={syncing}
+        status={syncStatus}
+        onCancel={() => abortController.current?.abort()}
+      />
     </section>
   );
 };
+
+const SyncPreviewValue = ({ label, value }: { label: string; value: number }) => (
+  <div className='bg-base-100 rounded-md px-2 py-2'>
+    <div className='text-base font-semibold tabular-nums'>{value}</div>
+    <div className='text-base-content/65 truncate text-[0.7rem]'>{label}</div>
+  </div>
+);
 
 export default GrimmLinkShelfPanel;

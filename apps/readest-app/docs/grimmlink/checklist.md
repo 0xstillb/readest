@@ -80,6 +80,23 @@
 - [ ] Off/Wi-Fi-only policy does not start a download on a metered connection
 - [ ] cancellation/invalid or interrupted download leaves no final corrupt import
 
+### 4A.1. Shelf Sync progress and status UX
+
+- [ ] tapping Sync immediately changes the button to a busy/syncing state
+- [ ] progress UI remains visible while the menu is open and does not appear silent
+- [ ] status shows the current phase: preparing, checking shelf, downloading, importing, cleaning up, and finishing
+- [ ] determinate progress shows completed/total books; byte progress is shown when available
+- [ ] when the total is unknown, an indeterminate progress indicator is shown instead of a frozen percentage
+- [ ] current book name and a compact summary (downloaded, updated, removed, skipped, failed) are visible
+- [ ] import/post-processing continues to report activity after the download reaches 100%
+- [ ] duplicate taps cannot start a second in-flight sync and the UI explains that sync is already running
+- [ ] Cancel stops new work safely and reports what was completed without leaving a corrupt final import
+- [ ] closing the menu, navigating away, backgrounding, and returning preserves the latest sync status
+- [ ] completed, queued, offline, auth, network, server, conflict, and invalid-data outcomes each have a distinct human-readable state
+- [ ] failure state includes a Retry action and does not claim Sync completed
+- [ ] successful completion shows a final summary and timestamp for Last successful sync
+- [ ] screen-reader/accessibility labels announce phase and progress changes without exposing credentials
+
 ## 4B. Library and device identity
 
 - [ ] Book Detail shows Grimmory source/status only for mapped or managed books

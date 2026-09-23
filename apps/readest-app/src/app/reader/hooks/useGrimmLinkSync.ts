@@ -5,9 +5,10 @@ import { useReaderStore } from '@/store/readerStore';
 import { useBookProgress } from '@/store/readerProgressStore';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useTranslation } from '@/hooks/useTranslation';
+import { DEFAULT_GRIMMLINK_SETTINGS } from '@/services/constants';
 import { debounce } from '@/utils/debounce';
 import { eventDispatcher } from '@/utils/event';
-import { getCFIFromXPointer, getXPointerFromCFI } from '@/utils/xcfi';
+import { getCFIFromXPointer, getXPointerFromCFI, XCFI } from '@/utils/xcfi';
 import { getIndexFromCfi } from '@/utils/cfi';
 import { getLocalProgressPreview } from './kosyncPreview';
 import type { BookDoc, TOCItem } from '@/libs/document';
@@ -50,19 +51,40 @@ const chapterForIndex = (toc: TOCItem[], index: number | null): string | undefin
     ?.label?.trim();
 };
 
-const getRemoteChapterLabel = async (
-  remote: { progress?: string; location?: string },
+/**
+ * Resolve the remote position to the same TOC label used by This device.
+ *
+ * Grimmory stores EPUB progress as a CREngine XPointer. We only need its
+ * `DocFragment[N]` spine index to find the chapter, so do not round-trip the
+ * pointer through a document/DOM here. Apart from being cheaper, this keeps
+ * the conflict dialog useful when a remote XPointer points into a malformed
+ * or not-yet-loaded section that cannot be converted to a full CFI.
+ */
+export const getRemoteChapterLabel = (
+  remote: {
+    progress?: string;
+    location?: string;
+    chapter?: string;
+    chapterTitle?: string;
+    sectionLabel?: string;
+  },
   bookDoc: BookDoc,
-): Promise<string | undefined> => {
-  const position = remote.location ?? remote.progress;
+): string | undefined => {
+  const explicitLabel = [remote.chapter, remote.chapterTitle, remote.sectionLabel]
+    .map((label) => label?.trim())
+    .find((label): label is string => Boolean(label));
+  if (explicitLabel) return explicitLabel;
+
+  const position = (remote.location ?? remote.progress)?.trim();
   if (!position) return undefined;
+
   try {
-    const cfi = position.startsWith('/body/DocFragment[')
-      ? await getCFIFromXPointer(position, undefined, undefined, bookDoc)
-      : position.startsWith('epubcfi(')
-        ? position
-        : undefined;
-    return cfi ? chapterForIndex(bookDoc.toc ?? [], getIndexFromCfi(cfi)) : undefined;
+    const index = position.startsWith('epubcfi(')
+      ? getIndexFromCfi(position)
+      : position.startsWith('/body/DocFragment')
+        ? XCFI.extractSpineIndex(position)
+        : null;
+    return chapterForIndex(bookDoc.toc ?? [], index);
   } catch {
     return undefined;
   }
@@ -73,6 +95,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
   const _ = useTranslation();
   const { appService } = useEnv();
   const { settings } = useSettingsStore();
+  const grimmlink = settings.grimmlink ?? DEFAULT_GRIMMLINK_SETTINGS;
   const getProgress = useReaderStore((s) => s.getProgress);
   const getView = useReaderStore((s) => s.getView);
   const getBookData = useBookDataStore((s) => s.getBookData);
@@ -94,18 +117,18 @@ export const useGrimmLinkSync = (bookKey: string) => {
   } | null>(null);
 
   const client = useMemo(() => {
-    const config = settings.grimmlink;
+    const config = grimmlink;
     return appService && config.enabled && config.serverUrl && config.userkey
       ? new GrimmLinkClient(config)
       : null;
-  }, [appService, settings.grimmlink]);
+  }, [appService, grimmlink]);
 
   const store = useMemo(() => {
-    const config = settings.grimmlink;
+    const config = grimmlink;
     return appService && config.enabled
       ? new GrimmLinkSyncStore(appService, `${config.serverUrl}\u0000${config.username}`)
       : null;
-  }, [appService, settings.grimmlink]);
+  }, [appService, grimmlink]);
 
   const outbox = useMemo(
     () => (client && store ? new GrimmLinkOutbox(store, client) : null),
@@ -113,7 +136,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
   );
 
   const provider = useMemo(() => {
-    const config = settings.grimmlink;
+    const config = grimmlink;
     if (
       !appService ||
       !client ||
@@ -130,7 +153,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       config,
       store,
     );
-  }, [appService, client, settings.grimmlink, store]);
+  }, [appService, client, grimmlink, store]);
 
   const makePosition = useCallback(async () => {
     const local = getProgress(bookKey);
@@ -196,7 +219,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       suppressNextPush.current = false;
       return;
     }
-    if (!provider || !pulled.current || settings.grimmlink.strategy === 'receive') return;
+    if (!provider || !pulled.current || grimmlink.strategy === 'receive') return;
     const book = getBookData(bookKey)?.book;
     const position = await makePosition();
     if (book && position && store && outbox) {
@@ -206,7 +229,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         lastBookLink.current = link;
         await store.enqueueProgress(
           book.hash,
-          toGrimmLinkProgressPayload(book, link, position, settings.grimmlink),
+          toGrimmLinkProgressPayload(book, link, position, grimmlink),
         );
         setSyncState('queued');
         void outbox.replay();
@@ -218,7 +241,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         );
       }
     }
-  }, [bookKey, getBookData, makePosition, outbox, provider, settings.grimmlink.strategy, store]);
+  }, [bookKey, getBookData, makePosition, outbox, provider, grimmlink.strategy, store]);
 
   const pushProgress = useMemo(
     () =>
@@ -237,7 +260,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         const book = data?.book;
         const bookDoc = data?.bookDoc;
         if (!book || !bookDoc) return;
-        if (settings.grimmlink.strategy === 'send') {
+        if (grimmlink.strategy === 'send') {
           pulled.current = true;
           setSyncState('synced');
           return;
@@ -289,10 +312,10 @@ export const useGrimmLinkSync = (bookKey: string) => {
           ? progress.section
           : progress.pageinfo;
         const disposition = progressPullDisposition(
-          settings.grimmlink.strategy,
+          grimmlink.strategy,
           remoteUpdatedAt > localUpdatedAt,
           remote.device_id,
-          settings.grimmlink.deviceId,
+          grimmlink.deviceId,
         );
         const details: SyncDetails = {
           book,
@@ -306,7 +329,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
               : undefined,
             currentPage: progress.section?.current,
             totalPages: progress.section?.total,
-            device: settings.grimmlink.deviceName,
+            device: grimmlink.deviceName,
             updatedAt: localUpdatedAt,
           },
           remote: {
@@ -332,7 +355,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         if (pullInFlight.current === run) pullInFlight.current = null;
       }
     },
-    [_, applyRemote, bookKey, getBookData, progress, provider, settings.grimmlink.strategy],
+    [_, applyRemote, bookKey, getBookData, progress, provider, grimmlink.strategy],
   );
 
   useEffect(() => {
@@ -357,12 +380,11 @@ export const useGrimmLinkSync = (bookKey: string) => {
     if (provider && progress && !pulled.current) void pullProgress();
   }, [progress, provider, pullProgress]);
   useEffect(() => {
-    if (syncState === 'synced' && progress && settings.grimmlink.strategy !== 'receive')
-      pushProgress();
-  }, [progress, pushProgress, settings.grimmlink.strategy, syncState]);
+    if (syncState === 'synced' && progress && grimmlink.strategy !== 'receive') pushProgress();
+  }, [progress, pushProgress, grimmlink.strategy, syncState]);
 
   useEffect(() => {
-    if (!client || !store || !settings.grimmlink.syncMetadata) return;
+    if (!client || !store || !grimmlink.syncMetadata) return;
     const book = getBookData(bookKey)?.book;
     if (!book) return;
     void client
@@ -370,17 +392,16 @@ export const useGrimmLinkSync = (bookKey: string) => {
       .then(async ({ capabilities }) => {
         const ratings = new GrimmLinkRatingProvider(client, store, {
           capabilities,
-          device: settings.grimmlink.deviceName,
-          deviceId: settings.grimmlink.deviceId,
+          device: grimmlink.deviceName,
+          deviceId: grimmlink.deviceId,
         });
         await ratings.pull(book.hash, await store.getRating(book.hash));
       })
       .catch(() => {});
-  }, [bookKey, client, getBookData, settings.grimmlink, store]);
+  }, [bookKey, client, getBookData, grimmlink, store]);
 
   useEffect(() => {
-    if (!client || !store || !outbox || !settings.grimmlink.syncMetadata || metadataPulled.current)
-      return;
+    if (!client || !store || !outbox || !grimmlink.syncMetadata || metadataPulled.current) return;
     const data = getBookData(bookKey);
     const book = data?.book;
     if (!book) return;
@@ -390,8 +411,8 @@ export const useGrimmLinkSync = (bookKey: string) => {
       .then(async ({ capabilities }) => {
         const metadata = new GrimmLinkMetadataProvider(client, store, {
           capabilities,
-          device: settings.grimmlink.deviceName,
-          deviceId: settings.grimmlink.deviceId,
+          device: grimmlink.deviceName,
+          deviceId: grimmlink.deviceId,
         });
         const notes = data?.config?.booknotes ?? [];
         await metadata.pull(
@@ -404,7 +425,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
             console.warn('[GrimmLink] retained unresolved remote note', note.id);
           },
         );
-        if (settings.grimmlink.strategy !== 'receive') {
+        if (grimmlink.strategy !== 'receive') {
           const link = await provider?.resolveLink(book);
           if (link) {
             await metadata.queuePush(
@@ -421,14 +442,14 @@ export const useGrimmLinkSync = (bookKey: string) => {
       .catch(() => {
         metadataPulled.current = false;
       });
-  }, [bookKey, client, getBookData, outbox, provider, settings.grimmlink, store, updateBooknotes]);
+  }, [bookKey, client, getBookData, outbox, provider, grimmlink, store, updateBooknotes]);
 
   const startSession = useCallback(async () => {
     if (
       !provider ||
       !store ||
       !outbox ||
-      !settings.grimmlink.syncSessions ||
+      !grimmlink.syncSessions ||
       sessionTracker.current.isActive()
     )
       return;
@@ -445,7 +466,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       currentPage: value?.currentPage,
       totalPages: value?.totalPages,
     });
-  }, [makePosition, outbox, provider, settings.grimmlink.syncSessions, store]);
+  }, [makePosition, outbox, provider, grimmlink.syncSessions, store]);
 
   const closeSession = useCallback(async () => {
     if (sessionClosing.current) return sessionClosing.current;
@@ -454,7 +475,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         !provider ||
         !store ||
         !outbox ||
-        !settings.grimmlink.syncSessions ||
+        !grimmlink.syncSessions ||
         !sessionTracker.current.isActive()
       )
         return;
@@ -493,8 +514,8 @@ export const useGrimmLinkSync = (bookKey: string) => {
           bookId: link.bookId,
           bookHash: book.hash,
           bookType: book.format,
-          device: settings.grimmlink.deviceName,
-          deviceId: settings.grimmlink.deviceId,
+          device: grimmlink.deviceName,
+          deviceId: grimmlink.deviceId,
         },
       );
       if (session) {
@@ -509,7 +530,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     } finally {
       if (sessionClosing.current === run) sessionClosing.current = null;
     }
-  }, [bookKey, getBookData, makePosition, outbox, provider, settings.grimmlink, store]);
+  }, [bookKey, getBookData, makePosition, outbox, provider, grimmlink, store]);
 
   useEffect(() => {
     void startSession();
@@ -556,6 +577,12 @@ export const useGrimmLinkSync = (bookKey: string) => {
       suppressNextPush.current = true;
       setConflictDetails(null);
       setSyncState('synced');
+    },
+    // Closing the dialog is a dismissal, not a choice. Keep the remote
+    // position untouched so an explicit Pull can show the same conflict again.
+    dismissConflict: () => {
+      setConflictDetails(null);
+      setSyncState('idle');
     },
   };
 };

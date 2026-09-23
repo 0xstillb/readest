@@ -1203,7 +1203,7 @@ const FoliateViewer: React.FC<{
           details={grimmlinkSync.conflictDetails}
           onResolveWithLocal={grimmlinkSync.resolveWithLocal}
           onResolveWithRemote={grimmlinkSync.resolveWithRemote}
-          onClose={grimmlinkSync.resolveWithLocal}
+          onClose={grimmlinkSync.dismissConflict}
         />
       )}
     </>

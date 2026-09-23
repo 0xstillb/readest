@@ -29,6 +29,10 @@ export interface GrimmLinkProgress {
   bookFileId?: number;
   progress?: string;
   location?: string;
+  /** Optional display labels supported by newer Grimmory responses. */
+  chapter?: string;
+  chapterTitle?: string;
+  sectionLabel?: string;
   percentage?: number;
   currentPage?: number;
   totalPages?: number;

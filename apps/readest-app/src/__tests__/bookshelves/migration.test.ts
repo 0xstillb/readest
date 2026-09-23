@@ -39,6 +39,7 @@ beforeEach(() => {
     replicaDeviceId: 'device',
     kosync: { ...DEFAULT_SYSTEM_SETTINGS.kosync!, deviceId: 'kosync' },
     bookorbit: { ...DEFAULT_SYSTEM_SETTINGS.bookorbit!, deviceId: 'bookorbit' },
+    grimmlink: { ...DEFAULT_SYSTEM_SETTINGS.grimmlink!, deviceId: 'grimmlink' },
   };
 });
 afterEach(() => localStorage.clear());

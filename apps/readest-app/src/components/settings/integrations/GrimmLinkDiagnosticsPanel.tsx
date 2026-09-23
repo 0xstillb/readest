@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  MdCheckCircle,
+  MdCloudOff,
+  MdErrorOutline,
+  MdRefresh,
+  MdSyncProblem,
+} from 'react-icons/md';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
@@ -111,6 +118,50 @@ const GrimmLinkDiagnosticsPanel = () => {
       : diagnostics.lastSuccessAt
         ? 'synced'
         : 'idle';
+  const connectionLabel = _(
+    connection === 'connected'
+      ? 'Connected'
+      : connection === 'checking'
+        ? 'Checking…'
+        : connection === 'offline'
+          ? 'Offline'
+          : connection === 'error'
+            ? 'Connection problem'
+            : 'Not checked',
+  );
+  const syncStatusLabel = _(
+    syncStatus === 'auth-error'
+      ? 'Authentication required'
+      : syncStatus === 'server-error'
+        ? 'Server error'
+        : syncStatus === 'invalid-data'
+          ? 'Invalid data'
+          : syncStatus === 'queued'
+            ? 'Waiting to sync'
+            : syncStatus === 'synced'
+              ? 'Up to date'
+              : syncStatus === 'offline'
+                ? 'Offline'
+                : syncStatus === 'conflict'
+                  ? 'Needs attention'
+                  : 'Ready',
+  );
+  const pendingBreakdown = [
+    summary.pendingByCategory.progress > 0
+      ? _('{{count}} progress', { count: summary.pendingByCategory.progress })
+      : null,
+    summary.pendingByCategory.sessions > 0
+      ? _('{{count}} sessions', { count: summary.pendingByCategory.sessions })
+      : null,
+    summary.pendingByCategory.metadata > 0
+      ? _('{{count}} metadata', { count: summary.pendingByCategory.metadata })
+      : null,
+    summary.pendingByCategory.status > 0
+      ? _('{{count}} status', { count: summary.pendingByCategory.status })
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   const replay = async () => {
     setBusy(true);
@@ -150,66 +201,93 @@ const GrimmLinkDiagnosticsPanel = () => {
   };
 
   return (
-    <section className='space-y-2 pt-2'>
-      <div className='flex items-center justify-between gap-2'>
-        <SectionTitle>{_('Sync diagnostics')}</SectionTitle>
-        <button type='button' className='btn btn-ghost btn-sm' onClick={() => void refresh()}>
+    <section className='space-y-3 pt-2'>
+      <div className='flex items-end justify-between gap-3'>
+        <div>
+          <SectionTitle>{_('Sync diagnostics')}</SectionTitle>
+          <p className='text-base-content/65 mt-0.5 text-xs'>
+            {_('Connection health and items waiting to sync')}
+          </p>
+        </div>
+        <button
+          type='button'
+          className='btn btn-ghost h-10 min-h-10 gap-1.5 px-3'
+          disabled={connection === 'checking'}
+          onClick={() => {
+            void refresh();
+            void checkConnection();
+          }}
+        >
+          <MdRefresh
+            aria-hidden='true'
+            className={connection === 'checking' ? 'animate-spin' : ''}
+          />
           {_('Refresh')}
         </button>
       </div>
-      <div className='card eink-bordered border-base-200 bg-base-100 border p-3 text-sm'>
-        <div className='flex justify-between'>
-          <span>{_('Connection')}</span>
-          <strong>
-            {_(
-              connection === 'connected'
-                ? 'Connected'
-                : connection === 'checking'
-                  ? 'Checking…'
-                  : connection === 'offline'
-                    ? 'Offline'
-                    : connection === 'error'
-                      ? 'Error'
-                      : 'Not checked',
-            )}
-          </strong>
-        </div>
-        <div className='mt-1 flex justify-between'>
-          <span>{_('Pending items')}</span>
-          <strong>{summary.totalPending}</strong>
-        </div>
-        <div className='mt-1 flex justify-between'>
-          <span>{_('Invalid items')}</span>
-          <strong>{summary.invalid}</strong>
-        </div>
-        <div className='mt-1 flex justify-between'>
-          <span>{_('Sync status')}</span>
-          <strong>{_(syncStatus)}</strong>
-        </div>
-        <div className='mt-1 flex justify-between'>
-          <span>{_('Last successful sync')}</span>
-          <span>{formatTime(diagnostics.lastSuccessAt)}</span>
-        </div>
-        <div className='mt-1 flex justify-between'>
-          <span>{_('Last attempt')}</span>
-          <span>{formatTime(diagnostics.lastAttemptAt)}</span>
-        </div>
-        {diagnostics.lastError && (
-          <p className='text-error mt-2 break-words'>{`[${diagnostics.lastError.category}] ${diagnostics.lastError.message}`}</p>
+      <div
+        role='status'
+        className='eink-bordered border-base-200 bg-base-200/40 flex items-center gap-3 rounded-lg border px-3 py-3'
+      >
+        {connection === 'connected' ? (
+          <MdCheckCircle aria-hidden='true' className='h-6 w-6 shrink-0' />
+        ) : connection === 'offline' ? (
+          <MdCloudOff aria-hidden='true' className='h-6 w-6 shrink-0' />
+        ) : connection === 'error' ? (
+          <MdSyncProblem aria-hidden='true' className='h-6 w-6 shrink-0' />
+        ) : (
+          <MdRefresh
+            aria-hidden='true'
+            className={`h-6 w-6 shrink-0 ${connection === 'checking' ? 'animate-spin' : ''}`}
+          />
         )}
+        <div className='min-w-0 flex-1'>
+          <div className='font-medium'>{connectionLabel}</div>
+          <div className='text-base-content/65 truncate text-xs'>
+            {safeOrigin(config.serverUrl)}
+          </div>
+        </div>
+        <span className='badge badge-outline shrink-0'>{syncStatusLabel}</span>
       </div>
+      <div className='card eink-bordered border-base-200 bg-base-100 border text-sm'>
+        <div className='divide-base-200 divide-y px-4'>
+          <DiagnosticRow
+            label={_('Pending items')}
+            value={String(summary.totalPending)}
+            description={pendingBreakdown || _('Nothing is waiting')}
+          />
+          <DiagnosticRow label={_('Invalid items')} value={String(summary.invalid)} />
+          <DiagnosticRow
+            label={_('Last successful sync')}
+            value={formatTime(diagnostics.lastSuccessAt)}
+          />
+          <DiagnosticRow label={_('Last attempt')} value={formatTime(diagnostics.lastAttemptAt)} />
+        </div>
+      </div>
+      {diagnostics.lastError && (
+        <div
+          role='alert'
+          className='eink-bordered border-error/40 bg-error/10 flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm'
+        >
+          <MdErrorOutline aria-hidden='true' className='text-error mt-0.5 h-5 w-5 shrink-0' />
+          <div className='min-w-0'>
+            <div className='font-medium'>{_('Last sync problem')}</div>
+            <div className='break-words text-[0.9em]'>{`[${diagnostics.lastError.category}] ${diagnostics.lastError.message}`}</div>
+          </div>
+        </div>
+      )}
       <div className='flex flex-wrap gap-2'>
         <button
           type='button'
-          className='btn btn-primary btn-sm'
-          disabled={busy}
+          className='btn btn-contrast h-10 min-h-10'
+          disabled={busy || summary.totalPending === 0}
           onClick={() => void replay()}
         >
           {busy ? _('Retrying…') : _('Retry pending')}
         </button>
         <button
           type='button'
-          className='btn btn-ghost btn-sm'
+          className='btn btn-ghost h-10 min-h-10 text-error'
           disabled={!summary.invalid}
           onClick={() => void clearInvalid()}
         >
@@ -217,7 +295,7 @@ const GrimmLinkDiagnosticsPanel = () => {
         </button>
         <button
           type='button'
-          className='btn btn-ghost btn-sm'
+          className='btn btn-ghost h-10 min-h-10'
           onClick={() => void exportDiagnostics()}
         >
           {_('Export diagnostics')}
@@ -233,5 +311,23 @@ const GrimmLinkDiagnosticsPanel = () => {
     </section>
   );
 };
+
+const DiagnosticRow = ({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string;
+  description?: string;
+}) => (
+  <div className='flex min-h-14 items-center justify-between gap-4 py-2.5'>
+    <div className='min-w-0'>
+      <div className='font-medium'>{label}</div>
+      {description && <div className='text-base-content/65 truncate text-xs'>{description}</div>}
+    </div>
+    <span className='shrink-0 text-end tabular-nums'>{value}</span>
+  </div>
+);
 
 export default GrimmLinkDiagnosticsPanel;

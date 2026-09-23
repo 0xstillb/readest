@@ -39,13 +39,11 @@ import { getMaxInlineSize } from '@/utils/config';
 import { nextThemeMode } from '@/utils/ambientLight';
 import { saveViewSettings } from '@/helpers/settings';
 import { tauriHandleToggleFullScreen } from '@/utils/window';
-import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
-import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
-import { syncSubscribedGrimmLinkShelves } from '@/services/grimmlink/shelfSync';
-import { useLibraryStore } from '@/store/libraryStore';
+import { useGrimmLinkShelfSync } from '@/hooks/useGrimmLinkShelfSync';
 import { setCoverSpread } from '@/utils/spread';
 import MenuItem from '@/components/MenuItem';
 import Menu from '@/components/Menu';
+import GrimmLinkShelfSyncStatus from '@/components/settings/integrations/GrimmLinkShelfSyncStatus';
 
 interface ViewMenuProps {
   bookKey: string;
@@ -99,7 +97,6 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
   );
   const [applyThemeToPDF, setApplyThemeToPDF] = useState(viewSettings!.applyThemeToPDF!);
   const [rtlSpread, setRtlSpread] = useState(bookData?.bookDoc?.dir === 'rtl');
-  const [shelfSyncing, setShelfSyncing] = useState(false);
 
   const zoomIn = () => setZoomLevel((prev) => Math.min(prev + ZOOM_STEP, MAX_ZOOM_LEVEL));
   const zoomOut = () => setZoomLevel((prev) => Math.max(prev - ZOOM_STEP, MIN_ZOOM_LEVEL));
@@ -168,48 +165,18 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
     eventDispatcher.dispatch('push-kosync', { bookKey, provider: 'bookorbit' });
   };
 
-  const handleShelfSync = () => {
-    setIsDropdownOpen?.(false);
-    if (!settings.grimmlink?.enabled || !settings.grimmlink.serverUrl || !settings.grimmlink.userkey) {
-      setSettingsDialogBookKey(bookKey);
-      setRequestedPanel('Integrations');
-      setRequestedSubPage('grimmlink');
-      setSettingsDialogOpen(true);
-      return;
-    }
-    if (!appService) return;
-    setShelfSyncing(true);
-    void (async () => {
-      try {
-        const client = new GrimmLinkClient(settings.grimmlink);
-        const store = new GrimmLinkSyncStore(appService, `${settings.grimmlink.serverUrl}\u0000${settings.grimmlink.username}`);
-        if ((await store.getShelfSubscriptions()).length === 0) {
-          eventDispatcher.dispatch('toast', { message: _('Select at least one Grimmory shelf first.'), type: 'info' });
-          return;
-        }
-        const result = await syncSubscribedGrimmLinkShelves(client, store, () => useLibraryStore.getState().library, async (_book, nextLibrary) => {
-          useLibraryStore.getState().setLibrary(nextLibrary);
-          await appService.saveLibraryBooks(nextLibrary);
-        }, appService, undefined, async (_book, nextLibrary) => {
-          useLibraryStore.getState().setLibrary(nextLibrary);
-          await appService.saveLibraryBooks(nextLibrary);
-        });
-        if (result.downloaded > 0) {
-          eventDispatcher.dispatch('toast', { message: _('Imported {{count}} books.', { count: result.downloaded }), type: 'success' });
-        } else if (result.reused > 0) {
-          eventDispatcher.dispatch('toast', { message: _('All selected shelf books are already in your library.'), type: 'info' });
-        } else if (result.removed > 0) {
-          eventDispatcher.dispatch('toast', { message: _('Removed {{count}} books no longer in selected shelves.', { count: result.removed }), type: 'info' });
-        } else {
-          eventDispatcher.dispatch('toast', { message: _('No books found in selected shelves.'), type: 'info' });
-        }
-      } catch (error) {
-        eventDispatcher.dispatch('toast', { message: `${_('Shelf sync failed')}: ${error instanceof Error ? error.message : _('Connection error')}`, type: 'error' });
-      } finally {
-        setShelfSyncing(false);
-      }
-    })();
-  };
+  const { handleShelfSync, cancelShelfSync, shelfSyncing, shelfSyncStatus } = useGrimmLinkShelfSync(
+    {
+      settings: settings?.grimmlink,
+      closeMenu: () => setIsDropdownOpen?.(false),
+      onConfigure: () => {
+        setSettingsDialogBookKey(bookKey);
+        setRequestedPanel('Integrations');
+        setRequestedSubPage('grimmlink');
+        setSettingsDialogOpen(true);
+      },
+    },
+  );
 
   const handleStartRSVP = () => {
     setIsDropdownOpen?.(false);
@@ -619,10 +586,16 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
       />
 
       <MenuItem
-        label={_('Shelf Sync')}
+        label={shelfSyncing ? _('Syncing shelf…') : _('Shelf Sync')}
         Icon={MdOutlineCollectionsBookmark}
         onClick={handleShelfSync}
         disabled={shelfSyncing}
+      />
+      <GrimmLinkShelfSyncStatus
+        syncing={shelfSyncing}
+        status={shelfSyncStatus}
+        onCancel={cancelShelfSync}
+        compact
       />
 
       <hr aria-hidden='true' className='border-base-300 my-1' />

@@ -1,4 +1,3 @@
-import clsx from 'clsx';
 import React from 'react';
 import Dialog from '@/components/Dialog';
 import { SectionTitle } from '@/components/settings/primitives';
@@ -27,7 +26,13 @@ const timeLabel = (value: string | number | undefined) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? null
-    : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+};
+
+const timestamp = (value: string | number | undefined) => {
+  if (value == null) return null;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? null : time;
 };
 
 const positionSummary = (details: SyncDetails, side: 'local' | 'remote', fallback: string) => {
@@ -57,55 +62,64 @@ const GrimmLinkConflictResolver: React.FC<GrimmLinkConflictResolverProps> = ({
   const remoteSummary = positionSummary(details, 'remote', _('Remote position'));
   const localTime = timeLabel(details.local.updatedAt);
   const remoteTime = timeLabel(details.remote.updatedAt);
+  const localTimestamp = timestamp(details.local.updatedAt);
+  const remoteTimestamp = timestamp(details.remote.updatedAt);
+  const newerSide =
+    localTimestamp != null && remoteTimestamp != null && localTimestamp !== remoteTimestamp
+      ? localTimestamp > remoteTimestamp
+        ? 'local'
+        : 'remote'
+      : null;
 
   return (
     <Dialog isOpen={true} onClose={onClose} title={_('Reading progress conflict')}>
       <p className='text-base-content/70 mb-5 mt-1 px-1 text-center text-sm leading-relaxed'>
-        {_('Choose the position you want to continue from.')}
+        {_('Readest found two different reading positions. Nothing changes until you choose.')}
       </p>
       <div className='grid gap-3 sm:grid-cols-2'>
-        <div
-          role='group'
-          className={clsx(
-            'eink-bordered group flex min-h-28 w-full flex-col items-start rounded-xl border px-4 py-3.5 text-left',
-            'border-base-300 bg-base-100 hover:bg-base-200/60',
-            'focus-visible:ring-base-content/20 focus-visible:outline-hidden focus-visible:ring-2',
+        <div className='eink-bordered border-base-300 bg-base-100 flex min-h-32 w-full flex-col rounded-xl border px-4 py-3.5'>
+          <div className='flex items-center justify-between gap-2'>
+            <SectionTitle as='span' className='ps-0!'>
+              {_('This device')}
+            </SectionTitle>
+            {newerSide === 'local' && (
+              <span className='badge badge-outline badge-sm'>{_('Newer')}</span>
+            )}
+          </div>
+          <span className='text-base-content/65 mt-1 line-clamp-1 text-xs'>{localDevice}</span>
+          <span className='mt-2 line-clamp-2 text-base font-semibold'>{localSummary}</span>
+          {localTime && (
+            <span className='text-base-content/65 mt-auto pt-2 text-xs'>{localTime}</span>
           )}
-        >
-          <SectionTitle as='span' className='ps-0! text-base-content/60!'>
-            {_('This device')}
-          </SectionTitle>
-          <span className='mt-1 line-clamp-1 font-medium'>{localDevice}</span>
-          <span className='mt-1 line-clamp-2 text-sm font-semibold'>{localSummary}</span>
-          {localTime && <span className='mt-auto pt-1 text-xs opacity-60'>{localTime}</span>}
         </div>
-        <div
-          role='group'
-          className={clsx(
-            'btn btn-primary group flex min-h-28 w-full flex-col items-start justify-start rounded-xl px-4 py-3.5 text-left font-normal normal-case',
-            'focus-visible:ring-primary/40 focus-visible:outline-hidden focus-visible:ring-2',
+        <div className='eink-bordered border-base-300 bg-base-100 flex min-h-32 w-full flex-col rounded-xl border px-4 py-3.5'>
+          <div className='flex items-center justify-between gap-2'>
+            <SectionTitle as='span' className='ps-0!'>
+              {_('Grimmory')}
+            </SectionTitle>
+            {newerSide === 'remote' && (
+              <span className='badge badge-outline badge-sm'>{_('Newer')}</span>
+            )}
+          </div>
+          <span className='text-base-content/65 mt-1 line-clamp-1 text-xs'>{remoteDevice}</span>
+          <span className='mt-2 line-clamp-2 text-base font-semibold'>{remoteSummary}</span>
+          {remoteTime && (
+            <span className='text-base-content/65 mt-auto pt-2 text-xs'>{remoteTime}</span>
           )}
-        >
-          <SectionTitle as='span' className='ps-0! text-current! opacity-75'>
-            {_('Grimmory')}
-          </SectionTitle>
-          <span className='mt-1 line-clamp-1 font-medium'>{remoteDevice}</span>
-          <span className='mt-1 line-clamp-2 text-sm font-semibold'>{remoteSummary}</span>
-          {remoteTime && <span className='mt-auto pt-1 text-xs opacity-75'>{remoteTime}</span>}
         </div>
       </div>
       <div className='mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end'>
         <button
           type='button'
           onClick={onResolveWithLocal}
-          className='btn btn-outline min-h-11 flex-1 sm:flex-none'
+          className='btn btn-ghost eink-bordered min-h-11 flex-1 sm:flex-none'
         >
           {_('Continue here')}
         </button>
         <button
           type='button'
           onClick={onResolveWithRemote}
-          className='btn btn-primary min-h-11 flex-1 sm:flex-none'
+          className='btn btn-contrast min-h-11 flex-1 sm:flex-none'
         >
           {_('Use Grimmory position')}
         </button>
