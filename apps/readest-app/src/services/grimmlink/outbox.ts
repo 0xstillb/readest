@@ -3,7 +3,7 @@ import { GrimmLinkSyncStore, type GrimmLinkOutboxRow } from './GrimmLinkSyncStor
 
 type ReplayClient = {
   updateProgress?(payload: Record<string, unknown>): Promise<unknown>;
-  postSessionBatch?(payload: Record<string, unknown>): Promise<unknown>;
+  postSessionBatch?(payload: Record<string, unknown>, idempotencyKey?: string): Promise<unknown>;
   updateReadStatus?(bookId: number, status: string): Promise<unknown>;
   syncMetadata?(payload: Record<string, unknown>): Promise<unknown>;
 };
@@ -93,7 +93,10 @@ export class GrimmLinkOutbox {
           sessions: batch.map((row) => row.payload['session']),
         };
         try {
-          await this.client.postSessionBatch(payload);
+          await this.client.postSessionBatch(
+            payload,
+            `readest-session-${batch[0]!.id}-${batch.at(-1)!.id}`,
+          );
           successfulIds.push(...batch.map((row) => row.id));
         } catch (error) {
           failedIds.push(...batch.map((row) => row.id));

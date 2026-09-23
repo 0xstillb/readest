@@ -12,6 +12,7 @@ import {
   validateShelfDownload,
 } from './download';
 import { GrimmLinkSyncStore } from './GrimmLinkSyncStore';
+import { recordGrimmLinkPerformance } from './einkDiagnostics';
 import type { ProgressHandler } from '@/utils/transfer';
 import { getLocalBookFilename } from '@/utils/book';
 import { isTauriAppPlatform } from '../environment';
@@ -54,11 +55,14 @@ export const buildGrimmLinkLibraryPresenceIndex = async (
   const present = await Promise.all(
     library
       .filter((book) => !book.deletedAt)
-      .map(async (book) => ({
-        book,
-        path: getLocalBookFilename(book),
-        present: await appService.exists(getLocalBookFilename(book), 'Books'),
-      })),
+      .map(async (book) => {
+        recordGrimmLinkPerformance('shelfFileChecks');
+        return {
+          book,
+          path: getLocalBookFilename(book),
+          present: await appService.exists(getLocalBookFilename(book), 'Books'),
+        };
+      }),
   );
   const index: GrimmLinkLibraryPresenceIndex = {
     hashes: new Set(),
@@ -106,7 +110,9 @@ const removeShelfEntries = async (
   entries: { shelfType: string; shelfId: number; bookId: number }[],
 ) => {
   const batchStore = store as GrimmLinkSyncStore & {
-    removeShelfEntries?: (entries: { shelfType: string; shelfId: number; bookId: number }[]) => Promise<void>;
+    removeShelfEntries?: (
+      entries: { shelfType: string; shelfId: number; bookId: number }[],
+    ) => Promise<void>;
   };
   if (batchStore.removeShelfEntries) return batchStore.removeShelfEntries(entries);
   for (const entry of entries)
@@ -330,7 +336,7 @@ export class GrimmLinkShelfProvider {
       // Deliberately serial: one import at a time bounds memory and prevents
       // duplicate records on Android/WebView readers.
       for (const remoteBook of needsDownload) {
-          await this.downloadAndImport(
+        await this.downloadAndImport(
           type,
           shelfId,
           remoteBook,
@@ -528,6 +534,7 @@ export async function syncSubscribedGrimmLinkShelves(
   const key = `${store.connectionId}`;
   const active = activeShelfSyncs.get(key);
   if (active) return active;
+  const startedAt = Date.now();
   const run = syncSubscribedGrimmLinkShelvesInternal(
     client,
     store,
@@ -541,6 +548,7 @@ export async function syncSubscribedGrimmLinkShelves(
   try {
     return await run;
   } finally {
+    recordGrimmLinkPerformance('shelfSyncDurationMs', Date.now() - startedAt);
     if (activeShelfSyncs.get(key) === run) activeShelfSyncs.delete(key);
   }
 }

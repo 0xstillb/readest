@@ -1,4 +1,5 @@
 import { GrimmLinkOutbox } from './outbox';
+import { recordGrimmLinkPerformance } from './einkDiagnostics';
 
 /**
  * Serializes replay requests for one connection. Calls made while a replay is
@@ -14,6 +15,7 @@ export class GrimmLinkReplayScheduler {
   constructor(private readonly outbox: GrimmLinkOutbox) {}
 
   requestReplay(delayMs = 0): Promise<void> {
+    recordGrimmLinkPerformance('replayRequested');
     if (this.running) {
       this.trailing = true;
       return this.running;
@@ -52,6 +54,7 @@ export class GrimmLinkReplayScheduler {
     const run = (async () => {
       do {
         this.trailing = false;
+        recordGrimmLinkPerformance('replayExecuted');
         await this.outbox.replay();
       } while (this.trailing);
     })();

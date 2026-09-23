@@ -173,6 +173,11 @@ describe('GrimmLink durable outbox', () => {
     expect(client.postSessionBatch.mock.calls.map(([payload]) => payload.sessions.length)).toEqual([
       500, 500, 1,
     ]);
+    expect(client.postSessionBatch.mock.calls.map(([, key]) => key)).toEqual([
+      'readest-session-session-0-session-499',
+      'readest-session-session-500-session-999',
+      'readest-session-session-1000-session-1000',
+    ]);
     expect(removed.flat()).toHaveLength(1001);
     expect(store.recordReplay).toHaveBeenCalledWith(
       expect.objectContaining({ rows: 1001, succeeded: 1001, failed: 0 }),

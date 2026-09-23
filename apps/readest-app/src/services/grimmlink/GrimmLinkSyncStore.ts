@@ -1,5 +1,6 @@
 import type { AppService } from '@/types/system';
 import type { GrimmLinkSessionEnvelope } from './sessions';
+import { recordGrimmLinkPerformance } from './einkDiagnostics';
 
 export type GrimmLinkOutboxCategory = 'progress' | 'sessions' | 'metadata' | 'status';
 
@@ -135,9 +136,37 @@ export class GrimmLinkSyncStore {
     readonly connectionId = 'default',
   ) {}
 
+  private async openInstrumentedDatabase(): Promise<
+    Awaited<ReturnType<AppService['openDatabase']>>
+  > {
+    const database = await this.appService.openDatabase(DB_SCHEMA, DB_PATH, 'Data');
+    recordGrimmLinkPerformance('dbOpens');
+    return new Proxy(database, {
+      get: (target, property) => {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (typeof value !== 'function') return value;
+        if (property === 'select') {
+          return (...args: unknown[]) => {
+            recordGrimmLinkPerformance('dbQueries');
+            return Reflect.apply(value, target, args);
+          };
+        }
+        if (property === 'execute') {
+          return (...args: unknown[]) => {
+            const statement = typeof args[0] === 'string' ? args[0].trimStart() : '';
+            const isRead = /^(SELECT|WITH|PRAGMA|EXPLAIN)\b/i.test(statement);
+            recordGrimmLinkPerformance(isRead ? 'dbQueries' : 'dbWrites');
+            return Reflect.apply(value, target, args);
+          };
+        }
+        return value.bind(target);
+      },
+    });
+  }
+
   private async initializeSchema(): Promise<void> {
     await this.appService.createDir('', 'Data', true);
-    const db = await this.appService.openDatabase(DB_SCHEMA, DB_PATH, 'Data');
+    const db = await this.openInstrumentedDatabase();
     try {
       for (const statement of schema) await db.execute(statement);
       await db
@@ -196,7 +225,7 @@ export class GrimmLinkSyncStore {
   ): Promise<T> {
     await this.ensureSchema();
     await this.appService.createDir('', 'Data', true);
-    const db = await this.appService.openDatabase(DB_SCHEMA, DB_PATH, 'Data');
+    const db = await this.openInstrumentedDatabase();
     try {
       return await fn(db);
     } finally {

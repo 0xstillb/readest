@@ -278,6 +278,19 @@ describe('GrimmLinkClient', () => {
     ]);
   });
 
+  it('sends a stable idempotency key with replayable session batches', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { ok: true }));
+    await new GrimmLinkClient(makeConfig()).postSessionBatch(
+      { bookId: 4, sessions: [{ startTime: '2026-09-23T00:00:00.000Z' }] },
+      'readest-session-session-a-session-z',
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toMatchObject({
+      'Idempotency-Key': 'readest-session-session-a-session-z',
+    });
+  });
+
   it('normalizes Grimmory shelf-book fields before downloading or importing', async () => {
     setFetch(async () =>
       jsonResponse(200, [
