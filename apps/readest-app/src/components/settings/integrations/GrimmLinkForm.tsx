@@ -62,7 +62,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
         ? settings.grimmlink.allowSelfSignedCertificate === true
         : false,
       username,
-      userkey: md5(password),
+      userkey: password ? md5(password) : settings.grimmlink.userkey,
       deviceName: deviceName.trim() || 'Readest',
     };
     try {
@@ -214,7 +214,12 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
               </div>
               <button
                 type='submit'
-                disabled={isConnecting || !serverUrl || !username || !password}
+                disabled={
+                  isConnecting ||
+                  !serverUrl ||
+                  !username ||
+                  (!password && !settings.grimmlink.userkey)
+                }
                 className={clsx(
                   'btn btn-contrast h-11 min-h-11 rounded-lg px-5 text-sm sm:shrink-0',
                   isConnecting && 'opacity-60',

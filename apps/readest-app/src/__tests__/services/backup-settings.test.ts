@@ -63,6 +63,22 @@ function makeSettings(overrides: Partial<SystemSettings> = {}): SystemSettings {
       checksumMethod: 'binary',
       strategy: 'prompt',
     },
+    grimmlink: {
+      enabled: true,
+      serverUrl: 'https://grimmlink.example',
+      fallbackUrl: 'https://fallback.example',
+      username: 'grimmory-user',
+      userkey: 'grimmory-key',
+      customHeaders: { 'CF-Access-Client-Secret': 'private-header' },
+      allowSelfSignedCertificate: true,
+      deviceId: 'grimmlink-device-legacy',
+      deviceName: 'Old tablet',
+      strategy: 'prompt',
+      syncProgress: true,
+      syncMetadata: true,
+      syncSessions: true,
+      syncReadStatus: true,
+    },
     webdav: {
       enabled: true,
       serverUrl: 'https://dav.example',
@@ -218,6 +234,12 @@ describe('sanitizeSettingsForBackup - blacklist', () => {
     expect(BACKUP_SETTINGS_BLACKLIST).toContain('icloud.deviceId');
     expect(BACKUP_SETTINGS_BLACKLIST).toContain('icloud.lastSyncedAt');
     expect(BACKUP_SETTINGS_BLACKLIST).toContain('icloud.providerSelectedAt');
+    expect(BACKUP_SETTINGS_BLACKLIST).toContain('grimmlink.enabled');
+    expect(BACKUP_SETTINGS_BLACKLIST).toContain('grimmlink.deviceId');
+    expect(BACKUP_SETTINGS_BLACKLIST).toContain('grimmlink.allowSelfSignedCertificate');
+    expect(BACKUP_SETTINGS_BLACKLIST).toContain('grimmlink.username');
+    expect(BACKUP_SETTINGS_BLACKLIST).toContain('grimmlink.userkey');
+    expect(BACKUP_SETTINGS_BLACKLIST).toContain('grimmlink.customHeaders');
   });
 });
 
@@ -227,6 +249,9 @@ describe('sanitizeSettingsForBackup - credentials', () => {
     expect(rec(out.kosync)['username']).toBeUndefined();
     expect(rec(out.kosync)['userkey']).toBeUndefined();
     expect(rec(out.kosync)['password']).toBeUndefined();
+    expect(rec(out.grimmlink)['username']).toBeUndefined();
+    expect(rec(out.grimmlink)['userkey']).toBeUndefined();
+    expect(rec(out.grimmlink)['customHeaders']).toBeUndefined();
     expect(rec(out.readwise)['accessToken']).toBeUndefined();
     expect(rec(out.hardcover)['accessToken']).toBeUndefined();
     expect(rec(out.notion)['accessToken']).toBeUndefined();
@@ -247,6 +272,9 @@ describe('sanitizeSettingsForBackup - credentials', () => {
   it('keeps credentials when includeCredentials is true', () => {
     const out = sanitizeSettingsForBackup(makeSettings(), { includeCredentials: true });
     expect(out.kosync.password).toBe('kpass');
+    expect(out.grimmlink.username).toBeUndefined();
+    expect(out.grimmlink.userkey).toBeUndefined();
+    expect(out.grimmlink.customHeaders).toBeUndefined();
     expect(out.readwise.accessToken).toBe('rw-token');
     expect(out.hardcover.accessToken).toBe('hc-token');
     expect(out.notion.accessToken).toBe('notion-token');
@@ -261,6 +289,9 @@ describe('sanitizeSettingsForBackup - credentials', () => {
     expect(out['localBooksDir']).toBeUndefined();
     expect(out['replicaDeviceId']).toBeUndefined();
     expect(rec(out['notion'])['lastSyncedAt']).toBeUndefined();
+    expect(rec(out['grimmlink'])['enabled']).toBeUndefined();
+    expect(rec(out['grimmlink'])['deviceId']).toBeUndefined();
+    expect(rec(out['grimmlink'])['allowSelfSignedCertificate']).toBeUndefined();
   });
 
   it('every credential path is a string', () => {
@@ -289,6 +320,34 @@ describe('mergeRestoredSettings', () => {
     expect(merged.version).toBe(9);
     expect(merged.migrationVersion).toBe(7);
     expect(merged.replicaDeviceId).toBe('device-uuid-aaa');
+  });
+
+  it('restores GrimmLink server details without exporting credentials or replacing device policy', () => {
+    const current = makeSettings({
+      grimmlink: {
+        enabled: false,
+        serverUrl: '',
+        fallbackUrl: '',
+        username: '',
+        userkey: '',
+        deviceId: 'this-device-id',
+        deviceName: 'This device',
+        strategy: 'prompt',
+        syncProgress: false,
+        syncMetadata: false,
+        syncSessions: false,
+        syncReadStatus: false,
+      },
+    });
+    const backup = sanitizeSettingsForBackup(makeSettings(), { includeCredentials: true });
+    const merged = mergeRestoredSettings(current, backup);
+
+    expect(merged.grimmlink.serverUrl).toBe('https://grimmlink.example');
+    expect(merged.grimmlink.username).toBe('');
+    expect(merged.grimmlink.userkey).toBe('');
+    expect(merged.grimmlink.enabled).toBe(false);
+    expect(merged.grimmlink.deviceId).toBe('this-device-id');
+    expect(merged.grimmlink.allowSelfSignedCertificate).toBeUndefined();
   });
 
   it('deep-merges nested objects, keeping current-only nested keys', () => {
@@ -368,7 +427,7 @@ describe('mergeRestoredSettings', () => {
       };
     };
     const named = (id: string, name: string, at: number) =>
-      shelfState(id, createBookshelf(name, id), at);
+      shelfState(id, createBookshelf(name, id as Parameters<typeof createBookshelf>[1]), at);
     const shelfNames = (settings: SystemSettings) =>
       readBookshelves(settings).map((shelf) => shelf.name);
     const CUSTOM_ID = '00000000-0000-4000-8000-000000000001';
