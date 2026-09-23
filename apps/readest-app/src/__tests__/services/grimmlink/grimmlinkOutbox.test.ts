@@ -53,6 +53,32 @@ describe('GrimmLink durable outbox', () => {
     await expect(restartedProcess.ready('progress')).resolves.toEqual([]);
   });
 
+  it('recovers after a process stops between remote acknowledgement and local queue removal', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueProgress('book-a', { percentage: 35 });
+    const remove = store.remove.bind(store);
+    let simulateCrash = true;
+    store.remove = async (ids) => {
+      if (simulateCrash) {
+        simulateCrash = false;
+        throw new Error('simulated process stop before local acknowledgement');
+      }
+      await remove(ids);
+    };
+    const client = { updateProgress: vi.fn().mockResolvedValue({ ok: true }) };
+
+    await expect(new GrimmLinkOutbox(store, client).replay()).rejects.toThrow(
+      'simulated process stop',
+    );
+
+    // Remote APIs must tolerate the retry: local durable delivery is at least once
+    // across a crash in the acknowledgement window.
+    const restartedProcess = new GrimmLinkSyncStore(service, 'connection-a');
+    await new GrimmLinkOutbox(restartedProcess, client).replay();
+    expect(client.updateProgress).toHaveBeenCalledTimes(2);
+    await expect(restartedProcess.ready('progress')).resolves.toEqual([]);
+  });
+
   it('backs off a failed category without blocking a different ready category', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueProgress('book-a', { percentage: 10 });
@@ -83,6 +109,85 @@ describe('GrimmLink durable outbox', () => {
 
     expect(await store.isPaused()).toBe(true);
     expect(await store.all('progress')).toHaveLength(1);
+  });
+
+  it('resumes a paused queue after credentials recover and persists replay metrics', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueProgress('book-a', { percentage: 10 });
+    const client = {
+      updateProgress: vi
+        .fn()
+        .mockRejectedValueOnce(new GrimmLinkRequestError('authentication', 'expired', 401))
+        .mockResolvedValue({ ok: true }),
+    };
+    const outbox = new GrimmLinkOutbox(store, client);
+
+    await outbox.replay();
+    expect(await store.isPaused()).toBe(true);
+
+    await store.retryPending();
+    await outbox.replay();
+
+    expect(await store.isPaused()).toBe(false);
+    expect(await store.ready('progress')).toEqual([]);
+    expect(await store.getDiagnostics()).toMatchObject({
+      lastReplayRows: 1,
+      lastReplaySucceeded: 1,
+      lastReplayFailed: 0,
+    });
+  });
+
+  it('batches large session replays and never sends more than 500 sessions per request', async () => {
+    const rows = Array.from({ length: 1001 }, (_, index) => ({
+      id: `session-${index}`,
+      category: 'sessions' as const,
+      bookHash: 'book-a',
+      payload: {
+        bookId: 4,
+        bookHash: 'book-a',
+        bookType: 'EPUB',
+        device: 'Readest Test',
+        deviceId: 'd1',
+        session: { durationSeconds: 1, sequence: index },
+      },
+      idempotencyKey: `session-${index}`,
+      attempts: 0,
+      createdAt: index,
+      nextRetryAt: 0,
+      errorCategory: null,
+    }));
+    const removed: string[][] = [];
+    const store = {
+      isPaused: vi.fn().mockResolvedValue(false),
+      recordAttempt: vi.fn().mockResolvedValue(undefined),
+      readyAll: vi.fn().mockResolvedValue(rows),
+      remove: vi.fn(async (ids: string[]) => removed.push([...ids])),
+      recordSuccess: vi.fn().mockResolvedValue(undefined),
+      recordReplay: vi.fn().mockResolvedValue(undefined),
+      getOutboxSummary: vi.fn().mockResolvedValue({ totalPending: 0 }),
+    };
+    const client = { postSessionBatch: vi.fn().mockResolvedValue({ ok: true }) };
+
+    await new GrimmLinkOutbox(store as unknown as GrimmLinkSyncStore, client).replay();
+
+    expect(client.postSessionBatch.mock.calls.map(([payload]) => payload.sessions.length)).toEqual([
+      500, 500, 1,
+    ]);
+    expect(removed.flat()).toHaveLength(1001);
+    expect(store.recordReplay).toHaveBeenCalledWith(
+      expect.objectContaining({ rows: 1001, succeeded: 1001, failed: 0 }),
+    );
+  });
+
+  it('chunks SQLite operations below the variable limit for large shelves and outboxes', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    const localPaths = Array.from({ length: 1001 }, (_, index) => `book-${index}.epub`);
+
+    await expect(store.getManagedShelfReferenceCounts(localPaths)).resolves.toEqual(new Map());
+    await expect(
+      store.remove(localPaths.map((_, index) => `missing-${index}`)),
+    ).resolves.toBeUndefined();
+    await expect(store.invalidateMany(localPaths, 'invalid-data')).resolves.toBeUndefined();
   });
 
   it('uploads valid collected sessions in batches without waiting for the lifecycle caller', async () => {

@@ -60,13 +60,18 @@ const GrimmLinkDiagnosticsPanel = () => {
     [config],
   );
   const replayScheduler = useMemo(
-    () => (client && store ? new GrimmLinkReplayScheduler(new GrimmLinkOutbox(store, client)) : null),
+    () =>
+      client && store ? new GrimmLinkReplayScheduler(new GrimmLinkOutbox(store, client)) : null,
     [client, store],
   );
   const [summary, setSummary] = useState(emptySummary);
   const [diagnostics, setDiagnostics] = useState<GrimmLinkPersistedDiagnostics>({
     lastSuccessAt: null,
     lastAttemptAt: null,
+    lastReplayDurationMs: null,
+    lastReplayRows: 0,
+    lastReplaySucceeded: 0,
+    lastReplayFailed: 0,
     lastError: null,
   });
   const [connection, setConnection] = useState<
@@ -263,6 +268,22 @@ const GrimmLinkDiagnosticsPanel = () => {
           />
           <DiagnosticRow label={_('Invalid items')} value={String(summary.invalid)} />
           <DiagnosticRow
+            label={_('Last replay')}
+            value={
+              diagnostics.lastReplayDurationMs == null
+                ? '—'
+                : `${diagnostics.lastReplayDurationMs} ms`
+            }
+            description={
+              diagnostics.lastReplayDurationMs == null
+                ? _('No replay recorded')
+                : _('{{succeeded}}/{{rows}} items completed', {
+                    succeeded: diagnostics.lastReplaySucceeded,
+                    rows: diagnostics.lastReplayRows,
+                  })
+            }
+          />
+          <DiagnosticRow
             label={_('Last successful sync')}
             value={formatTime(diagnostics.lastSuccessAt)}
           />
@@ -271,15 +292,44 @@ const GrimmLinkDiagnosticsPanel = () => {
       </div>
       {health && (
         <div className='card eink-bordered border-base-200 bg-base-100 border text-sm'>
-          <div className='border-base-200 border-b px-4 py-3 font-medium'>{_('GrimmLink Health')}</div>
+          <div className='border-base-200 border-b px-4 py-3 font-medium'>
+            {_('GrimmLink Health')}
+          </div>
           <div className='divide-base-200 divide-y px-4'>
-            <DiagnosticRow label={_('Authentication')} value={health.authentication === 'ok' ? _('Available') : _('Failed')} />
-            <DiagnosticRow label={_('Capabilities')} value={health.capabilities === 'ok' ? _('Loaded') : _('Failed')} />
-            <DiagnosticRow label={_('Progress API')} value={health.progress === 'available' ? _('Available') : _('Unsupported')} />
-            <DiagnosticRow label={_('Metadata API')} value={health.metadata === 'available' ? _('Available') : _('Unsupported')} />
-            <DiagnosticRow label={_('Sessions API')} value={health.sessions === 'available' ? _('Available') : _('Unsupported')} />
-            <DiagnosticRow label={_('Shelves API')} value={health.shelves === 'available' ? _('Available') : health.shelves === 'failed' ? _('Failed') : _('Unsupported')} />
-            <DiagnosticRow label={_('Download')} value={health.download === 'available' ? _('Available') : _('Unsupported')} />
+            <DiagnosticRow
+              label={_('Authentication')}
+              value={health.authentication === 'ok' ? _('Available') : _('Failed')}
+            />
+            <DiagnosticRow
+              label={_('Capabilities')}
+              value={health.capabilities === 'ok' ? _('Loaded') : _('Failed')}
+            />
+            <DiagnosticRow
+              label={_('Progress API')}
+              value={health.progress === 'available' ? _('Available') : _('Unsupported')}
+            />
+            <DiagnosticRow
+              label={_('Metadata API')}
+              value={health.metadata === 'available' ? _('Available') : _('Unsupported')}
+            />
+            <DiagnosticRow
+              label={_('Sessions API')}
+              value={health.sessions === 'available' ? _('Available') : _('Unsupported')}
+            />
+            <DiagnosticRow
+              label={_('Shelves API')}
+              value={
+                health.shelves === 'available'
+                  ? _('Available')
+                  : health.shelves === 'failed'
+                    ? _('Failed')
+                    : _('Unsupported')
+              }
+            />
+            <DiagnosticRow
+              label={_('Download')}
+              value={health.download === 'available' ? _('Available') : _('Unsupported')}
+            />
             <DiagnosticRow label={_('Outbox')} value={String(summary.totalPending)} />
             <DiagnosticRow label={_('Last sync')} value={formatTime(diagnostics.lastSuccessAt)} />
           </div>
