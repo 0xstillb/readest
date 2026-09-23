@@ -436,15 +436,18 @@ export class GrimmLinkShelfProvider {
     // process while importing otherwise ordinary 15–50 MB books.
     if (isTauriAppPlatform() && this.client.downloadShelfBookToFile) {
       const tempPath = `grimmlink/${safeShelfFilename(remote.filename, remote.bookId)}`;
-      await appService.createDir('grimmlink', 'Temp', true);
-      let nativePath: string;
       try {
-        nativePath = await appService.resolveFilePath(tempPath, 'Temp');
-      } catch {
-        nativePath = '';
-      }
-      if (nativePath) {
+        await appService.createDir('grimmlink', 'Temp', true);
+        if (await appService.exists(tempPath, 'Temp')) {
+          await appService.deleteFile(tempPath, 'Temp');
+        }
+        let nativePath: string;
         try {
+          nativePath = await appService.resolveFilePath(tempPath, 'Temp');
+        } catch {
+          nativePath = '';
+        }
+        if (nativePath) {
           await this.client.downloadShelfBookToFile(
             remote.bookId,
             nativePath,
@@ -468,9 +471,9 @@ export class GrimmLinkShelfProvider {
           );
           if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
           return;
-        } finally {
-          await appService.deleteFile(tempPath, 'Temp').catch(() => {});
         }
+      } finally {
+        await appService.deleteFile(tempPath, 'Temp').catch(() => {});
       }
     }
 
@@ -487,20 +490,23 @@ export class GrimmLinkShelfProvider {
     const useNativeImport = data.byteLength >= NATIVE_IMPORT_THRESHOLD_BYTES;
     const tempPath = `grimmlink/${safeShelfFilename(remote.filename, remote.bookId)}`;
     let importSource: string | File = new File([data], remote.filename);
-    if (useNativeImport) {
-      // Large files are safer through the native filesystem path. EPUBs can
-      // use the Rust metadata bridge and PDFs avoid ferrying a large Blob into
-      // the WebView parser over the Android bridge.
-      await appService.createDir('grimmlink', 'Temp', true);
-      await appService.writeFile(tempPath, 'Temp', importSource);
-      try {
-        importSource = await appService.resolveFilePath(tempPath, 'Temp');
-      } catch {
-        // Keep the File path as a safe fallback on platforms without path
-        // resolution support (web/test doubles).
-      }
-    }
     try {
+      if (useNativeImport) {
+        // Large files are safer through the native filesystem path. EPUBs can
+        // use the Rust metadata bridge and PDFs avoid ferrying a large Blob into
+        // the WebView parser over the Android bridge.
+        await appService.createDir('grimmlink', 'Temp', true);
+        if (await appService.exists(tempPath, 'Temp')) {
+          await appService.deleteFile(tempPath, 'Temp');
+        }
+        await appService.writeFile(tempPath, 'Temp', importSource);
+        try {
+          importSource = await appService.resolveFilePath(tempPath, 'Temp');
+        } catch {
+          // Keep the File path as a safe fallback on platforms without path
+          // resolution support (web/test doubles).
+        }
+      }
       const imported = await appService.importBook(importSource, library);
       if (!imported) throw new Error('Failed to import GrimmLink shelf book');
       const existingIndex = library.findIndex((book) => book.hash === imported.hash);
