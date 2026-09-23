@@ -42,6 +42,7 @@ ARG NEXT_PUBLIC_TRANSLATION_FIXED_QUOTA
 COPY --from=dependencies /app/node_modules /app/node_modules
 COPY --from=dependencies /app/apps/readest-app/node_modules /app/apps/readest-app/node_modules
 COPY --from=dependencies /app/apps/readest-app/public/vendor /app/apps/readest-app/public/vendor
+COPY --from=dependencies /app/apps/readest-app/vendor /app/apps/readest-app/vendor
 COPY --from=dependencies /app/packages/foliate-js/node_modules /app/packages/foliate-js/node_modules
 COPY . .
 WORKDIR /app/apps/readest-app
