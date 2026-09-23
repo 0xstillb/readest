@@ -129,7 +129,12 @@ describe('UpdaterContent — auto-translated changelog', () => {
       ok: true,
       json: async () => ({
         version: '0.11.20',
-        platforms: { 'android-arm64': { url: 'https://example.com/update.apk' } },
+        platforms: {
+          'android-arm64': {
+            url: 'https://example.com/update.apk',
+            signature: 'test-signature',
+          },
+        },
       }),
     } as Response);
 
