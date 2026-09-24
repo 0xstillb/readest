@@ -1,4 +1,7 @@
 import type { Book } from '@/types/book';
+import type { AppService } from '@/types/system';
+import type { ProgressHandler } from '@/utils/transfer';
+import type { ShelfSubscriptionRecord } from './ShelfSyncStore';
 
 export type ShelfCleanupPolicy = 'keep_local' | 'remove_managed_copy';
 export type ShelfDownloadPolicy = 'off' | 'wifi_only' | 'always';
@@ -95,4 +98,116 @@ export interface ShelfDeletionPlan<TEntry extends ShelfSyncEntry<unknown> = Shel
   decisions: ShelfDeletionDecision<TEntry>[];
   toDelete: Array<{ entry: TEntry; book?: Book; localPath: string }>;
   toKeep: Array<{ entry: TEntry; reason: ShelfDeletionReason }>;
+}
+
+export type ShelfSyncStage = 'downloading' | 'importing';
+
+export interface ShelfSyncProgressEvent<TBook = ShelfSyncBook<unknown>> {
+  stage: ShelfSyncStage;
+  book?: TBook;
+  progress?: number;
+  total?: number;
+  message?: string;
+}
+
+export interface ShelfSyncTransfer<TBook = ShelfSyncBook<unknown>> {
+  onProgress?: ProgressHandler;
+  onStage?: (event: { stage: ShelfSyncStage; book: TBook }) => void;
+  onStatus?: (status: ShelfSyncProgressEvent<TBook>) => void;
+  signal?: AbortSignal;
+}
+
+export interface ShelfSyncResult {
+  reused: number;
+  downloaded: number;
+  removed: number;
+}
+
+export type ShelfSyncAppService = Pick<
+  AppService,
+  | 'createDir'
+  | 'writeFile'
+  | 'resolveFilePath'
+  | 'exists'
+  | 'deleteFile'
+  | 'importBook'
+  | 'deleteBook'
+>;
+
+/**
+ * Provider-specific adapter that owns remote listing, mapping, transport, and download construction.
+ */
+export interface ShelfSyncAdapter<
+  TId extends string | number = string | number,
+  TBook extends ShelfSyncBook<TId> = ShelfSyncBook<TId>,
+> {
+  readonly provider: string;
+  readonly connectionId: string;
+  readonly tempFolder?: string;
+  readonly importErrorMessage?: string;
+
+  /**
+   * Fetch all books in a remote shelf.
+   */
+  getShelfBooks(shelfType: string, shelfId: TId): Promise<TBook[]>;
+
+  /**
+   * Download a shelf book into memory as an ArrayBuffer.
+   */
+  downloadBook(
+    book: TBook,
+    onProgress?: ProgressHandler,
+    signal?: AbortSignal,
+  ): Promise<ArrayBuffer>;
+
+  /**
+   * Optional direct file download to avoid WebView memory constraints on native platforms.
+   */
+  downloadBookToFile?: (
+    book: TBook,
+    filePath: string,
+    onProgress?: ProgressHandler,
+    signal?: AbortSignal,
+  ) => Promise<void>;
+
+  /**
+   * Optional hook to inspect or repair book bytes before validation and import.
+   */
+  repairBookData?: (data: ArrayBuffer, book: TBook) => Promise<ArrayBuffer> | ArrayBuffer;
+
+  /**
+   * Optional custom validator on downloaded bytes (defaults to validateShelfDownload).
+   */
+  validateBookData?: (filename: string, data: ArrayBuffer, expectedSize?: number) => void;
+
+  /**
+   * Optional telemetry/metrics hook.
+   */
+  onPerformanceMetric?: (metric: string, value?: number) => void;
+}
+
+export interface ShelfSyncRunOptions<
+  TId extends string | number = string | number,
+  TBook extends ShelfSyncBook<TId> = ShelfSyncBook<TId>,
+> {
+  shelfType: string;
+  shelfId: TId;
+  library: Book[];
+  onImported: (book: Book, library: Book[]) => Promise<void> | void;
+  onRemoved?: (book: Book, library: Book[]) => Promise<void> | void;
+  transfer?: ShelfSyncTransfer<TBook>;
+  cleanupPolicy?: ShelfCleanupPolicy;
+  downloadPolicy?: ShelfDownloadPolicy;
+  presenceIndex?: LibraryPresenceIndex;
+}
+
+export interface ShelfSubscribedSyncOptions<
+  TId extends string | number = string | number,
+  TBook extends ShelfSyncBook<TId> = ShelfSyncBook<TId>,
+> {
+  getLibrary: () => Book[];
+  onImported: (book: Book, library: Book[]) => Promise<void> | void;
+  onRemoved?: (book: Book, library: Book[]) => Promise<void> | void;
+  transfer?: ShelfSyncTransfer<TBook>;
+  filterSubscription?: (subscription: ShelfSubscriptionRecord) => boolean;
 }
