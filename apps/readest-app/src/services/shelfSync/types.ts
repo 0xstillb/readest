@@ -12,6 +12,17 @@ import type {
   ShelfSubscriptionRecord,
 } from './ShelfSyncStore';
 
+export type {
+  GetShelfEntriesOptions,
+  GetShelfSubscriptionsOptions,
+  ReferenceQueryOptions,
+  SaveShelfSubscriptionInput,
+  ShelfEntryKey,
+  ShelfEntryRecord,
+  ShelfEntryWrite,
+  ShelfSubscriptionRecord,
+};
+
 export type ShelfCleanupPolicy = 'keep_local' | 'remove_managed_copy';
 export type ShelfDownloadPolicy = 'off' | 'wifi_only' | 'always';
 
@@ -67,6 +78,8 @@ export interface ShelfSyncBook<TId = number | string> {
   size?: number;
   title?: string;
   author?: string;
+  fileId?: string | number | null;
+  contentVersion?: string | null;
 }
 
 /**

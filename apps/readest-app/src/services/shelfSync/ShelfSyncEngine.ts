@@ -136,6 +136,11 @@ export class ShelfSyncEngine<
           shelfType,
           shelfId: String(shelfId),
           bookId: String(bookId),
+          fileId: remoteBook.fileId != null ? String(remoteBook.fileId) : (tracked?.fileId ?? null),
+          contentVersion:
+            remoteBook.contentVersion != null
+              ? String(remoteBook.contentVersion)
+              : (tracked?.contentVersion ?? null),
           bookHash: remoteBook.bookHash,
           localPath: resolvedLocalPath,
           managedByProvider,
@@ -179,6 +184,9 @@ export class ShelfSyncEngine<
           shelfType,
           shelfId: String(shelfId),
           bookId: String(remoteBook.bookId),
+          fileId: remoteBook.fileId != null ? String(remoteBook.fileId) : null,
+          contentVersion:
+            remoteBook.contentVersion != null ? String(remoteBook.contentVersion) : null,
           bookHash: remoteBook.bookHash,
           localPath: null,
           managedByProvider: false,
@@ -380,6 +388,9 @@ export class ShelfSyncEngine<
               shelfType,
               shelfId: String(shelfId),
               bookId: String(remoteBook.bookId),
+              fileId: remoteBook.fileId != null ? String(remoteBook.fileId) : null,
+              contentVersion:
+                remoteBook.contentVersion != null ? String(remoteBook.contentVersion) : null,
               bookHash: remoteBook.bookHash ?? imported.hash,
               localPath: getLocalBookFilename(imported),
               managedByProvider: true,
@@ -449,6 +460,9 @@ export class ShelfSyncEngine<
           shelfType,
           shelfId: String(shelfId),
           bookId: String(remoteBook.bookId),
+          fileId: remoteBook.fileId != null ? String(remoteBook.fileId) : null,
+          contentVersion:
+            remoteBook.contentVersion != null ? String(remoteBook.contentVersion) : null,
           bookHash: remoteBook.bookHash ?? imported.hash,
           localPath: getLocalBookFilename(imported),
           managedByProvider: true,
