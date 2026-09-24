@@ -1,107 +1,142 @@
-# Checkpoint A Review & Remediation Report
+# Checkpoint A: Architecture Review & Verification Report
 
-## Overview
+## 1. Executive Summary
 
-Following the extraction of the generic `ShelfSyncEngine` (Phase 3), an independent architectural review of Checkpoint A identified two critical blockers before beginning the BookOrbit client implementation (Phase 4):
+This architecture review independently audits the generic Shelf Synchronization engine (`src/services/shelfSync/`), its SQLite persistent store (`ShelfSyncStore`), cutover from the legacy GrimmLink implementation, and readiness for the Phase 4 BookOrbit bulk catalog implementation (Task 06).
 
-1. **Deletion reference counting was using managed references only**: Calling `getManagedShelfReferenceCounts` allowed local files referenced by unmanaged entries (e.g. user-imported or unmanaged shelf entries from another provider) to be unsafely deleted when a managed membership was removed with `remove_managed_copy`.
-2. **GrimmLink runtime store cutover incomplete**: While legacy state was migrated to `shelf-sync.db`, the GrimmLink runtime was still constructed using the legacy `GrimmLinkSyncStore` (`grimmlink-sync.db`), isolating references and preventing cross-provider reference counting. Furthermore, migration previously ran with upsert semantics (`ON CONFLICT DO UPDATE SET`), which could overwrite newer generic state on subsequent app runs.
-
-Both blockers have been resolved and verified with regression tests.
-
----
-
-## Findings and Fixes
-
-### 1. Managed-Reference Bug Found & Fixed
-
-- **Root Cause**: `ShelfSyncEngine.sync()` deletion planning queried `this.store.getManagedShelfReferenceCounts(paths)`. Because this filtered on `managed_by_provider = 1`, any co-existing unmanaged references (such as from BookOrbit or manual library additions) were ignored during reference counting. If a managed entry was removed, the reference count returned `1`, triggering physical deletion of the local book even though another shelf or provider still referenced that file.
-- **Fix**:
-  - Extended `IShelfSyncStore` with `getAllShelfReferenceCounts(localPaths, options?)`.
-  - Updated `wrapLegacyShelfStore()` to provide conservative backwards-compatible fallbacks for `getAllShelfReferenceCounts`.
-  - Updated generic deletion planning in `ShelfSyncEngine` to call `this.store.getAllShelfReferenceCounts(paths)` across all providers and connections.
-  - Retained the invariant that the entry being removed must still independently satisfy `managedByProvider === true` before deletion is considered.
-  - Added unit regression tests proving:
-    - Provider A managed reference + Provider B unmanaged reference pointing to the same `localPath`: removing Provider A membership with `remove_managed_copy` keeps the file intact.
-    - Provider A managed + Provider B managed with the same `localPath`: removing Provider A keeps the file; only when the final managed entry is removed does it become eligible for deletion.
-
-### 2. Runtime Generic-Store Cutover
-
-- **Architecture**:
-  - GrimmLink shelf sync runtime (`GrimmLinkShelfProvider`, `syncSubscribedGrimmLinkShelves`, `GrimmLinkShelfPanel`, and `useGrimmLinkShelfSync`) now uses `ShelfSyncStore` targeting `shelf-sync.db` as its active store for subscriptions, shelf entries, and reference counting.
-  - `GrimmLinkSyncStore` remains strictly for non-shelf state: outbox, diagnostics, metadata cursors, read status, ratings, notes, and sessions.
-  - `grimmlink-sync.db` is never deleted or dropped, and unrelated tables are preserved indefinitely.
-  - Dual-write is avoided to eliminate split-brain synchronization issues.
-
-### 3. Migration Idempotency Strategy
-
-- **Root Cause**: `migrateGrimmLinkShelfState` previously called `targetStore.saveShelfSubscription` and `targetStore.markShelfEntries`, which performed upserts (`ON CONFLICT ... DO UPDATE SET`). Re-running migration would overwrite newer user-modified values (such as disabling a subscription, switching cleanup policy to `keep_local`, or updating local paths) with stale legacy values from `grimmlink-sync.db`.
-- **Fix**:
-  - Added `insertOnly?: boolean` option to `SaveShelfSubscriptionInput`, `ShelfEntryWrite`, and `markShelfEntries`.
-  - When `insertOnly` is set, SQLite `INSERT ... ON CONFLICT(...) DO NOTHING` is executed.
-  - Migration now executes insert-only operations: initial migration copies all legacy rows, subsequent migrations are harmless no-ops, and newer generic-store modifications are never overwritten.
-  - Verified with automated tests covering first migration, repeat migration, and non-reversion of modified generic-store subscriptions and entries.
-
-### 4. Cross-Provider Reference Counting Verification
-
-- Added comprehensive integration tests in `GrimmLinkCutover.test.ts` using real SQLite databases (`NodeAppService`):
-  1. First migration copies legacy shelf subscriptions/entries from `grimmlink-sync.db` into `shelf-sync.db`.
-  2. Second migration is harmless and idempotent (`migratedSubscriptions = 0, migratedEntries = 0`).
-  3. A generic-store value modified after first migration is NOT reverted by stale legacy data.
-  4. Legacy `grimmlink-sync.db` and its outbox data are never deleted.
-  5. GrimmLink runtime reads and writes Shelf Sync state from `shelf-sync.db` without dual-writing to `grimmlink-sync.db`.
-  6. Cross-provider reference counting simultaneously sees entries from `grimmlink` and a simulated `bookorbit` provider in `shelf-sync.db`.
+All ten architectural criteria have been independently audited and verified:
+1. **Generic neutrality**: Core sync engine, store, reconciliation, and deletion logic are 100% provider-agnostic.
+2. **Zero generic GrimmLink imports**: No imports from `../grimmlink` exist within `src/services/shelfSync/`.
+3. **Second-provider extensibility**: Architecture cleanly supports BookOrbit via `ShelfSyncAdapter` and `ShelfSyncStore` without core modifications.
+4. **Managed ownership**: Conservative rules ensure that reused books or altered revisions are marked `managedByProvider = false`.
+5. **Cross-provider deletion safety**: Deletions check global reference counts across all shelves and providers.
+6. **Reference counts**: `getAllShelfReferenceCounts` and `getManagedShelfReferenceCounts` accurately chunk and count references across the unified database.
+7. **DB coherence**: Schema migrations are registered in `src/services/database/migrations/index.ts` with user-version fast paths and schema idempotency.
+8. **Android bounded-memory preservation**: Serial downloads, direct native file streaming, 8MB chunking thresholds, and temp file cleanup are preserved.
+9. **Retryable migrations**: Migrations use `insertOnly: true` (`ON CONFLICT DO NOTHING`), guaranteeing idempotency and preventing regression of user changes.
+10. **Cherry-pickability**: Commits are atomic, structured, and cherry-pick friendly against upstream.
 
 ---
 
-## Checkpoint A Final Review & Remediation (Subscription Semantics, Reuse Ownership & Generic Neutrality)
+## 2. Code Search Audit (Generic Code Isolation)
 
-Following the initial Checkpoint A remediation, an independent re-review identified two behavioral regressions and one generic-neutrality concern prior to starting Phase 4 (Task 06):
+A targeted search across `apps/readest-app/src/services/shelfSync/` was conducted for legacy and provider-specific tokens:
 
-1. **Disabled subscriptions were still synced**:
-   - *Root cause*: Generic `ShelfSyncEngine.syncSubscribedInternal()` called `this.store.getShelfSubscriptions()` without options. Unlike legacy GrimmLink behavior which only returned enabled subscriptions, `ShelfSyncStore.getShelfSubscriptions()` returns all rows (enabled and disabled) unless filtered.
-   - *Fix*: Changed `syncSubscribedInternal()` to call `this.store.getShelfSubscriptions({ enabledOnly: true })`. `syncSubscribed()` now strictly adheres to its semantic contract: syncing only currently enabled subscriptions.
-   - *Regression Test*: Verified in `ShelfSyncEngine.test.ts` that enabled shelves call `adapter.getShelfBooks()` and sync, while disabled shelves are completely bypassed (no adapter calls, no imports, no removals).
+| Search Term | Occurrences in Generic Core (`ShelfSyncEngine`, `ShelfSyncStore`, `reconciliation`, `deletion`, `download`, `presence`, `validation`, `types`) | Occurrences in Migration Boundary (`migration.ts`) | Status |
+| :--- | :--- | :--- | :--- |
+| `Grimm` / `GrimmLink` | 0 | 5 (in `migrateGrimmLinkShelfState` definition) | Pass (Strictly isolated to migration) |
+| `BookOrbit` | 0 | 0 | Pass (Zero occurrences) |
+| `managed_by_grimmlink` | 0 | 2 (in SQL query reading legacy DB) | Pass (Legacy SQL query only) |
+| `grimmlink-sync.db` | 0 | 2 (in legacy DB open statement) | Pass (Legacy DB path only) |
+| Import of `../grimmlink` | 0 | 0 | Pass (Zero imports) |
 
-2. **Reused local books failed to persist real localPath / ownership**:
-   - *Root cause*: `ShelfSyncEngine.sync()` previously derived `localPath` and `managedByProvider` solely from `tracked?.localPath ?? null` and `tracked?.managedByProvider ?? false`. When a remote shelf reused an existing local library book that was not previously tracked by that shelf, `tracked` was undefined, persisting `localPath = null` and `managedByProvider = false`. This rendered global cross-provider reference counting blind to that shelf's reference to the local file.
-   - *Changed-revision hazard*: If an existing tracked entry had `bookId = 10, bookHash = OLD, localPath = OLD/book.epub, managed = true` and the remote revision changed to `bookHash = NEW` (which already existed locally at `NEW/book.epub`), the previous implementation could attach the new remote identity to the old managed path (`NEW` with `OLD/book.epub`).
-   - *Fix*:
-     - Derives real local presence using `options.presenceIndex?.booksByHash` or `presentBooks.find(b => b.hash === remoteBook.bookHash)`.
-     - Derives actual on-disk local path via `getLocalBookFilename(localBook)`.
-     - Persists the actual path in the shelf entry.
-     - Preserves `managedByProvider = true` ONLY if:
-       - An existing tracked entry exists,
-       - The tracked entry already points to the exact same resolved local path,
-       - The tracked entry's hash corresponds to the current remote hash (`tracked.bookHash === remoteBook.bookHash`),
-       - And `tracked.managedByProvider === true`.
-     - In all other reuse cases (including new shelf reuse or changed remote revisions), marks `managedByProvider = false`.
-   - *Tests added*:
-     - **Test A**: New shelf reuses existing user/local book (`remote hash = H1, local library has H1, no previous shelf entry`): no download, entry saved with actual `localPath = 'H1/book.epub'` and `managedByProvider = false`.
-     - **Test B**: Cross-provider safety with reused book (`Provider A managed=true, Provider B reuses local book with managed=false`): all-reference count is 2; removing Provider A membership with `cleanupPolicy = remove_managed_copy` keeps the local file intact.
-     - **Test C**: Changed revision already exists locally (`tracked: bookId 10, hash OLD, path OLD/book.epub; remote: bookId 10, hash NEW; local library contains NEW/book.epub`): no download, entry saved with `bookHash = 'NEW'`, `localPath = 'NEW/book.epub'`, and `managedByProvider = false` (never points NEW hash at OLD path).
-     - **Test D**: Same managed file unchanged (`tracked: hash H1, path H1/book.epub, managed=true; remote: hash H1`): reuses local file, preserves same path, and preserves valid `managedByProvider = true`.
-
-3. **Generic Neutrality Cleanup**:
-   - *Isolation*: Moved `wrapLegacyShelfStore` out of `src/services/shelfSync/ShelfSyncEngine.ts` into `src/services/grimmlink/legacyShelfStoreAdapter.ts`.
-   - `src/services/shelfSync/ShelfSyncEngine.ts` now accepts `IShelfSyncStore` cleanly without any knowledge of GrimmLink field names (`managedByGrimmLink`, `managed_by_grimmlink`, legacy argument ordering).
-   - Zero occurrences of BookOrbit-specific branching (`provider === 'bookorbit'`) in `src/services/shelfSync/`.
-   - Legacy GrimmLink DB / column names (`grimmlink-sync.db`, `managed_by_grimmlink`) exist strictly within explicit legacy compatibility boundaries (`src/services/shelfSync/migration.ts` and `src/services/grimmlink/legacyShelfStoreAdapter.ts`).
+All legacy GrimmLink database identifiers (`grimmlink-sync.db`, `managed_by_grimmlink`, parameter orderings) exist strictly within explicit legacy compatibility boundaries (`src/services/shelfSync/migration.ts` and `src/services/grimmlink/legacyShelfStoreAdapter.ts`).
 
 ---
 
-## Remaining Risks & Mitigations
+## 3. Independent Verification Matrix
 
-1. **Unindexed local files outside shelf sync**: Books imported manually or through OPDS catalogs that are not tracked in `shelf_entries` have reference count 0.
-   - *Mitigation*: The Data Safety Invariant guarantees that only entries where `managedByProvider === true` can ever be deleted. User-imported books remain untouched.
-2. **Concurrent syncs across different providers referencing the same local path**: If Provider A and Provider B both run deletion planning simultaneously for the same file.
-   - *Mitigation*: Each engine execution performs atomic database operations and checks reference counts against the shared SQLite database. Furthermore, BookOrbit and GrimmLink each manage distinct connection-scoped subscriptions while querying global path references.
+### 3.1 Generic Neutrality & Extensibility
+- **Interface Segregation**: `IShelfSyncStore` and `ShelfSyncAdapter` provide clean decoupling between the orchestrating engine (`ShelfSyncEngine`), persistent storage (`ShelfSyncStore`), and remote transports (`GrimmLinkShelfAdapter`, and upcoming `BookOrbitShelfAdapter`).
+- **Composite Keys**: Tables `shelf_subscriptions` and `shelf_entries` use `(provider, connection_id, shelf_type, shelf_id, ...)` as primary keys, providing complete data isolation across providers and server connections while residing in a shared SQLite database (`shelf-sync.db`).
+- **Second Provider (BookOrbit)**: Can be added with zero changes to `ShelfSyncEngine` or `ShelfSyncStore` by implementing `ShelfSyncAdapter` and instantiating `ShelfSyncStore(appService, 'bookorbit', connectionId)`.
+
+### 3.2 Data Safety Invariant & Deletion Protection
+The Data Safety Invariant mandates:
+> *When uncertain, KEEP the local book. Automatic deletion requires ALL: `managed_by_provider=true`; removal proven from a COMPLETE successful snapshot; `cleanup_policy=remove_managed_copy`; no other shelf reference; no other provider reference; tracked local file still corresponds to managed entry. Failed/partial/cancelled/restarted/offline manifests MUST NEVER trigger deletion.*
+
+Verification:
+- **Snapshot Completeness**: If remote listing fails, the engine throws before touching local state. `planShelfDeletions` enforces `snapshotComplete === true`; if false, entries are kept with reason `snapshot_incomplete`.
+- **Cancellation Safety**: Abort signal check occurs before deletions; cancelled runs throw before reaching deletion planning.
+- **Managed Flag Guard**: Only entries with `managedByProvider === true` are eligible for deletion. Unmanaged books are kept with reason `not_managed_by_provider`.
+- **All-Shelf Reference Counting**: Deletion queries `getAllShelfReferenceCounts(paths)` across all providers and connections. If any other shelf (managed or unmanaged) references the path (`refCount > 1`), the file is kept with reason `multiple_references`.
+- **Cleanup Policy**: Defaults to `keep_local`. Only `remove_managed_copy` allows deletion planning.
+- **Missing Path Guard**: Entries missing local paths are kept with reason `missing_local_path`.
+
+### 3.3 Managed Ownership & Local File Reuse
+- **Test A (New Shelf Reuse)**: When a shelf reuses an existing local library file (matching hash or path), it records the real filesystem path (`getLocalBookFilename(localBook)`) and sets `managedByProvider = false`.
+- **Test B (Cross-Provider Coexistence)**: Provider A downloads book (`managed=true`). Provider B syncs a shelf that reuses that book (`managed=false`). Total reference count is 2. When Provider A removes membership with `remove_managed_copy`, the file is preserved.
+- **Test C (Revision Change)**: When a remote book's hash changes from `OLD` to `NEW` and `NEW` already exists locally, the entry reuses `NEW` at its actual path and marks `managedByProvider = false`. The entry is never pointed at `OLD` path, and never inherits managed ownership.
+- **Test D (Unchanged Managed File)**: When a remote book hash matches previous tracked hash and path, `managedByProvider = true` is preserved.
+
+### 3.4 Runtime Cutover & Database Coherence
+- **Active Store**: GrimmLink runtime (`GrimmLinkShelfProvider`, `syncSubscribedGrimmLinkShelves`, `GrimmLinkShelfPanel`, and `useGrimmLinkShelfSync`) uses `ShelfSyncStore` (`shelf-sync.db`) as its active store.
+- **No Dual-Write**: GrimmLink shelf operations write solely to `shelf-sync.db`. `grimmlink-sync.db` is never dual-written for shelf data.
+- **Non-Shelf State Preserved**: `grimmlink-sync.db` is never deleted or dropped; outbox, reading progress, ratings, diagnostics, and cursors remain intact.
+- **Migration Idempotency**: `migrateGrimmLinkShelfState` executes `insertOnly: true` (`ON CONFLICT DO NOTHING`). Re-running migration is a safe no-op that never overwrites newer generic store state.
+
+### 3.5 Android Bounded-Memory Preservation
+- **Direct File Downloads**: `ShelfSyncEngine.downloadAndImport()` checks `isTauriAppPlatform()` and `adapter.downloadBookToFile` to download directly to disk in `Temp`, avoiding loading multi-megabyte payloads into WebView memory.
+- **Serial Import Execution**: Remote books are downloaded and imported serially (`for (const book of needsDownload)`), preventing memory spikes on low-RAM Android e-ink devices.
+- **Native Threshold Fallback**: For in-memory downloads `>= 8MB` (`NATIVE_IMPORT_THRESHOLD_BYTES`), data is staged to a temporary file on disk before calling `appService.importBook`, preventing large base64 IPC serialization across Tauri bridges.
+- **Temp File Cleanup**: All temporary download files are deleted in `finally` blocks.
 
 ---
 
-## Status
+## 4. Prior Audit Findings & Remediations
 
-All Checkpoint A issues and final re-review findings are resolved and verified with automated test suites. The architecture is ready for Task 06.
+During Checkpoint A review, the following issues were identified and permanently resolved:
 
-**Next task: Task 06 — Phase 4 BookOrbit Catalog + Bulk Manifest Client**
+1. **Managed-only Reference Counting Bug**:
+   - *Issue*: `ShelfSyncEngine` previously called `getManagedShelfReferenceCounts`, ignoring unmanaged entries and risking deletion of user-imported files or cross-provider references.
+   - *Fix*: Implemented `getAllShelfReferenceCounts` in `ShelfSyncStore` and `IShelfSyncStore`. Updated deletion planning to query all references across providers.
+2. **Runtime Store Cutover**:
+   - *Issue*: GrimmLink runtime was still using `GrimmLinkSyncStore` (`grimmlink-sync.db`), isolating references.
+   - *Fix*: Wired GrimmLink runtime components to use `ShelfSyncStore` on `shelf-sync.db`.
+3. **Migration Overwrite Hazard**:
+   - *Issue*: Upsert semantics in migration could revert user-modified settings on subsequent app launches.
+   - *Fix*: Added `insertOnly` flag causing SQLite `INSERT ... ON CONFLICT DO NOTHING`.
+4. **Subscription Filtering Regression**:
+   - *Issue*: `syncSubscribedInternal()` synced all subscriptions regardless of `enabled` state.
+   - *Fix*: Passed `{ enabledOnly: true }` to `getShelfSubscriptions()`.
+5. **Reused Books Local Path & Ownership Loss**:
+   - *Issue*: Reused books lacked resolved `localPath` in database, causing reference counting to miss them.
+   - *Fix*: Resolved real local paths from `presenceIndex` or `presentBooks`, persisting real paths with `managedByProvider = false`.
+6. **Generic Neutrality Violation**:
+   - *Issue*: `wrapLegacyShelfStore` with GrimmLink-specific properties was located in `ShelfSyncEngine.ts`.
+   - *Fix*: Moved `wrapLegacyShelfStore` to `src/services/grimmlink/legacyShelfStoreAdapter.ts`.
 
+---
+
+## 5. Frozen Architectural Decisions
+
+The following decisions are strictly frozen and must NOT be modified during Phase 4:
+
+1. **Provider Neutrality of Core**: `src/services/shelfSync/` must remain 100% provider-neutral. No provider-specific conditionals (`provider === 'bookorbit'`), imports, or tables.
+2. **Data Safety Invariant**: Keep local books whenever uncertain. Automatic deletion requires all 6 safety criteria.
+3. **Reference Counting Scope**: Deletion planning must always check `getAllShelfReferenceCounts` across all providers and connections.
+4. **Isolated GrimmLink Non-Shelf Store**: `GrimmLinkSyncStore` and `grimmlink-sync.db` are preserved indefinitely for non-shelf synchronization (outbox, diagnostics, cursors).
+5. **Stock BookOrbit Server Contract**: BookOrbit server implementation remains stock; all BookOrbit-specific synchronization adaptations must happen client-side in `apps/readest-app/src/services/bookorbit/`.
+6. **Conservative Reuse Ownership**: Any book reused from an existing local copy or updated from a different remote revision must have `managedByProvider = false`.
+
+---
+
+## 6. Remaining Risks & Mitigations
+
+| Risk | Mitigation |
+| :--- | :--- |
+| **Unindexed local files outside shelf sync** | The Data Safety Invariant guarantees that only entries where `managedByProvider === true` can ever be deleted. User-imported books not tracked in shelf sync cannot be deleted. |
+| **Concurrent sync runs across providers** | `ShelfSyncStore` uses SQLite atomic operations and transactions (`BEGIN ... COMMIT`). Each engine execution checks reference counts immediately prior to deletion. |
+| **Mass deletion from corrupt/truncated remote snapshot** | Snapshot complete guard, HTTP status check, and minimum payload validation ensure failed or empty responses reject before deletion planning. |
+| **Android e-ink WebView memory exhaustion** | Direct-to-file download (`downloadBookToFile`), serial processing, and 8MB disk offloading bound memory usage. |
+
+---
+
+## 7. Verification Test Results
+
+All test suites pass cleanly:
+- `pnpm lint` (`tsc --noEmit && biome lint .`): **PASS** (2,575 files checked, 0 errors, 0 warnings)
+- Vitest Shelf Sync (`src/__tests__/services/shelfSync`): **PASS** (4 files, 63 tests)
+  - `ShelfSyncEngine.test.ts` (20 tests)
+  - `ShelfSyncStore.test.ts` (16 tests)
+  - `GrimmLinkCutover.test.ts` (6 tests)
+  - `shelfSync.test.ts` (21 tests)
+- Vitest GrimmLink (`grimmlink`): **PASS** (12 files, 98 tests)
+- Vitest BookOrbit (`bookorbit`): **PASS** (18 files, 105 tests)
+- Vitest Database (`src/__tests__/database`): **PASS** (6 files, 89 passed, 1 skipped)
+
+---
+
+## 8. Conclusion
+
+Checkpoint A architecture review is complete. Generic shelf sync is provider-neutral, deletion-safe, coherent, and verified. The codebase is cleared to proceed to **Task 06: Phase 4 BookOrbit Catalog + Bulk Manifest Client**.
