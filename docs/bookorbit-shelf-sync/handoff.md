@@ -2,7 +2,7 @@
 
 Phase completed: Phase 2 (Provider-Neutral Shelf Sync Store)
 Model used: Gemini Flash 3.8 / Antigravity
-Commit SHA: (Pending commit)
+Commit SHA: 8c6eee950d26bb82fa3b8f5e2dd7eb0c3403e65d
 Files changed:
 - apps/readest-app/src/services/shelfSync/ShelfSyncStore.ts
 - apps/readest-app/src/services/shelfSync/index.ts
