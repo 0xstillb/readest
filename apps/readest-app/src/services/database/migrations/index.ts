@@ -26,6 +26,55 @@ const migrations: Record<SchemaType, MigrationEntry[]> = {
       `,
     },
   ],
+  'shelf-sync': [
+    {
+      name: '2026092401_shelf_sync',
+      sql: `
+        CREATE TABLE IF NOT EXISTS shelf_subscriptions (
+          provider TEXT NOT NULL,
+          connection_id TEXT NOT NULL,
+          shelf_type TEXT NOT NULL DEFAULT 'default',
+          shelf_id TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          cleanup_policy TEXT NOT NULL DEFAULT 'keep_local',
+          download_policy TEXT NOT NULL DEFAULT 'always',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (provider, connection_id, shelf_type, shelf_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_shelf_subscriptions_active
+        ON shelf_subscriptions (provider, connection_id, enabled);
+
+        CREATE TABLE IF NOT EXISTS shelf_entries (
+          provider TEXT NOT NULL,
+          connection_id TEXT NOT NULL,
+          shelf_type TEXT NOT NULL DEFAULT 'default',
+          shelf_id TEXT NOT NULL,
+          book_id TEXT NOT NULL,
+          file_id TEXT,
+          book_hash TEXT,
+          content_version TEXT,
+          local_path TEXT,
+          managed_by_provider INTEGER NOT NULL DEFAULT 0,
+          last_seen_at INTEGER NOT NULL,
+          PRIMARY KEY (provider, connection_id, shelf_type, shelf_id, book_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_shelf_entries_local_path
+        ON shelf_entries (local_path);
+
+        CREATE INDEX IF NOT EXISTS idx_shelf_entries_book_hash
+        ON shelf_entries (book_hash);
+
+        CREATE INDEX IF NOT EXISTS idx_shelf_entries_file_id
+        ON shelf_entries (file_id);
+
+        CREATE INDEX IF NOT EXISTS idx_shelf_entries_managed_path
+        ON shelf_entries (managed_by_provider, local_path);
+      `,
+    },
+  ],
   'bookorbit-sync': [
     {
       name: '2026080401_bookorbit_sync',
