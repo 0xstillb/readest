@@ -201,3 +201,52 @@ export interface BookStateEntry {
   status?: 'reading' | 'complete' | 'abandoned';
   statusModified?: string;
 }
+
+export type BookOrbitShelfType = 'collection' | 'smartscope';
+export type BookOrbitShelfCleanupPolicy = 'keep_local' | 'remove_managed_copy';
+export type BookOrbitShelfDownloadPolicy = 'off' | 'wifi_only' | 'always';
+
+export interface BookOrbitShelf {
+  id: string | number;
+  name: string;
+  type: BookOrbitShelfType;
+  description?: string;
+  bookCount?: number;
+}
+
+export type BookOrbitShelfSyncStage =
+  | 'starting'
+  | 'downloading'
+  | 'importing'
+  | 'done'
+  | 'error'
+  | 'cancelled';
+
+export interface BookOrbitShelfSyncStatus {
+  stage: BookOrbitShelfSyncStage;
+  book?: string;
+  progress?: number;
+  total?: number;
+  message?: string;
+}
+
+export interface BookOrbitShelfClient {
+  getCollections?(): Promise<BookOrbitShelf[]>;
+  getSmartScopes?(): Promise<BookOrbitShelf[]>;
+  getShelves?(type?: BookOrbitShelfType): Promise<BookOrbitShelf[]>;
+  getShelfBooks(
+    shelfType: BookOrbitShelfType | string,
+    shelfId: string | number,
+  ): Promise<import('./shelfDownload').BookOrbitShelfBook[]>;
+  downloadShelfBook?(
+    bookId: string | number,
+    onProgress?: import('@/utils/transfer').ProgressHandler,
+    signal?: AbortSignal,
+  ): Promise<ArrayBuffer>;
+  downloadShelfBookToFile?(
+    book: import('./shelfDownload').BookOrbitShelfBook,
+    filePath: string,
+    onProgress?: import('@/utils/transfer').ProgressHandler,
+    signal?: AbortSignal,
+  ): Promise<void>;
+}

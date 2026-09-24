@@ -8,6 +8,9 @@ import { getAPIBaseUrl, isTauriAppPlatform } from '../environment';
 import { formatKoDatetime } from './noteMapping';
 import type {
   BookOrbitVersionInfo,
+  BookOrbitShelf,
+  BookOrbitShelfClient,
+  BookOrbitShelfType,
   BookStateEntry,
   BookmarkAckBook,
   BookmarkExchangeBookRequest,
@@ -20,6 +23,7 @@ import type {
   PageStatsBookWire,
   PluginDeviceFields,
 } from './types';
+import type { BookOrbitShelfBook } from './shelfDownload';
 
 export class BookOrbitRequestError extends Error {
   status: number;
@@ -37,7 +41,7 @@ export class BookOrbitRequestError extends Error {
  * are minted in BookOrbit's web UI (Settings > Integrations > KOReader) — this
  * client never self-registers.
  */
-export class BookOrbitClient {
+export class BookOrbitClient implements BookOrbitShelfClient {
   private config: BookOrbitSettings;
   private serverUrl: string;
   private isLanServer: boolean;
@@ -200,5 +204,217 @@ export class BookOrbitClient {
 
   async uploadBookStates(books: BookStateEntry[]): Promise<void> {
     await this.postJson<unknown>('/plugin/book-states', { books });
+  }
+
+  async getCollections(): Promise<BookOrbitShelf[]> {
+    try {
+      const data = await this.requestJson<unknown>('/plugin/collections').catch(async (err) => {
+        if (err instanceof BookOrbitRequestError && err.status === 404) {
+          return await this.requestJson<unknown>('/collections');
+        }
+        throw err;
+      });
+      return this.normalizeShelves(data, 'collection');
+    } catch {
+      return [];
+    }
+  }
+
+  async getSmartScopes(): Promise<BookOrbitShelf[]> {
+    try {
+      const data = await this.requestJson<unknown>('/plugin/smartscopes').catch(async (err) => {
+        if (err instanceof BookOrbitRequestError && err.status === 404) {
+          return await this.requestJson<unknown>('/plugin/smart-scopes').catch(async () => {
+            return await this.requestJson<unknown>('/smartscopes');
+          });
+        }
+        throw err;
+      });
+      return this.normalizeShelves(data, 'smartscope');
+    } catch {
+      return [];
+    }
+  }
+
+  async getShelves(type?: BookOrbitShelfType): Promise<BookOrbitShelf[]> {
+    if (type === 'collection') return this.getCollections();
+    if (type === 'smartscope') return this.getSmartScopes();
+    const [collections, smartscopes] = await Promise.all([
+      this.getCollections(),
+      this.getSmartScopes(),
+    ]);
+    return [...collections, ...smartscopes];
+  }
+
+  async getShelfBooks(
+    shelfType: BookOrbitShelfType | string,
+    shelfId: string | number,
+  ): Promise<BookOrbitShelfBook[]> {
+    const isCollection = shelfType === 'collection' || shelfType === 'regular';
+    const primaryEndpoint = isCollection
+      ? `/plugin/collections/${encodeURIComponent(shelfId)}/books`
+      : `/plugin/smartscopes/${encodeURIComponent(shelfId)}/books`;
+    const fallbackEndpoint = isCollection
+      ? `/collections/${encodeURIComponent(shelfId)}/books`
+      : `/plugin/smart-scopes/${encodeURIComponent(shelfId)}/books`;
+
+    const data = await this.requestJson<unknown>(primaryEndpoint).catch(async (err) => {
+      if (err instanceof BookOrbitRequestError && err.status === 404) {
+        return await this.requestJson<unknown>(fallbackEndpoint).catch(async () => {
+          if (!isCollection) {
+            return await this.requestJson<unknown>(
+              `/smartscopes/${encodeURIComponent(shelfId)}/books`,
+            );
+          }
+          throw err;
+        });
+      }
+      throw err;
+    });
+
+    return this.normalizeShelfBooks(data);
+  }
+
+  private normalizeShelves(data: unknown, fallbackType: BookOrbitShelfType): BookOrbitShelf[] {
+    if (!data) return [];
+    let list: unknown[] = [];
+    if (Array.isArray(data)) {
+      list = data;
+    } else if (typeof data === 'object') {
+      const obj = data as Record<string, unknown>;
+      const collections = obj['collections'];
+      const smartscopes = obj['smartscopes'];
+      const smartScopes = obj['smartScopes'];
+      const items = obj['items'];
+      const results = obj['results'];
+      const dataItems = obj['data'];
+      if (Array.isArray(collections)) list = collections;
+      else if (Array.isArray(smartscopes)) list = smartscopes;
+      else if (Array.isArray(smartScopes)) list = smartScopes;
+      else if (Array.isArray(items)) list = items;
+      else if (Array.isArray(results)) list = results;
+      else if (Array.isArray(dataItems)) list = dataItems;
+    }
+    const shelves: BookOrbitShelf[] = [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      const record = item as Record<string, unknown>;
+      const id =
+        record['id'] ?? record['collectionId'] ?? record['smartscopeId'] ?? record['smartScopeId'];
+      const name = record['name'] ?? record['title'] ?? `Shelf ${id}`;
+      if (id == null) continue;
+      const countVal =
+        record['bookCount'] ?? record['count'] ?? record['total'] ?? record['booksCount'];
+      const booksVal = record['books'];
+      const bookCount =
+        typeof countVal === 'number'
+          ? countVal
+          : Array.isArray(booksVal)
+            ? booksVal.length
+            : undefined;
+      const typeVal = record['type'];
+      const type: BookOrbitShelfType =
+        typeVal === 'smartscope' || typeVal === 'smart_scope' ? 'smartscope' : fallbackType;
+      const descVal = record['description'];
+      shelves.push({
+        id: String(id),
+        name: String(name),
+        type,
+        description: typeof descVal === 'string' ? descVal : undefined,
+        bookCount,
+      });
+    }
+    return shelves;
+  }
+
+  private normalizeShelfBooks(data: unknown): BookOrbitShelfBook[] {
+    if (!data) return [];
+    let list: unknown[] = [];
+    if (Array.isArray(data)) {
+      list = data;
+    } else if (typeof data === 'object') {
+      const obj = data as Record<string, unknown>;
+      const books = obj['books'];
+      const items = obj['items'];
+      const results = obj['results'];
+      const dataItems = obj['data'];
+      if (Array.isArray(books)) list = books;
+      else if (Array.isArray(items)) list = items;
+      else if (Array.isArray(results)) list = results;
+      else if (Array.isArray(dataItems)) list = dataItems;
+    }
+
+    const books: BookOrbitShelfBook[] = [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      const record = item as Record<string, unknown>;
+      const bookId = record['bookId'] ?? record['id'];
+      if (bookId == null) continue;
+
+      const fileId = record['fileId'] ?? record['bookFileId'] ?? record['primaryFileId'] ?? null;
+      const contentVersion =
+        record['contentVersion'] != null ? String(record['contentVersion']) : null;
+      const formatVal = record['format'];
+      const filenameVal = record['filename'];
+      const format = (
+        (typeof formatVal === 'string' ? formatVal : '') ||
+        (typeof filenameVal === 'string' ? filenameVal.split('.').pop() : '') ||
+        'epub'
+      ).toLowerCase();
+
+      const titleVal = record['title'];
+      const filename =
+        typeof filenameVal === 'string' && filenameVal
+          ? filenameVal
+          : typeof titleVal === 'string' && titleVal
+            ? `${titleVal}.${format}`
+            : `book-${bookId}.${format}`;
+
+      const fileHash =
+        (typeof record['fileHash'] === 'string' ? (record['fileHash'] as string) : null) ??
+        (typeof record['hash'] === 'string' ? (record['hash'] as string) : null) ??
+        (typeof record['bookHash'] === 'string' ? (record['bookHash'] as string) : null) ??
+        null;
+      const bookHash =
+        (typeof record['bookHash'] === 'string' ? (record['bookHash'] as string) : null) ??
+        (typeof record['hash'] === 'string' ? (record['hash'] as string) : null) ??
+        (typeof record['fileHash'] === 'string' ? (record['fileHash'] as string) : null) ??
+        null;
+
+      const sizeBytesVal = record['sizeBytes'];
+      const sizeVal = record['size'];
+      const sizeBytes =
+        typeof sizeBytesVal === 'number'
+          ? sizeBytesVal
+          : typeof sizeVal === 'number'
+            ? sizeVal
+            : null;
+
+      const authorVal = record['author'];
+      const authorsVal = record['authors'];
+      const author =
+        typeof authorVal === 'string'
+          ? authorVal
+          : Array.isArray(authorsVal)
+            ? (authorsVal as string[]).join(', ')
+            : undefined;
+
+      const downloadUrlVal = record['downloadUrl'];
+      books.push({
+        bookId: String(bookId),
+        fileId: fileId != null ? String(fileId) : null,
+        contentVersion,
+        filename,
+        format,
+        fileHash,
+        bookHash,
+        sizeBytes,
+        size: sizeBytes ?? undefined,
+        title: typeof titleVal === 'string' ? titleVal : undefined,
+        author,
+        downloadUrl: typeof downloadUrlVal === 'string' ? downloadUrlVal : undefined,
+      });
+    }
+    return books;
   }
 }

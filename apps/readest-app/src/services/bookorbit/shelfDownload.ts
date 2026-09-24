@@ -453,27 +453,47 @@ export class BookOrbitShelfAdapter
   readonly connectionId: string;
   readonly tempFolder = 'bookorbit';
   readonly importErrorMessage = 'Failed to import BookOrbit shelf book';
+  private readonly client?: import('./types').BookOrbitShelfClient;
 
   constructor(
     private readonly config: BookOrbitDownloadConfig,
-    connectionId?: string,
+    connectionIdOrClient?: string | import('./types').BookOrbitShelfClient,
+    clientOrConnectionId?: string | import('./types').BookOrbitShelfClient,
   ) {
-    this.connectionId = connectionId ?? config.serverUrl;
+    if (typeof connectionIdOrClient === 'string') {
+      this.connectionId = connectionIdOrClient;
+      this.client = clientOrConnectionId as import('./types').BookOrbitShelfClient | undefined;
+    } else if (connectionIdOrClient && typeof connectionIdOrClient === 'object') {
+      this.client = connectionIdOrClient;
+      this.connectionId =
+        typeof clientOrConnectionId === 'string' ? clientOrConnectionId : config.serverUrl;
+    } else {
+      this.connectionId =
+        typeof clientOrConnectionId === 'string' ? clientOrConnectionId : config.serverUrl;
+    }
+    this.connectionId = this.connectionId ?? config.serverUrl;
   }
 
-  async getShelfBooks(
-    _shelfType: string,
-    _shelfId: string | number,
-  ): Promise<BookOrbitShelfBook[]> {
-    return [];
+  async getShelfBooks(shelfType: string, shelfId: string | number): Promise<BookOrbitShelfBook[]> {
+    if (this.client) {
+      return this.client.getShelfBooks(shelfType, shelfId);
+    }
+    const { BookOrbitClient } = await import('./BookOrbitClient');
+    const client = new BookOrbitClient(
+      this.config as unknown as import('@/types/settings').BookOrbitSettings,
+    );
+    return client.getShelfBooks(shelfType, shelfId);
   }
 
   async downloadBook(
     book: BookOrbitShelfBook,
-    _onProgress?: ProgressHandler,
+    onProgress?: ProgressHandler,
     signal?: AbortSignal,
   ): Promise<ArrayBuffer> {
     if (signal?.aborted) throw new Error('Download cancelled');
+    if (this.client?.downloadShelfBook) {
+      return this.client.downloadShelfBook(book.bookId, onProgress, signal);
+    }
     const url = buildBookOrbitDownloadUrl(book, this.config);
     const headers = buildBookOrbitHeaders(this.config);
     const res = await fetch(url, { method: 'GET', headers, signal });
@@ -490,8 +510,16 @@ export class BookOrbitShelfAdapter
       onProgress?: ProgressHandler,
       signal?: AbortSignal,
     ): Promise<void> => {
+      if (this.client?.downloadShelfBookToFile) {
+        await this.client.downloadShelfBookToFile(book, filePath, onProgress, signal);
+        return;
+      }
       await downloadBookOrbitFile(book, filePath, this.config, { onProgress, signal });
     };
+  }
+
+  async repairBookData(data: ArrayBuffer): Promise<ArrayBuffer> {
+    return data;
   }
 
   validateBookData(filename: string, data: ArrayBuffer, expectedSize?: number): void {

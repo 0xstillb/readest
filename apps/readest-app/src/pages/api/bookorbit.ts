@@ -11,6 +11,12 @@ const validEndpoints = [
   /^\/plugin\/bookmarks\/exchange(-ack)?$/,
   /^\/plugin\/page-stats$/,
   /^\/plugin\/book-states$/,
+  /^\/plugin\/collections(\/[^/]+)?(\/books)?$/,
+  /^\/plugin\/smartscopes(\/[^/]+)?(\/books)?$/,
+  /^\/plugin\/smart-scopes(\/[^/]+)?(\/books)?$/,
+  /^\/collections(\/[^/]+)?(\/books)?$/,
+  /^\/smartscopes(\/[^/]+)?(\/books)?$/,
+  /^\/smart-scopes(\/[^/]+)?(\/books)?$/,
 ];
 
 export const isValidBookOrbitEndpoint = (endpoint: string): boolean =>

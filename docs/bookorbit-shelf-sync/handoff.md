@@ -1,50 +1,60 @@
-# Handoff: Task 08 — Phase 6: Native Download + Import
+# Handoff: Task 09 — Phase 7: Subscription UI + e-ink UX
 
-Phase completed: Task 08 — Phase 6: Native Download + Import
+Phase completed: Task 09 — Phase 7: Subscription UI + e-ink UX
 Model used: Gemini Flash 3.8 / Antigravity
-Commit SHA: e346cc11f
+Commit SHA: ee716aa1f
 Files changed:
+- apps/readest-app/src/components/settings/integrations/BookOrbitForm.tsx
+- apps/readest-app/src/components/settings/integrations/BookOrbitShelfPanel.tsx
+- apps/readest-app/src/components/settings/integrations/BookOrbitShelfSyncStatus.tsx
+- apps/readest-app/src/hooks/useBookOrbitShelfSync.ts
+- apps/readest-app/src/pages/api/bookorbit.ts
+- apps/readest-app/src/services/bookorbit/BookOrbitClient.ts
 - apps/readest-app/src/services/bookorbit/shelfDownload.ts
-- apps/readest-app/src/services/bookorbit/download.ts
-- apps/readest-app/src/services/shelfSync/types.ts
-- apps/readest-app/src/services/shelfSync/ShelfSyncEngine.ts
-- apps/readest-app/src/__tests__/services/bookorbit/shelfDownload.test.ts
+- apps/readest-app/src/services/bookorbit/shelfSync.ts
+- apps/readest-app/src/services/bookorbit/types.ts
+- apps/readest-app/src/__tests__/components/BookOrbitShelfPanel.test.tsx
+- apps/readest-app/src/__tests__/components/BookOrbitShelfSyncStatus.test.tsx
+- apps/readest-app/src/__tests__/services/bookorbit/BookOrbitShelfSync.test.ts
 - docs/bookorbit-shelf-sync/handoff.md
 
 Tests run:
-- `pnpm lint` (`tsc --noEmit && biome lint .`) — PASS (2,578 files checked, 0 errors, 0 warnings)
-- Shelf download tests (`vitest src/__tests__/services/bookorbit/shelfDownload.test.ts`) — PASS (1 file, 21 tests)
-- ShelfSync tests (`vitest src/__tests__/services/shelfSync`) — PASS (4 files, 63 tests)
-- BookOrbit tests (`vitest bookorbit`) — PASS (19 files, 126 tests)
-- GrimmLink tests (`vitest grimmlink`) — PASS (12 files, 98 tests)
-- Database migration tests (`vitest src/__tests__/database`) — PASS (6 files, 89 passed, 1 skipped)
+- `pnpm lint` (`tsc --noEmit && biome lint .`) — PASS (Checked 2,585 files in 2s. No fixes applied, 0 errors)
+- Unit tests:
+  - `src/__tests__/components/BookOrbitShelfSyncStatus.test.tsx` (5 tests) — PASS
+  - `src/__tests__/components/BookOrbitShelfPanel.test.tsx` (9 tests) — PASS
+  - `src/__tests__/services/bookorbit/BookOrbitShelfSync.test.ts` (6 tests) — PASS
+- Regressions:
+  - `vitest run bookorbit` (22 test files, 146 tests) — PASS
+  - `vitest run grimmlink` (12 test files, 98 tests) — PASS
+  - `vitest run shelfSync` (8 test files, 91 tests) — PASS
 
 Known issues:
 - None.
 
 Decisions made:
-1. Native Direct Download & Bounded Memory:
-   - Preferred flow strictly followed: `BookOrbit HTTP → native direct-to-file → temp → validate → importBook(nativePath) → persist → cleanup`.
-   - On native Tauri / Android platforms, uses `tauriDownload` streaming directly to disk in `Temp`, avoiding loading multi-megabyte payloads into WebView memory.
-   - `inspectDownloadedFile` reads magic bytes via `file.slice(0, 8)` and metadata via `stats`, avoiding loading large files (e.g. 50MB+ PDFs) into ArrayBuffer/Blob memory before importing.
-2. File Signature & Size Validation:
-   - Rejects corrupt or invalid file downloads: validates ZIP PK (`[0x50, 0x4B]`) for EPUB and CBZ, and `%PDF` (`[0x25, 0x50, 0x44, 0x46]`) for PDF.
-   - Validates `sizeBytes` when present against actual filesystem size; rejects empty downloads (`size === 0`).
-3. Identity Verification & Data Safety:
-   - For original bytes with `fileHash`, verifies that `imported.hash` matches `fileHash`. On mismatch, purges the freshly imported book, throws error, and refuses to mark store entries or touch existing library files.
-   - For `audioless_epub`, allows null `fileHash` and `sizeBytes`; retains remote `bookId`, `fileId`, `contentVersion` along with local computed `Book.hash` (`imported.hash`).
-4. Cancellation & Temp Cleanup:
-   - Checks `signal?.aborted` before download, after download, before import, and after import.
-   - Cleans up temporary download file in `finally` without ever touching imported library files in `Books`.
-5. Serial Imports:
-   - `downloadAndImportBookOrbitBooksSerially` processes items one by one sequentially to protect low-RAM e-ink devices against memory spikes.
-6. Generic Shelf Sync Neutrality:
-   - Provider-neutral properties `fileId` and `contentVersion` added to `ShelfSyncBook` and forwarded to `ShelfSyncStore` in `ShelfSyncEngine`, without provider-specific branches or conditionals.
+1. E-ink / Ocean UX:
+   - Designed `BookOrbitShelfPanel` and `BookOrbitShelfSyncStatus` with high-contrast borders (`eink-bordered`), large touch targets (labels and rows with `min-h-14`, buttons with `min-h-10` / `h-10 px-4 py-3`), minimal layout shift, and restrained animations (`motion-safe:animate-spin` on spinners only).
+   - Status displays progress with `tabular-nums` and a high-contrast progress bar.
+   - Progress notifications throttled to >=200ms debounce/throttle in `useBookOrbitShelfSync` to avoid thrashing e-ink displays.
+2. Shelf Subscription Model & Policies:
+   - Exposed BookOrbit Collections and SmartScopes as shelf subscriptions in BookOrbit settings.
+   - Per-shelf controls include an enabled toggle, Download Policy (`off` | `wifi_only` | `always`), and Cleanup Policy (`keep_local` | `remove_managed_copy`).
+   - State persisted in `ShelfSyncStore` with provider `bookorbit` and connection ID matching configured server URL.
+3. Safe Reconciliation & Dry-Run Preview:
+   - Next sync preview displays pending counts for `Downloads`, `Updates`, and `Removals` calculated via `previewBookOrbitShelfSync` (reconciling remote shelf books with local library presence index and tracked shelf entries).
+   - Preserves the Data Safety Invariant: unmanaged books and books present in other shelves or providers are never removed.
+4. Manual Control & Stock Server:
+   - Sync is manual (button triggered); no aggressive background sync polling is added.
+   - BookOrbit server remains source of truth; no remote create/edit/delete/rename UI.
+   - Fallback paths (`/plugin/collections`, `/collections`, `/plugin/smartscopes`, `/plugin/smart-scopes`, `/smartscopes`) supported and proxied via `/api/bookorbit` SSRF validator whitelist.
+5. EPUB Repair Passthrough:
+   - `BookOrbitShelfAdapter.repairBookData` is implemented as an explicit identity passthrough to bypass Grimmory's EPUB OPF namespace mutation and prevent corrupted non-zip parses.
 
 Do not change:
-- Provider neutrality of `src/services/shelfSync/`.
-- Data Safety Invariant (never delete unless entry is managed by provider, snapshot complete, cleanup policy = remove_managed_copy, and global all-shelf refCount <= 1).
-- Direct-to-file native download and bounded memory inspection.
+- Provider neutrality of generic core (`src/services/shelfSync/`).
+- Data Safety Invariant.
 - Stock BookOrbit server contract.
+- GrimmLink preservation.
 
-Next task: Task 09
+Next task: Task 10 FRESH SESSION.

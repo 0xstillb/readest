@@ -18,6 +18,7 @@ import {
 import SubPageHeader from '../SubPageHeader';
 import { SectionTitle, SettingLabel, SettingsSelect, SettingsSwitchRow, Tips } from '../primitives';
 import { Toggle } from '@/components/primitives/toggle';
+import BookOrbitShelfPanel from './BookOrbitShelfPanel';
 
 interface BookOrbitFormProps {
   onBack: () => void;
@@ -296,6 +297,8 @@ const BookOrbitForm: React.FC<BookOrbitFormProps> = ({ onBack }) => {
               </div>
             )}
           </div>
+
+          <BookOrbitShelfPanel />
 
           <div className='flex justify-end'>
             <button
