@@ -2,7 +2,7 @@
 
 Phase completed: Phase 1 (Extract Generic Shelf Reconciliation)
 Model used: Gemini Flash 3.8 / Antigravity
-Commit SHA: ab684ce92f6950f86f1c72913f4cee2ff2d8b674
+Commit SHA: d66e17f732589c52124dcddedd3e3309a2cc77ea
 Files changed:
 - apps/readest-app/src/services/shelfSync/types.ts
 - apps/readest-app/src/services/shelfSync/presence.ts
