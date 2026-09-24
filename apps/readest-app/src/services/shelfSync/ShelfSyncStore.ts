@@ -1,5 +1,12 @@
 import type { AppService } from '@/types/system';
-import type { ShelfCleanupPolicy, ShelfDownloadPolicy, ShelfSyncEntry } from './types';
+import type {
+  IShelfSyncStore,
+  ShelfCleanupPolicy,
+  ShelfDownloadPolicy,
+  ShelfSyncEntry,
+} from './types';
+
+export type { IShelfSyncStore };
 
 export const DB_SCHEMA = 'shelf-sync';
 export const DB_PATH = 'shelf-sync.db';
@@ -158,7 +165,7 @@ const mapEntryRow = (row: EntryDbRow): ShelfEntryRecord => ({
  * nullable hashes, versions, file IDs, and cross-shelf / cross-provider
  * reference count queries required by the Data Safety Invariant.
  */
-export class ShelfSyncStore {
+export class ShelfSyncStore implements IShelfSyncStore {
   private static readonly initialized = new WeakMap<object, Promise<void>>();
 
   constructor(

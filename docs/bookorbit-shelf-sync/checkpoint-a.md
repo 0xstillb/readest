@@ -54,6 +54,42 @@ Both blockers have been resolved and verified with regression tests.
 
 ---
 
+## Checkpoint A Final Review & Remediation (Subscription Semantics, Reuse Ownership & Generic Neutrality)
+
+Following the initial Checkpoint A remediation, an independent re-review identified two behavioral regressions and one generic-neutrality concern prior to starting Phase 4 (Task 06):
+
+1. **Disabled subscriptions were still synced**:
+   - *Root cause*: Generic `ShelfSyncEngine.syncSubscribedInternal()` called `this.store.getShelfSubscriptions()` without options. Unlike legacy GrimmLink behavior which only returned enabled subscriptions, `ShelfSyncStore.getShelfSubscriptions()` returns all rows (enabled and disabled) unless filtered.
+   - *Fix*: Changed `syncSubscribedInternal()` to call `this.store.getShelfSubscriptions({ enabledOnly: true })`. `syncSubscribed()` now strictly adheres to its semantic contract: syncing only currently enabled subscriptions.
+   - *Regression Test*: Verified in `ShelfSyncEngine.test.ts` that enabled shelves call `adapter.getShelfBooks()` and sync, while disabled shelves are completely bypassed (no adapter calls, no imports, no removals).
+
+2. **Reused local books failed to persist real localPath / ownership**:
+   - *Root cause*: `ShelfSyncEngine.sync()` previously derived `localPath` and `managedByProvider` solely from `tracked?.localPath ?? null` and `tracked?.managedByProvider ?? false`. When a remote shelf reused an existing local library book that was not previously tracked by that shelf, `tracked` was undefined, persisting `localPath = null` and `managedByProvider = false`. This rendered global cross-provider reference counting blind to that shelf's reference to the local file.
+   - *Changed-revision hazard*: If an existing tracked entry had `bookId = 10, bookHash = OLD, localPath = OLD/book.epub, managed = true` and the remote revision changed to `bookHash = NEW` (which already existed locally at `NEW/book.epub`), the previous implementation could attach the new remote identity to the old managed path (`NEW` with `OLD/book.epub`).
+   - *Fix*:
+     - Derives real local presence using `options.presenceIndex?.booksByHash` or `presentBooks.find(b => b.hash === remoteBook.bookHash)`.
+     - Derives actual on-disk local path via `getLocalBookFilename(localBook)`.
+     - Persists the actual path in the shelf entry.
+     - Preserves `managedByProvider = true` ONLY if:
+       - An existing tracked entry exists,
+       - The tracked entry already points to the exact same resolved local path,
+       - The tracked entry's hash corresponds to the current remote hash (`tracked.bookHash === remoteBook.bookHash`),
+       - And `tracked.managedByProvider === true`.
+     - In all other reuse cases (including new shelf reuse or changed remote revisions), marks `managedByProvider = false`.
+   - *Tests added*:
+     - **Test A**: New shelf reuses existing user/local book (`remote hash = H1, local library has H1, no previous shelf entry`): no download, entry saved with actual `localPath = 'H1/book.epub'` and `managedByProvider = false`.
+     - **Test B**: Cross-provider safety with reused book (`Provider A managed=true, Provider B reuses local book with managed=false`): all-reference count is 2; removing Provider A membership with `cleanupPolicy = remove_managed_copy` keeps the local file intact.
+     - **Test C**: Changed revision already exists locally (`tracked: bookId 10, hash OLD, path OLD/book.epub; remote: bookId 10, hash NEW; local library contains NEW/book.epub`): no download, entry saved with `bookHash = 'NEW'`, `localPath = 'NEW/book.epub'`, and `managedByProvider = false` (never points NEW hash at OLD path).
+     - **Test D**: Same managed file unchanged (`tracked: hash H1, path H1/book.epub, managed=true; remote: hash H1`): reuses local file, preserves same path, and preserves valid `managedByProvider = true`.
+
+3. **Generic Neutrality Cleanup**:
+   - *Isolation*: Moved `wrapLegacyShelfStore` out of `src/services/shelfSync/ShelfSyncEngine.ts` into `src/services/grimmlink/legacyShelfStoreAdapter.ts`.
+   - `src/services/shelfSync/ShelfSyncEngine.ts` now accepts `IShelfSyncStore` cleanly without any knowledge of GrimmLink field names (`managedByGrimmLink`, `managed_by_grimmlink`, legacy argument ordering).
+   - Zero occurrences of BookOrbit-specific branching (`provider === 'bookorbit'`) in `src/services/shelfSync/`.
+   - Legacy GrimmLink DB / column names (`grimmlink-sync.db`, `managed_by_grimmlink`) exist strictly within explicit legacy compatibility boundaries (`src/services/shelfSync/migration.ts` and `src/services/grimmlink/legacyShelfStoreAdapter.ts`).
+
+---
+
 ## Remaining Risks & Mitigations
 
 1. **Unindexed local files outside shelf sync**: Books imported manually or through OPDS catalogs that are not tracked in `shelf_entries` have reference count 0.
@@ -65,6 +101,7 @@ Both blockers have been resolved and verified with regression tests.
 
 ## Status
 
-All architectural review findings for Checkpoint A are resolved. The generic shelf sync engine and persistent store are ready for BookOrbit integration.
+All Checkpoint A issues and final re-review findings are resolved and verified with automated test suites. The architecture is ready for Task 06.
 
 **Next task: Task 06 — Phase 4 BookOrbit Catalog + Bulk Manifest Client**
+

@@ -1,10 +1,58 @@
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
 import type { ProgressHandler } from '@/utils/transfer';
-import type { ShelfSubscriptionRecord } from './ShelfSyncStore';
+import type {
+  GetShelfEntriesOptions,
+  GetShelfSubscriptionsOptions,
+  ReferenceQueryOptions,
+  SaveShelfSubscriptionInput,
+  ShelfEntryKey,
+  ShelfEntryRecord,
+  ShelfEntryWrite,
+  ShelfSubscriptionRecord,
+} from './ShelfSyncStore';
 
 export type ShelfCleanupPolicy = 'keep_local' | 'remove_managed_copy';
 export type ShelfDownloadPolicy = 'off' | 'wifi_only' | 'always';
+
+export interface IShelfSyncStore {
+  readonly provider?: string;
+  readonly connectionId?: string;
+
+  getShelfSubscriptions(options?: GetShelfSubscriptionsOptions): Promise<ShelfSubscriptionRecord[]>;
+  saveShelfSubscription(
+    shelfIdOrInput: string | number | SaveShelfSubscriptionInput,
+    enabled?: boolean,
+    cleanupPolicy?: ShelfCleanupPolicy,
+    downloadPolicy?: ShelfDownloadPolicy,
+    shelfType?: string,
+  ): Promise<boolean | void>;
+  deleteShelfSubscription(
+    shelfId: string | number,
+    shelfType?: string,
+    options?: { provider?: string; connectionId?: string },
+  ): Promise<void>;
+
+  getShelfEntries(
+    shelfId: string | number,
+    shelfType?: string,
+    options?: GetShelfEntriesOptions,
+  ): Promise<ShelfEntryRecord[]>;
+  markShelfEntries(
+    entries: ShelfEntryWrite[],
+    options?: { insertOnly?: boolean },
+  ): Promise<number | void>;
+  removeShelfEntries(entries: ShelfEntryKey[]): Promise<void>;
+
+  getManagedShelfReferenceCounts(
+    localPaths: string[],
+    options?: ReferenceQueryOptions,
+  ): Promise<Map<string, number>>;
+  getAllShelfReferenceCounts(
+    localPaths: string[],
+    options?: ReferenceQueryOptions,
+  ): Promise<Map<string, number>>;
+}
 
 /**
  * Generic representation of a book in a remote shelf snapshot.

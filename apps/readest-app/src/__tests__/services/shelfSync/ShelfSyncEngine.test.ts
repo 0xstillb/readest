@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
+import { getLocalBookFilename } from '@/utils/book';
 import type { ProgressHandler } from '@/utils/transfer';
 import {
   type SaveShelfSubscriptionInput,
@@ -153,8 +154,12 @@ const createMockStore = () => {
   return {
     subscriptions,
     entries,
-    async getShelfSubscriptions() {
-      return Array.from(subscriptions.values()).map((s) => ({
+    async getShelfSubscriptions(options?: { enabledOnly?: boolean }) {
+      let list = Array.from(subscriptions.values());
+      if (options?.enabledOnly) {
+        list = list.filter((s) => s.enabled);
+      }
+      return list.map((s) => ({
         provider: 'fake-provider',
         connectionId: 'conn-1',
         shelfType: s.shelfType,
@@ -847,6 +852,306 @@ describe('ShelfSyncEngine', () => {
       expect(result).toEqual({ reused: 0, downloaded: 2, removed: 0 });
       expect(library).toHaveLength(2);
       expect(adapter.metrics.some((m) => m.metric === 'shelfSyncDurationMs')).toBe(true);
+    });
+
+    it('only syncs enabled subscriptions and ignores disabled subscriptions completely', async () => {
+      const adapter = new FakeShelfAdapter();
+      const getShelfBooksSpy = vi.spyOn(adapter, 'getShelfBooks');
+
+      adapter.remoteShelves.set('regular:enabled-shelf', [
+        { bookId: 'b1', bookHash: 'h1', filename: 'book1.pdf', format: 'PDF' },
+      ]);
+      adapter.remoteShelves.set('magic:disabled-shelf', [
+        { bookId: 'b2', bookHash: 'h2', filename: 'book2.pdf', format: 'PDF' },
+      ]);
+
+      const appService = createMockAppService();
+      const store = createMockStore();
+      await store.saveShelfSubscription({
+        shelfType: 'regular',
+        shelfId: 'enabled-shelf',
+        enabled: true,
+      });
+      await store.saveShelfSubscription({
+        shelfType: 'magic',
+        shelfId: 'disabled-shelf',
+        enabled: false,
+      });
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+      const library: Book[] = [];
+      const onImported = vi.fn((_book, updated) => {
+        library.splice(0, library.length, ...updated);
+      });
+      const onRemoved = vi.fn();
+
+      const result = await engine.syncSubscribed({
+        getLibrary: () => library,
+        onImported,
+        onRemoved,
+      });
+
+      // Enabled shelf: adapter.getShelfBooks() called, shelf synced
+      expect(getShelfBooksSpy).toHaveBeenCalledWith('regular', 'enabled-shelf');
+      expect(result.downloaded).toBe(1);
+      expect(library).toHaveLength(1);
+      expect(library[0]?.title).toBe('book1.pdf');
+
+      // Disabled shelf: adapter.getShelfBooks() NOT called, no import, no removal
+      expect(getShelfBooksSpy).not.toHaveBeenCalledWith('magic', 'disabled-shelf');
+      expect(onImported).toHaveBeenCalledTimes(1);
+      expect(onRemoved).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Reuse Ownership Safety and Reference Tracking', () => {
+    it('Test A: new shelf reuses existing user/local book with actual localPath and managedByProvider=false', async () => {
+      const adapter = new FakeShelfAdapter();
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'H1', filename: 'book.epub', format: 'EPUB' },
+      ]);
+
+      const appService = createMockAppService();
+      appService.files.set('H1/book.epub', new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [
+        {
+          hash: 'H1',
+          title: 'book',
+          author: '',
+          sourceTitle: 'book',
+          format: 'EPUB',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ];
+
+      const store = createMockStore();
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      const result = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+      });
+
+      expect(result).toEqual({ reused: 1, downloaded: 0, removed: 0 });
+      expect(adapter.downloadCalls).toEqual([]);
+
+      const entry = store.entries.get('default:shelf-1:b1');
+      expect(entry).toBeDefined();
+      expect(entry?.bookHash).toBe('H1');
+      expect(entry?.localPath).toBe('H1/book.epub');
+      expect(entry?.managedByProvider).toBe(false);
+    });
+
+    it('Test B: cross-provider safety with reused book preserves file on unmanaged reference', async () => {
+      const appService = createMockAppService();
+      const book: Book = {
+        hash: 'H1',
+        title: 'book',
+        author: '',
+        sourceTitle: 'book',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const bookPath = getLocalBookFilename(book);
+      appService.files.set(bookPath, new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [book];
+
+      const store = createMockStore();
+
+      // Provider A previously downloaded and manages the book
+      const adapterA = new FakeShelfAdapter('provider-a', 'conn-a');
+      adapterA.remoteShelves.set('default:shelf-a', [
+        { bookId: 'book-a', bookHash: 'H1', filename: 'book.pdf', format: 'PDF' },
+      ]);
+      store.entries.set('default:shelf-a:book-a', {
+        provider: 'provider-a',
+        connectionId: 'conn-a',
+        shelfType: 'default',
+        shelfId: 'shelf-a',
+        bookId: 'book-a',
+        bookHash: 'H1',
+        localPath: bookPath,
+        managedByProvider: true,
+        lastSeenAt: Date.now(),
+      });
+
+      // Provider B syncs a shelf that reuses the same local book
+      const adapterB = new FakeShelfAdapter('provider-b', 'conn-b');
+      adapterB.remoteShelves.set('default:shelf-b', [
+        { bookId: 'book-b', bookHash: 'H1', filename: 'book.pdf', format: 'PDF' },
+      ]);
+      const engineB = new ShelfSyncEngine(adapterB, appService, store);
+
+      const resultB = await engineB.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-b',
+        library,
+        onImported: () => {},
+      });
+
+      expect(resultB.reused).toBe(1);
+      const entryB = store.entries.get('default:shelf-b:book-b');
+      expect(entryB?.localPath).toBe(bookPath);
+      expect(entryB?.managedByProvider).toBe(false);
+
+      // Verify global all-reference count is 2 before removal
+      const countsBefore = await store.getAllShelfReferenceCounts([bookPath]);
+      expect(countsBefore.get(bookPath)).toBe(2);
+
+      // Provider A removes the book with cleanupPolicy = remove_managed_copy
+      adapterA.remoteShelves.set('default:shelf-a', []); // book removed from remote
+      const engineA = new ShelfSyncEngine(adapterA, appService, store);
+      const onRemovedA = vi.fn();
+
+      const resultA = await engineA.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-a',
+        library,
+        cleanupPolicy: 'remove_managed_copy',
+        onImported: () => {},
+        onRemoved: onRemovedA,
+      });
+
+      expect(resultA.removed).toBe(0);
+      expect(onRemovedA).not.toHaveBeenCalled();
+      // Local file and book remain intact!
+      expect(appService.files.has(bookPath)).toBe(true);
+      expect(library.some((b) => b.hash === 'H1')).toBe(true);
+
+      // Provider A entry is removed, Provider B entry remains
+      expect(store.entries.has('default:shelf-a:book-a')).toBe(false);
+      expect(store.entries.has('default:shelf-b:book-b')).toBe(true);
+    });
+
+    it('Test C: changed revision already exists locally reuses new local path and clears managed ownership', async () => {
+      const adapter = new FakeShelfAdapter();
+      // Remote now has book 10 with NEW hash
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: '10', bookHash: 'NEW', filename: 'book-new.pdf', format: 'PDF' },
+      ]);
+
+      const bookOld: Book = {
+        hash: 'OLD',
+        title: 'book-old',
+        author: '',
+        sourceTitle: 'book-old',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const bookNew: Book = {
+        hash: 'NEW',
+        title: 'book-new',
+        author: '',
+        sourceTitle: 'book-new',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const oldPath = getLocalBookFilename(bookOld);
+      const newPath = getLocalBookFilename(bookNew);
+
+      const appService = createMockAppService();
+      appService.files.set(oldPath, new Uint8Array([1]));
+      appService.files.set(newPath, new Uint8Array([2]));
+
+      const library: Book[] = [bookOld, bookNew];
+
+      const store = createMockStore();
+      // Previously tracked entry: bookId=10, hash=OLD, path=oldPath, managed=true
+      store.entries.set('default:shelf-1:10', {
+        provider: 'fake-provider',
+        connectionId: 'conn-1',
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        bookId: '10',
+        bookHash: 'OLD',
+        localPath: oldPath,
+        managedByProvider: true,
+        lastSeenAt: Date.now() - 1000,
+      });
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      const result = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+      });
+
+      expect(result).toEqual({ reused: 1, downloaded: 0, removed: 0 });
+      expect(adapter.downloadCalls).toEqual([]);
+
+      const entry = store.entries.get('default:shelf-1:10');
+      expect(entry).toBeDefined();
+      expect(entry?.bookHash).toBe('NEW');
+      expect(entry?.localPath).toBe(newPath);
+      expect(entry?.managedByProvider).toBe(false);
+      // Must NOT point NEW hash at OLD path
+      expect(entry?.localPath).not.toBe(oldPath);
+    });
+
+    it('Test D: same managed file unchanged preserves existing path and managedByProvider=true', async () => {
+      const adapter = new FakeShelfAdapter();
+      // Remote still has same hash H1
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: '10', bookHash: 'H1', filename: 'book.pdf', format: 'PDF' },
+      ]);
+
+      const book: Book = {
+        hash: 'H1',
+        title: 'book',
+        author: '',
+        sourceTitle: 'book',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const bookPath = getLocalBookFilename(book);
+
+      const appService = createMockAppService();
+      appService.files.set(bookPath, new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [book];
+
+      const store = createMockStore();
+      // Previously tracked entry: bookId=10, hash=H1, path=bookPath, managed=true
+      store.entries.set('default:shelf-1:10', {
+        provider: 'fake-provider',
+        connectionId: 'conn-1',
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        bookId: '10',
+        bookHash: 'H1',
+        localPath: bookPath,
+        managedByProvider: true,
+        lastSeenAt: Date.now() - 1000,
+      });
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      const result = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+      });
+
+      expect(result).toEqual({ reused: 1, downloaded: 0, removed: 0 });
+      expect(adapter.downloadCalls).toEqual([]);
+
+      const entry = store.entries.get('default:shelf-1:10');
+      expect(entry).toBeDefined();
+      expect(entry?.bookHash).toBe('H1');
+      expect(entry?.localPath).toBe(bookPath);
+      expect(entry?.managedByProvider).toBe(true);
     });
   });
 

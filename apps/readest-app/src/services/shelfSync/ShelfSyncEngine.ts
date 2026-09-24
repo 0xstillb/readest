@@ -16,8 +16,8 @@ import {
 } from './reconciliation';
 import { planShelfDeletions } from './deletion';
 import type {
+  IShelfSyncStore,
   LibraryPresenceIndex,
-  ShelfCleanupPolicy,
   ShelfDownloadPolicy,
   ShelfSubscribedSyncOptions,
   ShelfSyncAdapter,
@@ -28,278 +28,9 @@ import type {
   ShelfSyncRunOptions,
   ShelfSyncTransfer,
 } from './types';
-import {
-  type GetShelfEntriesOptions,
-  type GetShelfSubscriptionsOptions,
-  type ReferenceQueryOptions,
-  type SaveShelfSubscriptionInput,
-  type ShelfEntryKey,
-  type ShelfEntryRecord,
-  type ShelfEntryWrite,
-  type ShelfSubscriptionRecord,
-  ShelfSyncStore,
-} from './ShelfSyncStore';
+import { ShelfSyncStore } from './ShelfSyncStore';
 
-export interface IShelfSyncStore {
-  readonly provider?: string;
-  readonly connectionId?: string;
-
-  getShelfSubscriptions(options?: GetShelfSubscriptionsOptions): Promise<ShelfSubscriptionRecord[]>;
-  saveShelfSubscription(
-    shelfIdOrInput: string | number | SaveShelfSubscriptionInput,
-    enabled?: boolean,
-    cleanupPolicy?: ShelfCleanupPolicy,
-    downloadPolicy?: ShelfDownloadPolicy,
-    shelfType?: string,
-  ): Promise<boolean | void>;
-  deleteShelfSubscription(
-    shelfId: string | number,
-    shelfType?: string,
-    options?: { provider?: string; connectionId?: string },
-  ): Promise<void>;
-
-  getShelfEntries(
-    shelfId: string | number,
-    shelfType?: string,
-    options?: GetShelfEntriesOptions,
-  ): Promise<ShelfEntryRecord[]>;
-  markShelfEntries(
-    entries: ShelfEntryWrite[],
-    options?: { insertOnly?: boolean },
-  ): Promise<number | void>;
-  removeShelfEntries(entries: ShelfEntryKey[]): Promise<void>;
-
-  getManagedShelfReferenceCounts(
-    localPaths: string[],
-    options?: ReferenceQueryOptions,
-  ): Promise<Map<string, number>>;
-  getAllShelfReferenceCounts(
-    localPaths: string[],
-    options?: ReferenceQueryOptions,
-  ): Promise<Map<string, number>>;
-}
-
-type AnyFn = (...args: unknown[]) => unknown;
-
-/**
- * Normalizes legacy stores (like GrimmLinkSyncStore or mock test doubles)
- * into a store satisfying IShelfSyncStore.
- */
-export function wrapLegacyShelfStore(
-  store: unknown,
-  defaultProvider = 'default',
-  defaultConnectionId = 'default',
-): IShelfSyncStore {
-  if (store instanceof ShelfSyncStore) {
-    return store;
-  }
-
-  const s = store as Record<string, unknown>;
-  const provider = (s['provider'] as string) || defaultProvider;
-  const connectionId = (s['connectionId'] as string) || defaultConnectionId;
-
-  return {
-    provider,
-    connectionId,
-
-    async getShelfSubscriptions(options?: GetShelfSubscriptionsOptions) {
-      if (typeof s['getShelfSubscriptions'] === 'function') {
-        const rows = (await (s['getShelfSubscriptions'] as AnyFn)(options)) as Array<
-          Record<string, unknown>
-        >;
-        return rows.map((row) => ({
-          provider: (row['provider'] as string) || provider,
-          connectionId: (row['connectionId'] as string) || connectionId,
-          shelfType: (row['shelfType'] as string) || 'default',
-          shelfId: String(row['shelfId']),
-          enabled:
-            row['enabled'] != null ? Number(row['enabled']) === 1 || row['enabled'] === true : true,
-          cleanupPolicy: (row['cleanupPolicy'] as ShelfCleanupPolicy) || 'keep_local',
-          downloadPolicy: (row['downloadPolicy'] as ShelfDownloadPolicy) || 'always',
-          createdAt: Number(row['createdAt']) || 0,
-          updatedAt: Number(row['updatedAt']) || 0,
-        }));
-      }
-      return [];
-    },
-
-    async saveShelfSubscription(shelfIdOrInput, enabled, cleanupPolicy, downloadPolicy, shelfType) {
-      if (typeof s['saveShelfSubscription'] === 'function') {
-        const fn = s['saveShelfSubscription'] as AnyFn;
-        if (typeof shelfIdOrInput === 'object') {
-          await fn(
-            shelfIdOrInput.shelfType ?? 'default',
-            shelfIdOrInput.shelfId,
-            shelfIdOrInput.enabled ?? true,
-            shelfIdOrInput.cleanupPolicy ?? 'keep_local',
-            shelfIdOrInput.downloadPolicy ?? 'always',
-          );
-        } else {
-          await fn(
-            shelfType ?? 'default',
-            shelfIdOrInput,
-            enabled ?? true,
-            cleanupPolicy ?? 'keep_local',
-            downloadPolicy ?? 'always',
-          );
-        }
-      }
-    },
-
-    async deleteShelfSubscription(shelfId, shelfType, options) {
-      if (typeof s['deleteShelfSubscription'] === 'function') {
-        await (s['deleteShelfSubscription'] as AnyFn)(shelfId, shelfType, options);
-      }
-    },
-
-    async getShelfEntries(shelfId, shelfType = 'default', options) {
-      if (typeof s['getShelfEntries'] === 'function') {
-        const fn = s['getShelfEntries'] as AnyFn;
-        // Try (shelfId, shelfType) first (ShelfSyncStore), then (shelfType, shelfId) (GrimmLinkSyncStore)
-        let rows = (await Promise.resolve(fn(shelfId, shelfType, options)).catch(
-          () => [],
-        )) as Array<Record<string, unknown>>;
-        if ((!rows || rows.length === 0) && shelfType) {
-          const altRows = (await Promise.resolve(fn(shelfType, shelfId, options)).catch(
-            () => [],
-          )) as Array<Record<string, unknown>>;
-          if (altRows && altRows.length > 0) {
-            rows = altRows;
-          }
-        }
-        return (rows || []).map((row) => ({
-          provider: (row['provider'] as string) || provider,
-          connectionId: (row['connectionId'] as string) || connectionId,
-          shelfType: (row['shelfType'] as string) || shelfType,
-          shelfId: String(shelfId),
-          bookId: String(row['bookId']),
-          fileId: (row['fileId'] as string) ?? null,
-          bookHash: (row['bookHash'] as string) ?? null,
-          contentVersion: (row['contentVersion'] as string) ?? null,
-          localPath: (row['localPath'] as string) ?? null,
-          managedByProvider:
-            row['managedByProvider'] != null
-              ? !!row['managedByProvider']
-              : !!row['managedByGrimmLink'],
-          lastSeenAt: Number(row['lastSeenAt']) || Date.now(),
-        }));
-      }
-      return [];
-    },
-
-    async markShelfEntries(entries) {
-      if (!entries.length) return;
-      if (typeof s['markShelfEntries'] === 'function') {
-        await (s['markShelfEntries'] as AnyFn)(
-          entries.map((e) => ({
-            ...e,
-            shelfType: e.shelfType ?? 'default',
-            shelfId: Number(e.shelfId) || e.shelfId,
-            bookId: Number(e.bookId) || e.bookId,
-            bookHash: e.bookHash ?? '',
-            localPath: e.localPath ?? null,
-            managedByGrimmLink: !!e.managedByProvider,
-            managedByProvider: !!e.managedByProvider,
-          })),
-        );
-      } else if (typeof s['markShelfEntry'] === 'function') {
-        const fn = s['markShelfEntry'] as AnyFn;
-        for (const e of entries) {
-          if (fn.length <= 1) {
-            await fn(e);
-          } else {
-            await fn(
-              e.shelfType ?? 'default',
-              Number(e.shelfId) || e.shelfId,
-              Number(e.bookId) || e.bookId,
-              e.bookHash ?? '',
-              e.localPath ?? null,
-              !!e.managedByProvider,
-            );
-          }
-        }
-      }
-    },
-
-    async removeShelfEntries(entries) {
-      if (!entries.length) return;
-      if (typeof s['removeShelfEntries'] === 'function') {
-        await (s['removeShelfEntries'] as AnyFn)(
-          entries.map((e) => ({
-            ...e,
-            shelfType: e.shelfType ?? 'default',
-            shelfId: Number(e.shelfId) || e.shelfId,
-            bookId: Number(e.bookId) || e.bookId,
-          })),
-        );
-      } else if (typeof s['removeShelfEntry'] === 'function') {
-        const fn = s['removeShelfEntry'] as AnyFn;
-        for (const e of entries) {
-          await fn(
-            e.shelfType ?? 'default',
-            Number(e.shelfId) || e.shelfId,
-            Number(e.bookId) || e.bookId,
-          );
-        }
-      }
-    },
-
-    async getManagedShelfReferenceCounts(localPaths, options) {
-      const result = new Map<string, number>();
-      for (const path of localPaths) result.set(path, 0);
-      if (!localPaths.length) return result;
-
-      if (typeof s['getManagedShelfReferenceCounts'] === 'function') {
-        return (await (s['getManagedShelfReferenceCounts'] as AnyFn)(localPaths, options)) as Map<
-          string,
-          number
-        >;
-      }
-      if (typeof s['getManagedShelfEntryReferences'] === 'function') {
-        const fn = s['getManagedShelfEntryReferences'] as AnyFn;
-        for (const path of localPaths) {
-          result.set(path, Number(await fn(path, options)) || 0);
-        }
-        return result;
-      }
-      return result;
-    },
-
-    async getAllShelfReferenceCounts(localPaths, options) {
-      const result = new Map<string, number>();
-      for (const path of localPaths) result.set(path, 0);
-      if (!localPaths.length) return result;
-
-      if (typeof s['getAllShelfReferenceCounts'] === 'function') {
-        return (await (s['getAllShelfReferenceCounts'] as AnyFn)(localPaths, options)) as Map<
-          string,
-          number
-        >;
-      }
-      if (typeof s['getAllShelfEntryReferences'] === 'function') {
-        const fn = s['getAllShelfEntryReferences'] as AnyFn;
-        for (const path of localPaths) {
-          result.set(path, Number(await fn(path, options)) || 0);
-        }
-        return result;
-      }
-      if (typeof s['getManagedShelfReferenceCounts'] === 'function') {
-        return (await (s['getManagedShelfReferenceCounts'] as AnyFn)(localPaths, options)) as Map<
-          string,
-          number
-        >;
-      }
-      if (typeof s['getManagedShelfEntryReferences'] === 'function') {
-        const fn = s['getManagedShelfEntryReferences'] as AnyFn;
-        for (const path of localPaths) {
-          result.set(path, Number(await fn(path, options)) || 0);
-        }
-        return result;
-      }
-      return result;
-    },
-  };
-}
+export type { IShelfSyncStore };
 
 /**
  * Generic shelf synchronization engine.
@@ -323,13 +54,12 @@ export class ShelfSyncEngine<
   constructor(
     adapter: ShelfSyncAdapter<TId, TBook>,
     appService: ShelfSyncAppService,
-    store?: IShelfSyncStore | ShelfSyncStore | unknown,
+    store?: IShelfSyncStore,
   ) {
     this.adapter = adapter;
     this.appService = appService;
-    this.store = store
-      ? wrapLegacyShelfStore(store, adapter.provider, adapter.connectionId)
-      : new ShelfSyncStore(appService as AppService, adapter.provider, adapter.connectionId);
+    this.store =
+      store ?? new ShelfSyncStore(appService as AppService, adapter.provider, adapter.connectionId);
   }
 
   /**
@@ -347,7 +77,7 @@ export class ShelfSyncEngine<
     // 3. Resolve local library presence
     const localLibrary = [...options.library];
     const presentBooks = options.presenceIndex
-      ? [...options.presenceIndex.booksByHash.values()]
+      ? [...options.presenceIndex.booksByPath.values()]
       : (
           await Promise.all(
             localLibrary
@@ -361,8 +91,12 @@ export class ShelfSyncEngine<
           .filter(({ present }) => present)
           .map(({ book }) => book);
 
-    const localHashes = new Set(presentBooks.map((b) => b.hash));
-    const localPaths = new Set(presentBooks.map(getLocalBookFilename));
+    const localHashes = options.presenceIndex
+      ? options.presenceIndex.hashes
+      : new Set(presentBooks.map((b) => b.hash).filter(Boolean) as string[]);
+    const localPaths = options.presenceIndex
+      ? options.presenceIndex.paths
+      : new Set(presentBooks.map(getLocalBookFilename));
 
     // 4. Plan and reconcile
     const plan = planShelfSync(remote, existing, localHashes, localPaths);
@@ -372,12 +106,30 @@ export class ShelfSyncEngine<
     await this.store.markShelfEntries(
       plan.reuse.map((bookId) => {
         const remoteBook = remote.find((book) => book.bookId === bookId)!;
-        const tracked = existing.find(
-          (entry) =>
-            entry.bookId === String(bookId) &&
-            (entry.bookHash === remoteBook.bookHash ||
-              (remoteBook.bookHash != null && localHashes.has(remoteBook.bookHash))),
-        );
+        const tracked = existing.find((entry) => entry.bookId === String(bookId));
+
+        const localBook = remoteBook.bookHash
+          ? (options.presenceIndex?.booksByHash.get(remoteBook.bookHash) ??
+            presentBooks.find((book) => book.hash === remoteBook.bookHash))
+          : tracked?.localPath
+            ? (options.presenceIndex?.booksByPath.get(tracked.localPath) ??
+              presentBooks.find((book) => getLocalBookFilename(book) === tracked.localPath))
+            : undefined;
+
+        let resolvedLocalPath: string | null = null;
+        let managedByProvider = false;
+
+        if (localBook) {
+          resolvedLocalPath = getLocalBookFilename(localBook);
+          const isSamePath = tracked?.localPath === resolvedLocalPath;
+          const isSameHash = (tracked?.bookHash ?? null) === (remoteBook.bookHash ?? null);
+          managedByProvider = !!tracked?.managedByProvider && isSamePath && isSameHash;
+        } else if (tracked?.localPath && localPaths.has(tracked.localPath)) {
+          resolvedLocalPath = tracked.localPath;
+          const isSameHash = (tracked?.bookHash ?? null) === (remoteBook.bookHash ?? null);
+          managedByProvider = !!tracked.managedByProvider && isSameHash;
+        }
+
         return {
           provider: this.adapter.provider,
           connectionId: this.adapter.connectionId,
@@ -385,8 +137,8 @@ export class ShelfSyncEngine<
           shelfId: String(shelfId),
           bookId: String(bookId),
           bookHash: remoteBook.bookHash,
-          localPath: tracked?.localPath ?? null,
-          managedByProvider: tracked?.managedByProvider ?? false,
+          localPath: resolvedLocalPath,
+          managedByProvider,
         };
       }),
     );
@@ -516,7 +268,9 @@ export class ShelfSyncEngine<
   private async syncSubscribedInternal(
     options: ShelfSubscribedSyncOptions<TId, TBook>,
   ): Promise<ShelfSyncResult> {
-    const subscriptions = await this.store.getShelfSubscriptions();
+    const subscriptions = await this.store.getShelfSubscriptions({
+      enabledOnly: true,
+    });
     let reused = 0;
     let downloaded = 0;
     let removed = 0;

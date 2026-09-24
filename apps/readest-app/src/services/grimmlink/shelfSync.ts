@@ -27,8 +27,8 @@ import {
   ShelfSyncEngine,
   ShelfSyncStore,
   summarizeShelfReconciliation,
-  wrapLegacyShelfStore,
 } from '@/services/shelfSync';
+import { wrapLegacyShelfStore } from './legacyShelfStoreAdapter';
 
 export type GrimmLinkLibraryPresenceIndex = LibraryPresenceIndex;
 
