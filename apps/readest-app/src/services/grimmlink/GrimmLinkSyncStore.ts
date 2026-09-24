@@ -395,6 +395,39 @@ export class GrimmLinkSyncStore {
     });
   }
 
+  async getAllShelfReferenceCounts(localPaths: string[]): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    for (const path of localPaths) result.set(path, 0);
+    if (!localPaths.length) return result;
+    await this.withDb(async (db) => {
+      for (let start = 0; start < localPaths.length; start += SQLITE_BIND_CHUNK_SIZE) {
+        const batch = localPaths.slice(start, start + SQLITE_BIND_CHUNK_SIZE);
+        const placeholders = batch.map(() => '?').join(', ');
+        const rows = await db.select<{ local_path: string; count: number | string }>(
+          `SELECT local_path, COUNT(*) AS count FROM shelf_entries
+         WHERE connection_id = ? AND local_path IN (${placeholders})
+         GROUP BY local_path`,
+          [this.connectionId, ...batch],
+        );
+        for (const row of rows) result.set(row.local_path, Number(row.count) || 0);
+      }
+    });
+    return result;
+  }
+
+  async getAllShelfEntryReferences(localPath: string): Promise<number> {
+    return this.withDb(async (db) => {
+      const row = (
+        await db.select<{ count: number | string }>(
+          `SELECT COUNT(*) AS count FROM shelf_entries
+         WHERE connection_id = ? AND local_path = ?`,
+          [this.connectionId, localPath],
+        )
+      )[0];
+      return Number(row?.count ?? 0);
+    });
+  }
+
   async markShelfEntry(
     shelfType: string,
     shelfId: number,

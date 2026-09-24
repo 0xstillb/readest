@@ -11,6 +11,7 @@ import { repairMalformedEpubOpfNamespace } from './download';
 import type { GrimmLinkSyncStore } from './GrimmLinkSyncStore';
 import { recordGrimmLinkPerformance } from './einkDiagnostics';
 import {
+  type IShelfSyncStore,
   type LibraryPresenceIndex,
   type ShelfReconciliation,
   type ShelfSyncAdapter,
@@ -26,6 +27,7 @@ import {
   ShelfSyncEngine,
   ShelfSyncStore,
   summarizeShelfReconciliation,
+  wrapLegacyShelfStore,
 } from '@/services/shelfSync';
 
 export type GrimmLinkLibraryPresenceIndex = LibraryPresenceIndex;
@@ -120,7 +122,7 @@ export class GrimmLinkShelfAdapter implements ShelfSyncAdapter<number, GrimmLink
 export class GrimmLinkShelfProvider {
   constructor(
     private readonly client: ShelfClient,
-    private readonly store: GrimmLinkSyncStore,
+    private readonly store: GrimmLinkSyncStore | IShelfSyncStore,
   ) {}
 
   async sync(
@@ -135,8 +137,26 @@ export class GrimmLinkShelfProvider {
     downloadPolicy: GrimmLinkShelfDownloadPolicy = 'always',
     presenceIndex?: GrimmLinkLibraryPresenceIndex,
   ): Promise<GrimmLinkShelfSyncResult> {
-    const adapter = new GrimmLinkShelfAdapter(this.client, this.store.connectionId);
-    const engine = new ShelfSyncEngine(adapter, appService, this.store);
+    const connectionId =
+      'connectionId' in this.store && typeof this.store.connectionId === 'string'
+        ? this.store.connectionId
+        : 'default';
+
+    let genericStore: IShelfSyncStore;
+    if (this.store instanceof ShelfSyncStore) {
+      genericStore = this.store;
+    } else if (appService && 'openDatabase' in appService) {
+      const concreteStore = new ShelfSyncStore(appService as AppService, 'grimmlink', connectionId);
+      await migrateGrimmLinkShelfState(appService as AppService, connectionId, concreteStore).catch(
+        () => {},
+      );
+      genericStore = concreteStore;
+    } else {
+      genericStore = wrapLegacyShelfStore(this.store, 'grimmlink', connectionId);
+    }
+
+    const adapter = new GrimmLinkShelfAdapter(this.client, connectionId);
+    const engine = new ShelfSyncEngine(adapter, appService, genericStore);
     return engine.sync({
       shelfType: type,
       shelfId,
@@ -153,29 +173,33 @@ export class GrimmLinkShelfProvider {
 
 export async function syncSubscribedGrimmLinkShelves(
   client: ShelfClient,
-  store: GrimmLinkSyncStore,
+  store: GrimmLinkSyncStore | IShelfSyncStore,
   getLibrary: () => Book[],
   onImported: (book: Book, library: Book[]) => Promise<void> | void,
   appService: ShelfSyncAppService,
   transfer?: ShelfSyncTransfer<GrimmLinkShelfBook>,
   onRemoved?: (book: Book, library: Book[]) => Promise<void> | void,
 ): Promise<GrimmLinkShelfSyncResult> {
-  // Retryable, idempotent migration from legacy grimmlink-sync.db into shelf-sync.db
-  if (appService && 'openDatabase' in appService) {
-    const targetStore = new ShelfSyncStore(
-      appService as AppService,
-      'grimmlink',
-      store.connectionId,
+  const connectionId =
+    'connectionId' in store && typeof store.connectionId === 'string'
+      ? store.connectionId
+      : 'default';
+
+  let genericStore: IShelfSyncStore;
+  if (store instanceof ShelfSyncStore) {
+    genericStore = store;
+  } else if (appService && 'openDatabase' in appService) {
+    const concreteStore = new ShelfSyncStore(appService as AppService, 'grimmlink', connectionId);
+    await migrateGrimmLinkShelfState(appService as AppService, connectionId, concreteStore).catch(
+      () => {},
     );
-    await migrateGrimmLinkShelfState(
-      appService as AppService,
-      store.connectionId,
-      targetStore,
-    ).catch(() => {});
+    genericStore = concreteStore;
+  } else {
+    genericStore = wrapLegacyShelfStore(store, 'grimmlink', connectionId);
   }
 
-  const adapter = new GrimmLinkShelfAdapter(client, store.connectionId);
-  const engine = new ShelfSyncEngine(adapter, appService, store);
+  const adapter = new GrimmLinkShelfAdapter(client, connectionId);
+  const engine = new ShelfSyncEngine(adapter, appService, genericStore);
   return engine.syncSubscribed({
     getLibrary,
     onImported,

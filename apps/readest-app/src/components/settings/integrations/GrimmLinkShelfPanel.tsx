@@ -4,7 +4,7 @@ import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
-import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
+import { migrateGrimmLinkShelfState, ShelfSyncStore } from '@/services/shelfSync';
 import {
   reconcileShelfSnapshot,
   summarizeShelfReconciliation,
@@ -39,15 +39,10 @@ const GrimmLinkShelfPanel = () => {
   const [syncStatus, setSyncStatus] = useState<GrimmLinkShelfSyncStatusValue | null>(null);
   const [preview, setPreview] = useState<GrimmLinkShelfPreview | null>(null);
   const abortController = useRef<AbortController | null>(null);
+  const connectionId = `${settings.grimmlink.serverUrl}\u0000${settings.grimmlink.username}`;
   const store = useMemo(
-    () =>
-      appService
-        ? new GrimmLinkSyncStore(
-            appService,
-            `${settings.grimmlink.serverUrl}\u0000${settings.grimmlink.username}`,
-          )
-        : null,
-    [appService, settings.grimmlink.serverUrl, settings.grimmlink.username],
+    () => (appService ? new ShelfSyncStore(appService, 'grimmlink', connectionId) : null),
+    [appService, connectionId],
   );
   const client = useMemo(
     () =>
@@ -58,9 +53,10 @@ const GrimmLinkShelfPanel = () => {
   );
 
   const refresh = useCallback(async () => {
-    if (!client || !store) return;
+    if (!client || !store || !appService) return;
     setLoading(true);
     try {
+      await migrateGrimmLinkShelfState(appService, connectionId, store).catch(() => {});
       const [regular, magic, subscriptions] = await Promise.all([
         client.getShelves('regular'),
         client.getShelves('magic'),
@@ -69,7 +65,9 @@ const GrimmLinkShelfPanel = () => {
       setShelves([...regular, ...magic]);
       setEnabled(
         new Set(
-          subscriptions.map((subscription) => `${subscription.shelfType}:${subscription.shelfId}`),
+          subscriptions
+            .filter((subscription) => subscription.enabled)
+            .map((subscription) => `${subscription.shelfType}:${subscription.shelfId}`),
         ),
       );
       setCleanupPolicies(
@@ -99,8 +97,8 @@ const GrimmLinkShelfPanel = () => {
         subscriptions.map(async (subscription) => {
           const type = subscription.shelfType as 'regular' | 'magic';
           const [remote, existing] = await Promise.all([
-            client.getShelfBooks(type, subscription.shelfId),
-            store.getShelfEntries(subscription.shelfType, subscription.shelfId),
+            client.getShelfBooks(type, Number(subscription.shelfId)),
+            store.getShelfEntries(subscription.shelfId, subscription.shelfType),
           ]);
           return summarizeShelfReconciliation(
             reconcileShelfSnapshot(remote, existing, localHashes, localPaths),
@@ -146,13 +144,13 @@ const GrimmLinkShelfPanel = () => {
 
   const toggle = async (shelf: GrimmLinkShelf, checked: boolean) => {
     const key = `${shelf.type}:${shelf.id}`;
-    await store.saveShelfSubscription(
-      shelf.type,
-      shelf.id,
-      checked,
-      cleanupPolicies.get(key) ?? 'keep_local',
-      downloadPolicies.get(key) ?? 'always',
-    );
+    await store.saveShelfSubscription({
+      shelfType: shelf.type,
+      shelfId: shelf.id,
+      enabled: checked,
+      cleanupPolicy: cleanupPolicies.get(key) ?? 'keep_local',
+      downloadPolicy: downloadPolicies.get(key) ?? 'always',
+    });
     setEnabled((current) => {
       const next = new Set(current);
       if (checked) next.add(key);
@@ -167,13 +165,13 @@ const GrimmLinkShelfPanel = () => {
     policy: 'keep_local' | 'remove_managed_copy',
   ) => {
     const key = `${shelf.type}:${shelf.id}`;
-    await store.saveShelfSubscription(
-      shelf.type,
-      shelf.id,
-      enabled.has(key),
-      policy,
-      downloadPolicies.get(key) ?? 'always',
-    );
+    await store.saveShelfSubscription({
+      shelfType: shelf.type,
+      shelfId: shelf.id,
+      enabled: enabled.has(key),
+      cleanupPolicy: policy,
+      downloadPolicy: downloadPolicies.get(key) ?? 'always',
+    });
     setCleanupPolicies((current) => new Map(current).set(key, policy));
     void refresh();
   };
@@ -183,13 +181,13 @@ const GrimmLinkShelfPanel = () => {
     policy: 'off' | 'wifi_only' | 'always',
   ) => {
     const key = `${shelf.type}:${shelf.id}`;
-    await store.saveShelfSubscription(
-      shelf.type,
-      shelf.id,
-      enabled.has(key),
-      cleanupPolicies.get(key) ?? 'keep_local',
-      policy,
-    );
+    await store.saveShelfSubscription({
+      shelfType: shelf.type,
+      shelfId: shelf.id,
+      enabled: enabled.has(key),
+      cleanupPolicy: cleanupPolicies.get(key) ?? 'keep_local',
+      downloadPolicy: policy,
+    });
     setDownloadPolicies((current) => new Map(current).set(key, policy));
     void refresh();
   };
@@ -200,7 +198,7 @@ const GrimmLinkShelfPanel = () => {
     setSyncStatus({ stage: 'starting' });
     abortController.current = new AbortController();
     try {
-      const subscriptions = await store.getShelfSubscriptions();
+      const subscriptions = await store.getShelfSubscriptions({ enabledOnly: true });
       if (subscriptions.length === 0) {
         setSyncStatus({ stage: 'info', message: _('Select at least one Grimmory shelf first.') });
         eventDispatcher.dispatch('toast', {

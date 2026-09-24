@@ -219,6 +219,16 @@ const createMockStore = () => {
       }
       return counts;
     },
+    async getAllShelfReferenceCounts(localPaths: string[]) {
+      const counts = new Map<string, number>();
+      for (const p of localPaths) counts.set(p, 0);
+      for (const e of entries.values()) {
+        if (e.localPath && counts.has(e.localPath)) {
+          counts.set(e.localPath, (counts.get(e.localPath) ?? 0) + 1);
+        }
+      }
+      return counts;
+    },
   };
 };
 
@@ -560,6 +570,155 @@ describe('ShelfSyncEngine', () => {
       expect(result.removed).toBe(0);
       expect(appService.deletedBooks).toHaveLength(0);
     });
+
+    it('does not delete local file when another provider holds an unmanaged reference (cross-provider safety)', async () => {
+      const adapterA = new FakeShelfAdapter('provider-a', 'conn-a');
+      adapterA.remoteShelves.set('default:shelf-1', []); // Removed from Provider A
+
+      const appService = createMockAppService();
+      appService.files.set('h1/book.epub', new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [
+        {
+          hash: 'h1',
+          title: 'book',
+          author: '',
+          sourceTitle: 'book',
+          format: 'EPUB',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ];
+
+      const store = createMockStore();
+      // Provider A: managed reference
+      await store.markShelfEntries([
+        {
+          provider: 'provider-a',
+          connectionId: 'conn-a',
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book.epub',
+          managedByProvider: true,
+        },
+      ]);
+      // Provider B: unmanaged reference to the same localPath
+      await store.markShelfEntries([
+        {
+          provider: 'provider-b',
+          connectionId: 'conn-b',
+          shelfType: 'default',
+          shelfId: 'shelf-2',
+          bookId: 'b2',
+          bookHash: 'h1',
+          localPath: 'h1/book.epub',
+          managedByProvider: false,
+        },
+      ]);
+
+      const engineA = new ShelfSyncEngine(adapterA, appService, store);
+
+      const result = await engineA.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      // MUST NOT delete the local file because Provider B references it
+      expect(result.removed).toBe(0);
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(appService.files.has('h1/book.epub')).toBe(true);
+      // Provider A's shelf entry is unlinked, Provider B's shelf entry remains
+      expect(store.entries.has('default:shelf-1:b1')).toBe(false);
+      expect(store.entries.has('default:shelf-2:b2')).toBe(true);
+    });
+
+    it('keeps local file when multiple providers hold managed references, and deletes only when one managed entry remains', async () => {
+      const adapterA = new FakeShelfAdapter('provider-a', 'conn-a');
+      adapterA.remoteShelves.set('default:shelf-1', []); // Removed from Provider A
+
+      const appService = createMockAppService();
+      appService.files.set('h1/book.epub', new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [
+        {
+          hash: 'h1',
+          title: 'book',
+          author: '',
+          sourceTitle: 'book',
+          format: 'EPUB',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ];
+
+      const store = createMockStore();
+      // Provider A: managed
+      await store.markShelfEntries([
+        {
+          provider: 'provider-a',
+          connectionId: 'conn-a',
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book.epub',
+          managedByProvider: true,
+        },
+      ]);
+      // Provider B: also managed
+      await store.markShelfEntries([
+        {
+          provider: 'provider-b',
+          connectionId: 'conn-b',
+          shelfType: 'default',
+          shelfId: 'shelf-2',
+          bookId: 'b2',
+          bookHash: 'h1',
+          localPath: 'h1/book.epub',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engineA = new ShelfSyncEngine(adapterA, appService, store);
+
+      // Step 1: Provider A sync with remove_managed_copy -> KEEP because Provider B also references it
+      const resultA = await engineA.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      expect(resultA.removed).toBe(0);
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(appService.files.has('h1/book.epub')).toBe(true);
+      expect(store.entries.has('default:shelf-1:b1')).toBe(false);
+      expect(store.entries.has('default:shelf-2:b2')).toBe(true);
+
+      // Step 2: Now only Provider B's managed entry remains
+      const adapterB = new FakeShelfAdapter('provider-b', 'conn-b');
+      adapterB.remoteShelves.set('default:shelf-2', []); // Removed from Provider B
+      const engineB = new ShelfSyncEngine(adapterB, appService, store);
+
+      const resultB = await engineB.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-2',
+        library,
+        onImported: () => {},
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      // Now only 1 managed entry remained, so it is eligible for delete
+      expect(resultB.removed).toBe(1);
+      expect(appService.deletedBooks).toEqual(['h1']);
+      expect(store.entries.has('default:shelf-2:b2')).toBe(false);
+    });
   });
 
   describe('Direct file download & Bounded Memory', () => {
@@ -755,21 +914,26 @@ describe('ShelfSyncEngine', () => {
         enabled: true,
         cleanupPolicy: 'remove_managed_copy',
         downloadPolicy: 'always',
+        insertOnly: true,
       });
 
-      expect(targetStore.markShelfEntries).toHaveBeenCalledWith([
-        {
-          provider: 'grimmlink',
-          connectionId: 'connection-1',
-          shelfType: 'regular',
-          shelfId: '101',
-          bookId: '202',
-          bookHash: 'legacy-hash',
-          localPath: 'legacy-hash/book.epub',
-          managedByProvider: true,
-          lastSeenAt: 1000,
-        },
-      ]);
+      expect(targetStore.markShelfEntries).toHaveBeenCalledWith(
+        [
+          {
+            provider: 'grimmlink',
+            connectionId: 'connection-1',
+            shelfType: 'regular',
+            shelfId: '101',
+            bookId: '202',
+            bookHash: 'legacy-hash',
+            localPath: 'legacy-hash/book.epub',
+            managedByProvider: true,
+            lastSeenAt: 1000,
+            insertOnly: true,
+          },
+        ],
+        { insertOnly: true },
+      );
     });
   });
 });

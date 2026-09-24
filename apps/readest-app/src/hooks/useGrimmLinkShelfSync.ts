@@ -3,7 +3,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
-import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
+import { migrateGrimmLinkShelfState, ShelfSyncStore } from '@/services/shelfSync';
 import { syncSubscribedGrimmLinkShelves } from '@/services/grimmlink/shelfSync';
 import { eventDispatcher } from '@/utils/event';
 import { useLibraryStore } from '@/store/libraryStore';
@@ -58,11 +58,10 @@ export const useGrimmLinkShelfSync = ({
 
     try {
       const client = new GrimmLinkClient(settings);
-      const store = new GrimmLinkSyncStore(
-        appService,
-        `${settings.serverUrl}\u0000${settings.username}`,
-      );
-      if ((await store.getShelfSubscriptions()).length === 0) {
+      const connectionId = `${settings.serverUrl}\u0000${settings.username}`;
+      const store = new ShelfSyncStore(appService, 'grimmlink', connectionId);
+      await migrateGrimmLinkShelfState(appService, connectionId, store).catch(() => {});
+      if ((await store.getShelfSubscriptions({ enabledOnly: true })).length === 0) {
         const message = _('Select at least one Grimmory shelf first.');
         setShelfSyncStatus({ stage: 'info', message });
         eventDispatcher.dispatch('toast', { message, type: 'info' });

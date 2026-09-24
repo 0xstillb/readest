@@ -57,7 +57,7 @@ export async function migrateGrimmLinkShelfState(
       );
 
       for (const sub of subs) {
-        await targetStore.saveShelfSubscription({
+        const inserted = await targetStore.saveShelfSubscription({
           provider: 'grimmlink',
           connectionId,
           shelfType: sub.shelf_type,
@@ -65,8 +65,11 @@ export async function migrateGrimmLinkShelfState(
           enabled: Number(sub.enabled) === 1,
           cleanupPolicy: (sub.cleanup_policy as ShelfCleanupPolicy) || 'keep_local',
           downloadPolicy: (sub.download_policy as ShelfDownloadPolicy) || 'always',
+          insertOnly: true,
         });
-        migratedSubscriptions++;
+        if (inserted !== false) {
+          migratedSubscriptions++;
+        }
       }
     }
 
@@ -85,7 +88,7 @@ export async function migrateGrimmLinkShelfState(
       );
 
       if (entries.length > 0) {
-        await targetStore.markShelfEntries(
+        const count = await targetStore.markShelfEntries(
           entries.map((e) => ({
             provider: 'grimmlink',
             connectionId,
@@ -96,9 +99,11 @@ export async function migrateGrimmLinkShelfState(
             localPath: e.local_path,
             managedByProvider: Number(e.managed_by_grimmlink) === 1,
             lastSeenAt: Number(e.last_seen_at) || Date.now(),
+            insertOnly: true,
           })),
+          { insertOnly: true },
         );
-        migratedEntries = entries.length;
+        migratedEntries = typeof count === 'number' ? count : entries.length;
       }
     }
 

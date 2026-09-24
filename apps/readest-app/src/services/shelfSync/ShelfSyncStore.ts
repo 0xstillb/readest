@@ -26,6 +26,7 @@ export interface SaveShelfSubscriptionInput {
   enabled?: boolean;
   cleanupPolicy?: ShelfCleanupPolicy;
   downloadPolicy?: ShelfDownloadPolicy;
+  insertOnly?: boolean;
 }
 
 export interface GetShelfSubscriptionsOptions {
@@ -63,6 +64,7 @@ export interface ShelfEntryWrite {
   localPath?: string | null;
   managedByProvider?: boolean;
   lastSeenAt?: number;
+  insertOnly?: boolean;
 }
 
 export interface ShelfEntryKey {
@@ -235,7 +237,7 @@ export class ShelfSyncStore {
     cleanupPolicy: ShelfCleanupPolicy = 'keep_local',
     downloadPolicy: ShelfDownloadPolicy = 'always',
     shelfType = 'default',
-  ): Promise<void> {
+  ): Promise<boolean> {
     const now = Date.now();
     let provider = this.provider;
     let connectionId = this.connectionId;
@@ -244,6 +246,7 @@ export class ShelfSyncStore {
     let isEnabled = enabled ?? true;
     let cPolicy = cleanupPolicy;
     let dPolicy = downloadPolicy;
+    let isInsertOnly = false;
 
     if (typeof shelfIdOrInput === 'object') {
       provider = shelfIdOrInput.provider ?? this.provider;
@@ -253,24 +256,30 @@ export class ShelfSyncStore {
       isEnabled = shelfIdOrInput.enabled ?? true;
       cPolicy = shelfIdOrInput.cleanupPolicy ?? 'keep_local';
       dPolicy = shelfIdOrInput.downloadPolicy ?? 'always';
+      isInsertOnly = !!shelfIdOrInput.insertOnly;
     } else {
       sId = String(shelfIdOrInput);
     }
 
-    await this.withDb((db) =>
+    const conflictClause = isInsertOnly
+      ? 'ON CONFLICT(provider, connection_id, shelf_type, shelf_id) DO NOTHING'
+      : `ON CONFLICT(provider, connection_id, shelf_type, shelf_id) DO UPDATE SET
+          enabled = excluded.enabled,
+          cleanup_policy = excluded.cleanup_policy,
+          download_policy = excluded.download_policy,
+          updated_at = excluded.updated_at`;
+
+    const result = await this.withDb((db) =>
       db.execute(
         `INSERT INTO shelf_subscriptions (
           provider, connection_id, shelf_type, shelf_id, enabled,
           cleanup_policy, download_policy, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(provider, connection_id, shelf_type, shelf_id) DO UPDATE SET
-          enabled = excluded.enabled,
-          cleanup_policy = excluded.cleanup_policy,
-          download_policy = excluded.download_policy,
-          updated_at = excluded.updated_at`,
+        ${conflictClause}`,
         [provider, connectionId, sType, sId, isEnabled ? 1 : 0, cPolicy, dPolicy, now, now],
       ),
     );
+    return (result?.rowsAffected ?? 0) > 0;
   }
 
   async getShelfSubscription(
@@ -393,9 +402,13 @@ export class ShelfSyncStore {
     await this.markShelfEntries([entry]);
   }
 
-  async markShelfEntries(entries: ShelfEntryWrite[]): Promise<void> {
-    if (!entries.length) return;
+  async markShelfEntries(
+    entries: ShelfEntryWrite[],
+    options?: { insertOnly?: boolean },
+  ): Promise<number> {
+    if (!entries.length) return 0;
     const now = Date.now();
+    let totalAffected = 0;
     await this.withTransaction(async (db) => {
       for (const entry of entries) {
         const provider = entry.provider ?? this.provider;
@@ -409,20 +422,25 @@ export class ShelfSyncStore {
         const localPath = entry.localPath ?? null;
         const managedByProvider = entry.managedByProvider ? 1 : 0;
         const lastSeenAt = entry.lastSeenAt ?? now;
+        const isInsertOnly = options?.insertOnly ?? entry.insertOnly ?? false;
 
-        await db.execute(
-          `INSERT INTO shelf_entries (
-            provider, connection_id, shelf_type, shelf_id, book_id,
-            file_id, book_hash, content_version, local_path,
-            managed_by_provider, last_seen_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(provider, connection_id, shelf_type, shelf_id, book_id) DO UPDATE SET
+        const conflictClause = isInsertOnly
+          ? 'ON CONFLICT(provider, connection_id, shelf_type, shelf_id, book_id) DO NOTHING'
+          : `ON CONFLICT(provider, connection_id, shelf_type, shelf_id, book_id) DO UPDATE SET
             file_id = excluded.file_id,
             book_hash = excluded.book_hash,
             content_version = excluded.content_version,
             local_path = excluded.local_path,
             managed_by_provider = excluded.managed_by_provider,
-            last_seen_at = excluded.last_seen_at`,
+            last_seen_at = excluded.last_seen_at`;
+
+        const res = await db.execute(
+          `INSERT INTO shelf_entries (
+            provider, connection_id, shelf_type, shelf_id, book_id,
+            file_id, book_hash, content_version, local_path,
+            managed_by_provider, last_seen_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ${conflictClause}`,
           [
             provider,
             connectionId,
@@ -437,8 +455,10 @@ export class ShelfSyncStore {
             lastSeenAt,
           ],
         );
+        totalAffected += res?.rowsAffected ?? 0;
       }
     });
+    return totalAffected;
   }
 
   async updateShelfEntry(

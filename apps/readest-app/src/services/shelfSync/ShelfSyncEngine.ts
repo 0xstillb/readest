@@ -51,7 +51,7 @@ export interface IShelfSyncStore {
     cleanupPolicy?: ShelfCleanupPolicy,
     downloadPolicy?: ShelfDownloadPolicy,
     shelfType?: string,
-  ): Promise<void>;
+  ): Promise<boolean | void>;
   deleteShelfSubscription(
     shelfId: string | number,
     shelfType?: string,
@@ -63,10 +63,17 @@ export interface IShelfSyncStore {
     shelfType?: string,
     options?: GetShelfEntriesOptions,
   ): Promise<ShelfEntryRecord[]>;
-  markShelfEntries(entries: ShelfEntryWrite[]): Promise<void>;
+  markShelfEntries(
+    entries: ShelfEntryWrite[],
+    options?: { insertOnly?: boolean },
+  ): Promise<number | void>;
   removeShelfEntries(entries: ShelfEntryKey[]): Promise<void>;
 
   getManagedShelfReferenceCounts(
+    localPaths: string[],
+    options?: ReferenceQueryOptions,
+  ): Promise<Map<string, number>>;
+  getAllShelfReferenceCounts(
     localPaths: string[],
     options?: ReferenceQueryOptions,
   ): Promise<Map<string, number>>;
@@ -257,6 +264,40 @@ export function wrapLegacyShelfStore(
       }
       return result;
     },
+
+    async getAllShelfReferenceCounts(localPaths, options) {
+      const result = new Map<string, number>();
+      for (const path of localPaths) result.set(path, 0);
+      if (!localPaths.length) return result;
+
+      if (typeof s['getAllShelfReferenceCounts'] === 'function') {
+        return (await (s['getAllShelfReferenceCounts'] as AnyFn)(localPaths, options)) as Map<
+          string,
+          number
+        >;
+      }
+      if (typeof s['getAllShelfEntryReferences'] === 'function') {
+        const fn = s['getAllShelfEntryReferences'] as AnyFn;
+        for (const path of localPaths) {
+          result.set(path, Number(await fn(path, options)) || 0);
+        }
+        return result;
+      }
+      if (typeof s['getManagedShelfReferenceCounts'] === 'function') {
+        return (await (s['getManagedShelfReferenceCounts'] as AnyFn)(localPaths, options)) as Map<
+          string,
+          number
+        >;
+      }
+      if (typeof s['getManagedShelfEntryReferences'] === 'function') {
+        const fn = s['getManagedShelfEntryReferences'] as AnyFn;
+        for (const path of localPaths) {
+          result.set(path, Number(await fn(path, options)) || 0);
+        }
+        return result;
+      }
+      return result;
+    },
   };
 }
 
@@ -401,7 +442,7 @@ export class ShelfSyncEngine<
     if (cleanupPolicy === 'remove_managed_copy') {
       const paths = plan.absent.flatMap((entry) => (entry.localPath ? [entry.localPath] : []));
       if (paths.length > 0) {
-        const counts = await this.store.getManagedShelfReferenceCounts(paths);
+        const counts = await this.store.getAllShelfReferenceCounts(paths);
         for (const [path, count] of counts) {
           referenceCounts.set(path, count);
         }
