@@ -334,13 +334,36 @@ export async function downloadAndImportBookOrbitBook(
     }
 
     const existingIndex = library.findIndex((book) => book.hash === imported.hash);
+    const existingBook = existingIndex >= 0 ? library[existingIndex] : undefined;
     if (existingIndex === -1) {
       library.push(imported);
     } else {
       library[existingIndex] = imported;
     }
 
-    await onImported?.(imported, [...library]);
+    try {
+      await onImported?.(imported, [...library]);
+    } catch (error) {
+      if (existingIndex === -1) {
+        const idx = library.findIndex((b) => b.hash === imported.hash);
+        if (idx >= 0) library.splice(idx, 1);
+      } else if (existingBook) {
+        library[existingIndex] = existingBook;
+      }
+      await appService.deleteBook(imported, 'purge').catch(() => {});
+      throw error;
+    }
+
+    if (signal?.aborted) {
+      if (existingIndex === -1) {
+        const idx = library.findIndex((b) => b.hash === imported.hash);
+        if (idx >= 0) library.splice(idx, 1);
+      } else if (existingBook) {
+        library[existingIndex] = existingBook;
+      }
+      await appService.deleteBook(imported, 'purge').catch(() => {});
+      throw new Error('Download cancelled');
+    }
 
     // Persist to ShelfSyncStore:
     // Retain remote bookId, fileId, contentVersion + local Book.hash after import
@@ -356,7 +379,18 @@ export async function downloadAndImportBookOrbitBook(
       localPath: getLocalBookFilename(imported),
       managedByProvider: true,
     };
-    await store.markShelfEntries([entry]);
+    try {
+      await store.markShelfEntries([entry]);
+    } catch (error) {
+      if (existingIndex === -1) {
+        const idx = library.findIndex((b) => b.hash === imported.hash);
+        if (idx >= 0) library.splice(idx, 1);
+      } else if (existingBook) {
+        library[existingIndex] = existingBook;
+      }
+      await appService.deleteBook(imported, 'purge').catch(() => {});
+      throw error;
+    }
 
     if (
       options.cleanupPolicy === 'remove_managed_copy' &&

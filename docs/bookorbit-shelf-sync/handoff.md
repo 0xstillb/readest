@@ -1,58 +1,48 @@
-# Handoff: Task 13 — Phase 8C: Managed Cleanup + Reference Safety
+# Handoff: Task 14 — Phase 8D: Crash Recovery + Transaction Boundaries
 
-Phase completed: Task 13 — Phase 8C: Managed Cleanup + Reference Safety
+Phase completed: Task 14 — Phase 8D: Crash Recovery + Transaction Boundaries
 Model used: Gemini Flash 3.8 / Antigravity
-Commit SHA: aad243198
 Files changed:
-- apps/readest-app/src/services/shelfSync/types.ts
-- apps/readest-app/src/services/shelfSync/deletion.ts
+- apps/readest-app/src/services/shelfSync/validation.ts
 - apps/readest-app/src/services/shelfSync/ShelfSyncEngine.ts
 - apps/readest-app/src/services/bookorbit/shelfDownload.ts
-- apps/readest-app/src/__tests__/services/shelfSync/shelfSync.test.ts
 - apps/readest-app/src/__tests__/services/shelfSync/ShelfSyncEngine.test.ts
+- apps/readest-app/src/__tests__/services/bookorbit/shelfDownload.test.ts
 - docs/bookorbit-shelf-sync/handoff.md
 
 Tests run:
 - `pnpm lint` (`tsc --noEmit && biome lint .`) — PASS (Checked 2,586 files. 0 errors)
-- `vitest run shelfSync` (8 test files, 148 tests) — PASS
-- `vitest run bookorbit` (22 test files, 149 tests) — PASS
+- `vitest run shelfSync` (8 test files, 157 tests) — PASS
+- `vitest run bookorbit` (22 test files, 152 tests) — PASS
 - `vitest run grimmlink` (12 test files, 98 tests) — PASS
-- `vitest run database` (6 test files, 89 passed, 1 skipped) — PASS
 - `cargo check -p Readest` — PASS
 
 Known issues:
 - None.
 
 Decisions made:
-1. Complete Audit of Every Shelf Sync Delete/Remove Path:
-   - Audited all deletion and removal execution points across `planShelfDeletions`, `ShelfSyncEngine.ts`, `shelfDownload.ts`, and `ShelfSyncStore.ts`.
-   - Strictly enforced all 6 criteria of the Data Safety Invariant:
-     1) `managed_by_provider === true`: User-owned books (reused or imported directly) are always tracked with `managedByProvider = false` and can never be deleted.
-     2) `removal proven from a COMPLETE successful snapshot`: Partial, failed, cancelled, restart-required, or offline snapshot results produce zero removals (`snapshot_incomplete`).
-     3) `cleanup_policy === 'remove_managed_copy'`: `keep_local` preserves local files and only removes database tracking records.
-     4) `no other shelf reference`: Dereferencing checks `referenceCounts > 1` (`multiple_references`). Only the final dereference can become eligible for deletion.
-     5) `no other provider reference`: Global reference counts query across all providers (e.g., BookOrbit + GrimmLink sharing a file preserves the file).
-     6) `tracked local file still corresponds to managed entry`: Checked via path correspondence and content hash verification against the library. If the user replaced the file or if paths are ambiguous, the file is safely kept (`unmatched_managed_entry` or `ambiguous_local_path`).
-2. Robust Ambiguity and User-Replacement Protections:
-   - Added `'unmatched_managed_entry'` and `'ambiguous_local_path'` to `ShelfDeletionReason`.
-   - In `planShelfDeletions`, resolved the local path directory via `getBookDirOfPath(entry.localPath)`. Evaluates ambiguity if multiple library books match the path or hash.
-   - If a book at `localPath` exists but matches neither `entry.bookHash` nor the tracked directory, it is recognized as user-replaced and kept.
-   - If a book is not found in `library`, deletion is blocked to prevent accidental deletion of unmanaged/unindexed user files on disk ("prefer extra file over false deletion").
-3. Obsolete Revision Cleanup Safety Guards:
-   - In both `ShelfSyncEngine.ts` and `shelfDownload.ts`, updated obsolete revision cleanup to strictly require that the old book in `library` matches `previous.localPath` AND (if recorded) matches `previous.bookHash` or `prevDir`.
-   - Removed the unsafe raw file deletion fallback on disk when the book is not verified in the library.
-4. Comprehensive Verification Test Suite:
-   - Added unit and integration tests covering all 10 invariant scenarios:
-     1) user-owned same hash never managed/deleted
-     2) BookOrbit-created copy marked managed
-     3) two BookOrbit shelves keep until final ref
-     4) BookOrbit+GrimmLink cross-provider ref keeps
-     5) final managed ref + remove policy eligible
-     6) keep_local keeps
-     7) user-replaced/ambiguous path keeps
-     8) remote-only has nothing to delete
-     9) failed/partial snapshot no cleanup
-     10) old revision cleanup only after replacement safe
+1. Strict 9-Step Transactional Ordering & Crash Boundary Protocol:
+   - Formalized execution sequence:
+     `temp creation → download → validate → import → library save → ShelfSyncStore update → managed flag → old revision cleanup → temp delete`.
+   - Guaranteed that failed downloads, validation failures, or failed imports never record success or pollute the store.
+   - Guaranteed that `managedByProvider = true` is only assigned after successful local import and library persistence. Reused local matches preserve `managedByProvider: false`.
+   - Preserved old valid revisions until the new revision has successfully completed import, library persistence, and store registration.
+2. Lightweight Non-Buffering Validation in Generic Core:
+   - Added `inspectShelfDownloadFile` in `validation.ts` to inspect file headers and sizes via `stats`/`openFile` without buffering large payloads into memory.
+   - Added `validateShelfDownloadHeader` to enforce magic bytes (PK for EPUB/CBZ, %PDF for PDF) and non-zero size checks prior to import.
+   - Preserved provider-neutral generic core: `remoteBook.bookHash` and `imported.hash` are not asserted equal in generic core because remote catalogs (e.g. BookOrbit MD5 / GrimmLink) may differ from Readest's internal SHA256 `Book.hash`.
+3. Transaction Boundaries & Rollback Guarantees:
+   - If `onImported` fails or `store.markShelfEntries` fails after `importBook`, the imported book is immediately purged (`deleteBook(imported, 'purge')`), the library array is restored to its pre-import state, and `onRemoved` is invoked.
+   - Cancellation (`AbortSignal`) is checked at every boundary (before download, during download, before import, after import, before DB commit). If cancelled after import, the imported book is purged and rolled back cleanly.
+   - Temp file cleanup is executed in `finally` (or `.catch(() => {})`) to remain best-effort without masking root errors or corrupting retries.
+4. Comprehensive Fault-Injection Test Matrix:
+   - Added fault-injection and crash recovery tests across `ShelfSyncEngine.test.ts` and `shelfDownload.test.ts`:
+     * Failure after temp creation and download (bad signature, size mismatch)
+     * Failure during import (`importBook` returning null or throwing)
+     * Failure after import before DB mark (`onImported` failure triggers rollback and purge)
+     * Failure during DB update (`store.markShelfEntries` failure triggers rollback and purge)
+     * Cancellation before, during, and right after import
+     * Clean retry execution recovering from failed attempts without leftover state.
 
 Do not change:
 - Provider neutrality of generic core (`src/services/shelfSync/`).
@@ -60,4 +50,4 @@ Do not change:
 - Stock BookOrbit server contract.
 - GrimmLink preservation.
 
-Next task: Task 14.
+Next task: Task 15.

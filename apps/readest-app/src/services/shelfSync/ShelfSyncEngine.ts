@@ -2,7 +2,12 @@ import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
 import { getBookDirOfPath, getLocalBookFilename } from '@/utils/book';
 import { isTauriAppPlatform } from '@/services/environment';
-import { safeShelfFilename, validateShelfDownload } from './validation';
+import {
+  inspectShelfDownloadFile,
+  safeShelfFilename,
+  validateShelfDownload,
+  validateShelfDownloadHeader,
+} from './validation';
 import {
   NATIVE_IMPORT_THRESHOLD_BYTES,
   isMeteredConnection,
@@ -77,7 +82,7 @@ export class ShelfSyncEngine<
         signal: options.transfer?.signal,
       }));
 
-    if (snapshot.status === 'cancelled') {
+    if (snapshot.status === 'cancelled' || options.transfer?.signal?.aborted) {
       throw new Error('Shelf sync cancelled');
     }
     if (snapshot.status === 'restart_required') {
@@ -135,6 +140,10 @@ export class ShelfSyncEngine<
       snapshotStatus: snapshot.status,
       snapshotComplete: isComplete,
     });
+
+    if (options.transfer?.signal?.aborted) {
+      throw new Error('Shelf sync cancelled');
+    }
 
     // 5. Record reused entries
     await this.store.markShelfEntries(
@@ -212,9 +221,14 @@ export class ShelfSyncEngine<
           remoteBook,
           library: localLibrary,
           onImported: options.onImported,
+          onRemoved: options.onRemoved,
           transfer: options.transfer,
           presenceIndex: options.presenceIndex,
         });
+
+        if (options.transfer?.signal?.aborted) {
+          throw new Error('Shelf sync cancelled');
+        }
 
         // Safe replacement order:
         // detect → download → validate → successful import → update tracking (in downloadAndImport) → only then consider obsolete managed cleanup.
@@ -306,6 +320,10 @@ export class ShelfSyncEngine<
     // 7. Plan and execute reference-safe deletions
     // Enforces Data Safety Invariant: Automatic deletion requires ALL 6 criteria.
     // When uncertain, KEEP the local book. Failed/partial/cancelled snapshots NEVER trigger deletion.
+    if (options.transfer?.signal?.aborted) {
+      throw new Error('Shelf sync cancelled');
+    }
+
     if (isComplete) {
       for (const item of deletionPlan.toDelete) {
         // Guard: Only delete when item.book is verified and corresponds to the managed entry
@@ -431,6 +449,7 @@ export class ShelfSyncEngine<
     remoteBook,
     library,
     onImported,
+    onRemoved,
     transfer,
     presenceIndex,
   }: {
@@ -439,6 +458,7 @@ export class ShelfSyncEngine<
     remoteBook: TBook;
     library: Book[];
     onImported: (book: Book, library: Book[]) => Promise<void> | void;
+    onRemoved?: (book: Book, library: Book[]) => Promise<void> | void;
     transfer?: ShelfSyncTransfer<TBook>;
     presenceIndex?: LibraryPresenceIndex;
   }): Promise<Book> {
@@ -462,38 +482,38 @@ export class ShelfSyncEngine<
           nativePath = '';
         }
         if (nativePath) {
+          if (transfer?.signal?.aborted) {
+            throw new Error('Shelf sync cancelled');
+          }
           await this.adapter.downloadBookToFile(
             remoteBook,
             nativePath,
             transfer?.onProgress,
             transfer?.signal,
           );
-          transfer?.onStage?.({ stage: 'importing', book: remoteBook });
-          const imported = await this.appService.importBook(nativePath, library);
-          if (!imported) {
-            throw new Error(this.adapter.importErrorMessage ?? 'Failed to import shelf book');
+          if (transfer?.signal?.aborted) {
+            throw new Error('Shelf sync cancelled');
           }
-          const existingIndex = library.findIndex((book) => book.hash === imported.hash);
-          if (existingIndex === -1) library.push(imported);
-          else library[existingIndex] = imported;
-          await onImported(imported, [...library]);
-          await this.store.markShelfEntries([
-            {
-              provider: this.adapter.provider,
-              connectionId: this.adapter.connectionId,
-              shelfType,
-              shelfId: String(shelfId),
-              bookId: String(remoteBook.bookId),
-              fileId: remoteBook.fileId != null ? String(remoteBook.fileId) : null,
-              contentVersion:
-                remoteBook.contentVersion != null ? String(remoteBook.contentVersion) : null,
-              bookHash: getRemoteBookHash(remoteBook) ?? imported.hash,
-              localPath: getLocalBookFilename(imported),
-              managedByProvider: true,
-            },
-          ]);
-          if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
-          return imported;
+
+          // Validate downloaded file
+          await this.validateDownloadedNativeFile(tempPath, remoteBook);
+
+          if (transfer?.signal?.aborted) {
+            throw new Error('Shelf sync cancelled');
+          }
+
+          transfer?.onStage?.({ stage: 'importing', book: remoteBook });
+          return await this.finalizeImportAndCommit({
+            importSource: nativePath,
+            remoteBook,
+            library,
+            onImported,
+            onRemoved,
+            shelfType,
+            shelfId,
+            presenceIndex,
+            signal: transfer?.signal,
+          });
         }
       } finally {
         await this.appService.deleteFile(tempPath, 'Temp').catch(() => {});
@@ -501,11 +521,19 @@ export class ShelfSyncEngine<
     }
 
     // 2. In-memory download path
+    if (transfer?.signal?.aborted) {
+      throw new Error('Shelf sync cancelled');
+    }
+
     const downloaded = await this.adapter.downloadBook(
       remoteBook,
       transfer?.onProgress,
       transfer?.signal,
     );
+
+    if (transfer?.signal?.aborted) {
+      throw new Error('Shelf sync cancelled');
+    }
 
     if (this.adapter.validateBookData) {
       this.adapter.validateBookData(remoteBook.filename, downloaded, remoteBook.size);
@@ -513,11 +541,19 @@ export class ShelfSyncEngine<
       validateShelfDownload(remoteBook.filename, downloaded, remoteBook.size);
     }
 
+    if (transfer?.signal?.aborted) {
+      throw new Error('Shelf sync cancelled');
+    }
+
     const data = this.adapter.repairBookData
       ? await this.adapter.repairBookData(downloaded, remoteBook)
       : remoteBook.filename.toLowerCase().endsWith('.epub')
         ? await repairMalformedEpubOpfNamespace(downloaded)
         : downloaded;
+
+    if (transfer?.signal?.aborted) {
+      throw new Error('Shelf sync cancelled');
+    }
 
     transfer?.onStage?.({ stage: 'importing', book: remoteBook });
     const useNativeImport = data.byteLength >= NATIVE_IMPORT_THRESHOLD_BYTES;
@@ -537,18 +573,132 @@ export class ShelfSyncEngine<
         }
       }
 
-      const imported = await this.appService.importBook(importSource, library);
-      if (!imported) {
-        throw new Error(this.adapter.importErrorMessage ?? 'Failed to import shelf book');
+      if (transfer?.signal?.aborted) {
+        throw new Error('Shelf sync cancelled');
       }
 
-      const existingIndex = library.findIndex((book) => book.hash === imported.hash);
-      if (existingIndex === -1) library.push(imported);
-      else library[existingIndex] = imported;
+      return await this.finalizeImportAndCommit({
+        importSource,
+        remoteBook,
+        library,
+        onImported,
+        onRemoved,
+        shelfType,
+        shelfId,
+        presenceIndex,
+        signal: transfer?.signal,
+      });
+    } finally {
+      if (useNativeImport) {
+        await this.appService.deleteFile(tempPath, 'Temp').catch(() => {});
+      }
+    }
+  }
 
+  private async validateDownloadedNativeFile(tempPath: string, remoteBook: TBook): Promise<void> {
+    const exists = await this.appService.exists(tempPath, 'Temp');
+    if (!exists) {
+      return;
+    }
+
+    const { headerBytes, actualSize } = await inspectShelfDownloadFile(this.appService, tempPath);
+
+    if (headerBytes && headerBytes.length > 0) {
+      if (this.adapter.validateBookData) {
+        const headerBuf = headerBytes.buffer.slice(
+          headerBytes.byteOffset,
+          headerBytes.byteOffset + headerBytes.byteLength,
+        ) as ArrayBuffer;
+        this.adapter.validateBookData(remoteBook.filename, headerBuf, remoteBook.size);
+      } else {
+        validateShelfDownloadHeader(remoteBook.filename, headerBytes, actualSize, remoteBook.size);
+      }
+    } else if (actualSize !== undefined) {
+      if (actualSize === 0) {
+        throw new Error('Empty download');
+      }
+      if (remoteBook.size !== undefined && remoteBook.size >= 0 && actualSize !== remoteBook.size) {
+        throw new Error(`Unexpected download size: expected ${remoteBook.size}, got ${actualSize}`);
+      }
+    }
+  }
+
+  private async finalizeImportAndCommit({
+    importSource,
+    remoteBook,
+    library,
+    onImported,
+    onRemoved,
+    shelfType,
+    shelfId,
+    presenceIndex,
+    signal,
+  }: {
+    importSource: File | string;
+    remoteBook: TBook;
+    library: Book[];
+    onImported: (book: Book, library: Book[]) => Promise<void> | void;
+    onRemoved?: (book: Book, library: Book[]) => Promise<void> | void;
+    shelfType: string;
+    shelfId: TId;
+    presenceIndex?: LibraryPresenceIndex;
+    signal?: AbortSignal;
+  }): Promise<Book> {
+    if (signal?.aborted) {
+      throw new Error('Shelf sync cancelled');
+    }
+
+    // Step 4: Import
+    const imported = await this.appService.importBook(importSource, library);
+    if (!imported) {
+      throw new Error(this.adapter.importErrorMessage ?? 'Failed to import shelf book');
+    }
+
+    // Cancellation check right after import creates local book
+    if (signal?.aborted) {
+      await this.appService.deleteBook(imported, 'purge').catch(() => {});
+      throw new Error('Shelf sync cancelled');
+    }
+
+    // Step 5: Library save (in-memory array + onImported callback)
+    const existingIndex = library.findIndex((book) => book.hash === imported.hash);
+    const previousBook = existingIndex >= 0 ? library[existingIndex] : undefined;
+
+    if (existingIndex === -1) {
+      library.push(imported);
+    } else {
+      library[existingIndex] = imported;
+    }
+
+    try {
       await onImported(imported, [...library]);
-      if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
+    } catch (onImportedError) {
+      if (existingIndex === -1) {
+        const idx = library.findIndex((b) => b.hash === imported.hash);
+        if (idx >= 0) library.splice(idx, 1);
+      } else if (previousBook) {
+        library[existingIndex] = previousBook;
+      }
+      await this.appService.deleteBook(imported, 'purge').catch(() => {});
+      await onRemoved?.(imported, [...library]);
+      throw onImportedError;
+    }
 
+    if (signal?.aborted) {
+      if (existingIndex === -1) {
+        const idx = library.findIndex((b) => b.hash === imported.hash);
+        if (idx >= 0) library.splice(idx, 1);
+      } else if (previousBook) {
+        library[existingIndex] = previousBook;
+      }
+      await this.appService.deleteBook(imported, 'purge').catch(() => {});
+      await onRemoved?.(imported, [...library]);
+      throw new Error('Shelf sync cancelled');
+    }
+
+    // Step 6: ShelfSyncStore update
+    // Step 7: managed flag (managedByProvider = true only after ownership known!)
+    try {
       await this.store.markShelfEntries([
         {
           provider: this.adapter.provider,
@@ -564,11 +714,22 @@ export class ShelfSyncEngine<
           managedByProvider: true,
         },
       ]);
-      return imported;
-    } finally {
-      if (useNativeImport) {
-        await this.appService.deleteFile(tempPath, 'Temp').catch(() => {});
+    } catch (dbError) {
+      if (existingIndex === -1) {
+        const idx = library.findIndex((b) => b.hash === imported.hash);
+        if (idx >= 0) library.splice(idx, 1);
+      } else if (previousBook) {
+        library[existingIndex] = previousBook;
       }
+      await this.appService.deleteBook(imported, 'purge').catch(() => {});
+      await onRemoved?.(imported, [...library]);
+      throw dbError;
     }
+
+    if (presenceIndex) {
+      addToPresenceIndex(presenceIndex, imported);
+    }
+
+    return imported;
   }
 }

@@ -796,4 +796,150 @@ describe('BookOrbit Native Shelf Download & Import Flow', () => {
       expect(headers['X-Custom-Client']).toBe('Readest-Eink');
     });
   });
+
+  describe('Fault Injection and Crash Recovery', () => {
+    it('Fault injection after import before DB mark: rolls back library and purges book on onImported error', async () => {
+      const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 1, 2, 3, 4]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => pdfBytes.buffer,
+        }),
+      );
+
+      const appService = createMockAppService();
+      const store = createMockStore();
+      const library: Book[] = [];
+      const item: BookOrbitShelfDownloadItem = {
+        bookId: 801,
+        filename: 'fault1.pdf',
+        format: 'pdf',
+        fileHash: 'hash-fault1.pdf',
+        sizeBytes: pdfBytes.byteLength,
+      };
+
+      await expect(
+        downloadAndImportBookOrbitBook({
+          item,
+          config: makeConfig(),
+          appService,
+          store,
+          library,
+          onImported: () => {
+            throw new Error('Injected onImported DB failure');
+          },
+        }),
+      ).rejects.toThrow('Injected onImported DB failure');
+
+      // Rollback verified:
+      expect(library).toHaveLength(0);
+      expect(appService.deletedBooks).toContain('hash-fault1.pdf');
+      expect(store.markedEntries).toHaveLength(0);
+      // Temp cleaned up
+      expect(appService.deletedFiles).toContain('bookorbit/801-fault1.pdf');
+
+      // Retry: onImported succeeds
+      const retryResult = await downloadAndImportBookOrbitBook({
+        item,
+        config: makeConfig(),
+        appService,
+        store,
+        library,
+        onImported: async () => {},
+      });
+
+      expect(retryResult.hash).toBe('hash-fault1.pdf');
+      expect(library).toHaveLength(1);
+      expect(store.markedEntries).toHaveLength(1);
+      expect(store.markedEntries[0]?.managedByProvider).toBe(true);
+    });
+
+    it('Fault injection during DB mark: rolls back library and purges book on store.markShelfEntries failure', async () => {
+      const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 1, 2, 3, 4]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => pdfBytes.buffer,
+        }),
+      );
+
+      const appService = createMockAppService();
+      const store = createMockStore();
+      store.markShelfEntries = async () => {
+        throw new Error('Injected store.markShelfEntries transaction failure');
+      };
+
+      const library: Book[] = [];
+      const item: BookOrbitShelfDownloadItem = {
+        bookId: 802,
+        filename: 'fault2.pdf',
+        format: 'pdf',
+        fileHash: 'hash-fault2.pdf',
+        sizeBytes: pdfBytes.byteLength,
+      };
+
+      await expect(
+        downloadAndImportBookOrbitBook({
+          item,
+          config: makeConfig(),
+          appService,
+          store,
+          library,
+        }),
+      ).rejects.toThrow('Injected store.markShelfEntries transaction failure');
+
+      // Rollback verified:
+      expect(library).toHaveLength(0);
+      expect(appService.deletedBooks).toContain('hash-fault2.pdf');
+      expect(store.markedEntries).toHaveLength(0);
+    });
+
+    it('Cancellation right after import: purges imported book and rolls back library', async () => {
+      const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 1, 2, 3, 4]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => pdfBytes.buffer,
+        }),
+      );
+
+      const appService = createMockAppService();
+      const store = createMockStore();
+      const controller = new AbortController();
+
+      const library: Book[] = [];
+      const item: BookOrbitShelfDownloadItem = {
+        bookId: 803,
+        filename: 'fault3.pdf',
+        format: 'pdf',
+        fileHash: 'hash-fault3.pdf',
+        sizeBytes: pdfBytes.byteLength,
+      };
+
+      await expect(
+        downloadAndImportBookOrbitBook({
+          item,
+          config: makeConfig(),
+          appService,
+          store,
+          library,
+          signal: controller.signal,
+          onImported: () => {
+            controller.abort();
+          },
+        }),
+      ).rejects.toThrow('Download cancelled');
+
+      // Rollback verified:
+      expect(library).toHaveLength(0);
+      expect(appService.deletedBooks).toContain('hash-fault3.pdf');
+      expect(store.markedEntries).toHaveLength(0);
+    });
+  });
 });

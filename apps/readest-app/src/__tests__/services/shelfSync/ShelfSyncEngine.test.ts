@@ -115,11 +115,13 @@ const createMockAppService = () => {
         updatedAt: Date.now(),
       };
       files.set(`${hash}/${filename}`, new Uint8Array([1, 2, 3]));
+      files.set(getLocalBookFilename(newBook), new Uint8Array([1, 2, 3]));
       return newBook;
     },
     async deleteBook(book: Book, _mode?: string) {
       deletedBooks.push(book.hash);
       files.delete(`${book.hash}/${book.title}`);
+      files.delete(getLocalBookFilename(book));
     },
   };
 
@@ -2628,6 +2630,658 @@ describe('ShelfSyncEngine', () => {
       expect(result.downloaded).toBe(1);
       expect(result.removed).toBe(1);
       expect(appService.deletedBooks).toContain('h1');
+    });
+  });
+
+  describe('Phase 8D: Crash Recovery, Fault Injection, and Transaction Boundaries', () => {
+    it('Fault injection after temp creation: temp cleanup best effort, no DB mark, retry recovers', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'h1', filename: 'book1.pdf', format: 'PDF' },
+      ]);
+
+      const appService = createMockAppService();
+      const store = createMockStore();
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      const originalPlatform = process.env['NEXT_PUBLIC_APP_PLATFORM'];
+      process.env['NEXT_PUBLIC_APP_PLATFORM'] = 'tauri';
+
+      let tempCreated = false;
+      adapter.downloadBookToFile = async (_book, _filePath) => {
+        tempCreated = true;
+        throw new Error('Disk write fault during download to file');
+      };
+
+      try {
+        await expect(
+          engine.sync({
+            shelfType: 'default',
+            shelfId: 'shelf-1',
+            library: [],
+            onImported: () => {},
+          }),
+        ).rejects.toThrow('Disk write fault during download to file');
+
+        expect(tempCreated).toBe(true);
+        // Best-effort temp deletion executed in finally
+        expect(appService.deletedFiles.length).toBeGreaterThan(0);
+        // DB not marked
+        const entries = await store.getShelfEntries('shelf-1', 'default');
+        expect(entries).toHaveLength(0);
+
+        // Retry: downloadBookToFile restored and working
+        adapter.downloadBookToFile = async (_book, filePath) => {
+          appService.files.set(filePath, new TextEncoder().encode('%PDF-1.7 valid'));
+        };
+
+        const retryResult = await engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library: [],
+          onImported: () => {},
+        });
+
+        expect(retryResult.downloaded).toBe(1);
+        const entriesAfterRetry = await store.getShelfEntries('shelf-1', 'default');
+        expect(entriesAfterRetry).toHaveLength(1);
+        expect(entriesAfterRetry[0]?.managedByProvider).toBe(true);
+      } finally {
+        process.env['NEXT_PUBLIC_APP_PLATFORM'] = originalPlatform;
+      }
+    });
+
+    it('Fault injection after download before validation: invalid download rejected, old copy kept, retry recovers', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'h2', filename: 'book1-v2.pdf', format: 'PDF' },
+      ]);
+
+      const oldBook: Book = {
+        hash: 'h1',
+        title: 'book1-v1',
+        author: '',
+        sourceTitle: 'book1-v1',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const library: Book[] = [oldBook];
+      const appService = createMockAppService();
+      appService.files.set('h1/book1-v1.pdf', new Uint8Array([1, 2, 3]));
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book1-v1.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      // Fault: network download completes, but returns empty payload
+      adapter.downloadBook = async () => new ArrayBuffer(0);
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: () => {},
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('Empty download');
+
+      // Guarantee: old valid revision preserved until safe
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(library).toHaveLength(1);
+      expect(library[0]?.hash).toBe('h1');
+      const entries = await store.getShelfEntries('shelf-1', 'default');
+      expect(entries[0]?.bookHash).toBe('h1');
+
+      // Retry: adapter now provides valid PDF payload
+      adapter.downloadBook = async () => new TextEncoder().encode('%PDF-1.7 new valid').buffer;
+
+      const retryResult = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: (_book, updated) => {
+          library.splice(0, library.length, ...updated);
+        },
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      expect(retryResult.downloaded).toBe(1);
+      expect(retryResult.removed).toBe(1);
+      expect(appService.deletedBooks).toContain('h1');
+      const entriesAfter = await store.getShelfEntries('shelf-1', 'default');
+      expect(entriesAfter[0]?.bookHash).toBe('h2');
+    });
+
+    it('Fault injection during/after validation: corrupt data throws, no library save or DB mark, retry recovers', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'h1', filename: 'book1.pdf', format: 'PDF', size: 100 },
+      ]);
+
+      // Download returns wrong magic bytes for PDF
+      const corruptBytes = new Uint8Array(100);
+      corruptBytes.fill(0xaa);
+      adapter.downloadBook = async () => corruptBytes.buffer;
+
+      const appService = createMockAppService();
+      const store = createMockStore();
+      const library: Book[] = [];
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: () => {},
+        }),
+      ).rejects.toThrow('Invalid PDF');
+
+      expect(library).toHaveLength(0);
+      const entries = await store.getShelfEntries('shelf-1', 'default');
+      expect(entries).toHaveLength(0);
+
+      // Retry: valid PDF provided
+      const validPdfBytes = new Uint8Array(100);
+      validPdfBytes.set(new TextEncoder().encode('%PDF-1.7 valid pdf test content'));
+      adapter.downloadBook = async () => validPdfBytes.buffer;
+
+      const result = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: (book) => {
+          library.push(book);
+        },
+      });
+
+      expect(result.downloaded).toBe(1);
+      expect(library).toHaveLength(1);
+      const entriesAfter = await store.getShelfEntries('shelf-1', 'default');
+      expect(entriesAfter).toHaveLength(1);
+      expect(entriesAfter[0]?.managedByProvider).toBe(true);
+    });
+
+    it('Fault injection during import: import failure never marked success, old revision preserved, retry recovers', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'h2', filename: 'book1-v2.pdf', format: 'PDF' },
+      ]);
+
+      const oldBook: Book = {
+        hash: 'h1',
+        title: 'book1-v1',
+        author: '',
+        sourceTitle: 'book1-v1',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const library: Book[] = [oldBook];
+      const appService = createMockAppService();
+      appService.files.set('h1/book1-v1.pdf', new Uint8Array([1, 2, 3]));
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book1-v1.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      // Injected fault in appService.importBook
+      const originalImportBook = appService.importBook;
+      appService.importBook = async () => {
+        throw new Error('Unreadable PDF stream in importBook');
+      };
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: () => {},
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('Unreadable PDF stream in importBook');
+
+      // Guarantee failed import not marked success
+      expect(library).toHaveLength(1);
+      expect(library[0]?.hash).toBe('h1');
+      expect(appService.deletedBooks).toHaveLength(0);
+      const entries = await store.getShelfEntries('shelf-1', 'default');
+      expect(entries[0]?.bookHash).toBe('h1');
+
+      // Retry: restore importBook
+      appService.importBook = originalImportBook;
+
+      const retryResult = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: (_book, updated) => {
+          library.splice(0, library.length, ...updated);
+        },
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      expect(retryResult.downloaded).toBe(1);
+      expect(retryResult.removed).toBe(1);
+      expect(appService.deletedBooks).toContain('h1');
+      const entriesAfter = await store.getShelfEntries('shelf-1', 'default');
+      expect(entriesAfter[0]?.bookHash).toBe('h2');
+    });
+
+    it('Fault injection after import before DB mark: rolls back library and purges book, old revision preserved, retry recovers', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'h2', filename: 'book1-v2.pdf', format: 'PDF' },
+      ]);
+
+      const oldBook: Book = {
+        hash: 'h1',
+        title: 'book1-v1',
+        author: '',
+        sourceTitle: 'book1-v1',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const library: Book[] = [oldBook];
+      const appService = createMockAppService();
+      appService.files.set('h1/book1-v1.pdf', new Uint8Array([1, 2, 3]));
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book1-v1.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      // Fault: onImported throws before DB mark
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: () => {
+            throw new Error('Database transaction lock error in onImported');
+          },
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('Database transaction lock error in onImported');
+
+      // Verify rollback:
+      // 1. Newly imported book purged
+      expect(appService.deletedBooks).toContain('hash-book1-v2.pdf');
+      // 2. Old copy kept and not purged
+      expect(appService.deletedBooks).not.toContain('h1');
+      // 3. Library array restored to old state
+      expect(library).toHaveLength(1);
+      expect(library[0]?.hash).toBe('h1');
+      // 4. Store still points to old book
+      const entries = await store.getShelfEntries('shelf-1', 'default');
+      expect(entries[0]?.bookHash).toBe('h1');
+
+      // Retry: onImported succeeds
+      const retryResult = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: (_book, updated) => {
+          library.splice(0, library.length, ...updated);
+        },
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      expect(retryResult.downloaded).toBe(1);
+      expect(retryResult.removed).toBe(1);
+      expect(appService.deletedBooks).toContain('h1');
+      const entriesAfter = await store.getShelfEntries('shelf-1', 'default');
+      expect(entriesAfter[0]?.bookHash).toBe('h2');
+    });
+
+    it('Fault injection during DB mark: store error rolls back import, old copy preserved, retry recovers', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'h2', filename: 'book1-v2.pdf', format: 'PDF' },
+      ]);
+
+      const oldBook: Book = {
+        hash: 'h1',
+        title: 'book1-v1',
+        author: '',
+        sourceTitle: 'book1-v1',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const library: Book[] = [oldBook];
+      const appService = createMockAppService();
+      appService.files.set('h1/book1-v1.pdf', new Uint8Array([1, 2, 3]));
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book1-v1.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      // Fault: store.markShelfEntries throws SQLite write failure on new book
+      const originalMarkEntries = store.markShelfEntries.bind(store);
+      store.markShelfEntries = async (writes) => {
+        if (writes.some((w) => w.bookHash === 'h2' || w.bookId === 'b1')) {
+          throw new Error('SQLite busy: disk I/O error');
+        }
+        return originalMarkEntries(writes);
+      };
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: (_book, updated) => {
+            library.splice(0, library.length, ...updated);
+          },
+          onRemoved: (_book, updated) => {
+            library.splice(0, library.length, ...updated);
+          },
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('SQLite busy: disk I/O error');
+
+      // Verify rollback:
+      expect(appService.deletedBooks).toContain('hash-book1-v2.pdf');
+      expect(appService.deletedBooks).not.toContain('h1');
+      expect(library).toHaveLength(1);
+      expect(library[0]?.hash).toBe('h1');
+
+      // Retry: store restored
+      store.markShelfEntries = originalMarkEntries;
+
+      const retryResult = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: (_book, updated) => {
+          library.splice(0, library.length, ...updated);
+        },
+        onRemoved: (_book, updated) => {
+          library.splice(0, library.length, ...updated);
+        },
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      expect(retryResult.downloaded).toBe(1);
+      expect(retryResult.removed).toBe(1);
+      expect(appService.deletedBooks).toContain('h1');
+    });
+
+    it('Fault injection during obsolete revision cleanup: cleanup error preserves old book, retry recovers', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'hash-book1-v2.pdf', filename: 'book1-v2.pdf', format: 'PDF' },
+      ]);
+
+      const oldBook: Book = {
+        hash: 'h1',
+        title: 'book1-v1',
+        author: '',
+        sourceTitle: 'book1-v1',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const library: Book[] = [oldBook];
+      const appService = createMockAppService();
+      appService.files.set('h1/book1-v1.pdf', new Uint8Array([1, 2, 3]));
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book1-v1.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      // Fault: deleteBook for old book throws (e.g. file lock on Windows)
+      const originalDeleteBook = appService.deleteBook.bind(appService);
+      appService.deleteBook = async (book, mode) => {
+        if (book.hash === 'h1') {
+          throw new Error('EBUSY: resource locked on Windows during purge');
+        }
+        return originalDeleteBook(book, mode);
+      };
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: (_book, updated) => {
+            library.splice(0, library.length, ...updated);
+          },
+          onRemoved: (_book, updated) => {
+            library.splice(0, library.length, ...updated);
+          },
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('EBUSY: resource locked on Windows during purge');
+
+      // Data safety invariant: old book kept!
+      expect(library.some((b) => b.hash === 'h1')).toBe(true);
+      // New book was imported and marked in DB
+      const entries = await store.getShelfEntries('shelf-1', 'default');
+      expect(entries[0]?.bookHash).toBe('hash-book1-v2.pdf');
+
+      // Retry: file lock released
+      appService.deleteBook = originalDeleteBook;
+
+      const retryResult = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: (_book, updated) => {
+          library.splice(0, library.length, ...updated);
+        },
+        onRemoved: (_book, updated) => {
+          library.splice(0, library.length, ...updated);
+        },
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      // New book is reused; retry completes safely
+      expect(retryResult.reused).toBe(1);
+    });
+
+    it('Cancellation at each phase never becomes success and leaves zero orphan state', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'h1', filename: 'book1.pdf', format: 'PDF' },
+        { bookId: 'b2', bookHash: 'h2', filename: 'book2.pdf', format: 'PDF' },
+      ]);
+
+      const appService = createMockAppService();
+      const store = createMockStore();
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      // Phase A: Pre-aborted signal before sync begins
+      const controllerA = new AbortController();
+      controllerA.abort();
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library: [],
+          onImported: () => {},
+          transfer: { signal: controllerA.signal },
+        }),
+      ).rejects.toThrow('Shelf sync cancelled');
+
+      expect(appService.createdDirs).toHaveLength(0);
+      expect(await store.getShelfEntries('shelf-1', 'default')).toHaveLength(0);
+
+      // Phase B: Abort right after first book download
+      const controllerB = new AbortController();
+      let downloadsAttempted = 0;
+      adapter.downloadBook = async () => {
+        downloadsAttempted += 1;
+        if (downloadsAttempted === 1) {
+          controllerB.abort();
+        }
+        return new TextEncoder().encode('%PDF-1.7 data').buffer;
+      };
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library: [],
+          onImported: () => {},
+          transfer: { signal: controllerB.signal },
+        }),
+      ).rejects.toThrow('Shelf sync cancelled');
+
+      // Second book was never downloaded
+      expect(downloadsAttempted).toBe(1);
+
+      // Phase C: Abort right after import before DB mark
+      const controllerC = new AbortController();
+      downloadsAttempted = 0;
+      adapter.downloadBook = async () => new TextEncoder().encode('%PDF-1.7 data').buffer;
+
+      const libraryC: Book[] = [];
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library: libraryC,
+          onImported: () => {
+            controllerC.abort();
+          },
+          transfer: { signal: controllerC.signal },
+        }),
+      ).rejects.toThrow('Shelf sync cancelled');
+
+      // Imported book rolled back / purged
+      expect(libraryC).toHaveLength(0);
+      expect(appService.deletedBooks.length).toBeGreaterThan(0);
+      expect(await store.getShelfEntries('shelf-1', 'default')).toHaveLength(0);
+
+      // Final: Clean retry with fresh uncancelled controller succeeds completely
+      const freshLibrary: Book[] = [];
+      const finalResult = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library: freshLibrary,
+        onImported: (book) => {
+          freshLibrary.push(book);
+        },
+      });
+
+      expect(finalResult.downloaded).toBe(2);
+      expect(freshLibrary).toHaveLength(2);
+      const finalEntries = await store.getShelfEntries('shelf-1', 'default');
+      expect(finalEntries).toHaveLength(2);
+      expect(finalEntries.every((e) => e.managedByProvider)).toBe(true);
+    });
+
+    it('Ownership safety on crash recovery: unconfirmed crash reuse sets managedByProvider=false', async () => {
+      const adapter = new FakeShelfAdapter('bookorbit', 'conn-1');
+      adapter.remoteShelves.set('default:shelf-1', [
+        { bookId: 'b1', bookHash: 'h1', filename: 'book1.pdf', format: 'PDF' },
+      ]);
+
+      // Simulate a hard power loss crash that occurred after a book was placed on disk/library
+      // but BEFORE store.markShelfEntries could run
+      const bookOnDisk: Book = {
+        hash: 'h1',
+        title: 'book1',
+        author: '',
+        sourceTitle: 'book1',
+        format: 'PDF',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const library: Book[] = [bookOnDisk];
+      const appService = createMockAppService();
+      appService.files.set('h1/book1.pdf', new Uint8Array([1, 2, 3]));
+
+      // Store has NO record of b1
+      const store = createMockStore();
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      // On retry/re-sync:
+      const result = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      // The existing local book is reused
+      expect(result.reused).toBe(1);
+      expect(result.downloaded).toBe(0);
+
+      // Guarantee: "managed only after ownership known"
+      // Because ownership was not confirmed before the crash, it must be marked managedByProvider = false
+      const entries = await store.getShelfEntries('shelf-1', 'default');
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.managedByProvider).toBe(false);
+
+      // Subsequent deletion test: if b1 disappears from remote snapshot, it MUST NOT be deleted!
+      adapter.remoteShelves.set('default:shelf-1', []);
+      const deletionResult = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      expect(deletionResult.removed).toBe(0);
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(library).toHaveLength(1);
     });
   });
 });
