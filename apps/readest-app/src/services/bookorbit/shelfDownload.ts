@@ -568,7 +568,7 @@ export class BookOrbitShelfAdapter
   ): Promise<ArrayBuffer> {
     if (signal?.aborted) throw new Error('Download cancelled');
     if (this.client?.downloadShelfBook) {
-      return this.client.downloadShelfBook(book.bookId, onProgress, signal);
+      return this.client.downloadShelfBook(book.fileId ?? book.bookId, onProgress, signal);
     }
     const url = buildBookOrbitDownloadUrl(book, this.config);
     const headers = buildBookOrbitHeaders(this.config);

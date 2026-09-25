@@ -201,4 +201,44 @@ describe('BookOrbitClient', () => {
       expect((err as BookOrbitRequestError).message).toContain('restart required');
     });
   });
+
+  describe('catalog downloads and manifests', () => {
+    it('downloads binary book bytes via /plugin/catalog/files/:numericId/download', async () => {
+      const dummyBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+      const fetchMock = setFetch(async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => dummyBytes.buffer,
+      }));
+      const client = new BookOrbitClient(makeConfig({ serverUrl: 'https://books.example.com' }));
+      const result = await client.downloadShelfBook(101);
+
+      expect(new Uint8Array(result)).toEqual(dummyBytes);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://web.readest.com/api/bookorbit');
+      const payload = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(payload['endpoint']).toBe('/plugin/catalog/files/101/download');
+      expect(payload['method']).toBe('GET');
+    });
+
+    it('rejects non-numeric fileId in downloadShelfBook before fetch', async () => {
+      const fetchMock = setFetch(async () => ({ ok: true, status: 200 }));
+      const client = new BookOrbitClient(makeConfig());
+      await expect(client.downloadShelfBook('abc')).rejects.toThrow('Invalid fileId');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('fetches catalog manifest with fallback routes', async () => {
+      const fetchMock = setFetch(async () =>
+        jsonResponse(200, { schema: 'bookorbit.catalog-manifest', version: 1 }),
+      );
+      const client = new BookOrbitClient(makeConfig({ serverUrl: 'https://books.example.com' }));
+      const manifest = await client.getCatalogManifest();
+      expect(manifest).toEqual({ schema: 'bookorbit.catalog-manifest', version: 1 });
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const payload = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(payload['endpoint']).toBe('/plugin/catalog/manifest');
+    });
+  });
 });

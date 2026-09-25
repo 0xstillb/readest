@@ -441,4 +441,35 @@ export class BookOrbitClient implements BookOrbitShelfClient {
     }
     return books;
   }
+
+  async downloadShelfBook(
+    fileIdOrBookId: string | number,
+    _onProgress?: import('@/utils/transfer').ProgressHandler,
+    _signal?: AbortSignal,
+  ): Promise<ArrayBuffer> {
+    const numericId = String(fileIdOrBookId);
+    if (!/^\d+$/.test(numericId)) {
+      throw new Error(`Invalid fileId for catalog download: ${fileIdOrBookId}`);
+    }
+    const endpoint = `/plugin/catalog/files/${numericId}/download`;
+    const response = await this.request(endpoint);
+    if (!response.ok) {
+      throw new BookOrbitRequestError(
+        response.status,
+        `BookOrbit catalog download failed with status ${response.status}`,
+      );
+    }
+    return await response.arrayBuffer();
+  }
+
+  async getCatalogManifest(): Promise<unknown> {
+    return await this.requestJson<unknown>('/plugin/catalog/manifest').catch(async (err) => {
+      if (err instanceof BookOrbitRequestError && err.status === 404) {
+        return await this.requestJson<unknown>('/plugin/manifest').catch(async () => {
+          return await this.requestJson<unknown>('/manifest');
+        });
+      }
+      throw err;
+    });
+  }
 }
