@@ -7,6 +7,8 @@ import {
   type SaveShelfSubscriptionInput,
   type ShelfEntryKey,
   type ShelfEntryWrite,
+  type ShelfPage,
+  type ShelfSnapshot,
   type ShelfSyncAdapter,
   type ShelfSyncAppService,
   type ShelfSyncBook,
@@ -723,6 +725,347 @@ describe('ShelfSyncEngine', () => {
       expect(resultB.removed).toBe(1);
       expect(appService.deletedBooks).toEqual(['h1']);
       expect(store.entries.has('default:shelf-2:b2')).toBe(false);
+    });
+  });
+
+  describe('Phase 8A: Snapshot Completeness + Offline Safety', () => {
+    it('confirmed complete empty shelf plans and executes removals under remove_managed_copy', async () => {
+      const adapter = new FakeShelfAdapter();
+      adapter.remoteShelves.set('default:shelf-1', []); // Confirmed complete empty shelf
+
+      const appService = createMockAppService();
+      appService.files.set('h1/book.pdf', new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [
+        {
+          hash: 'h1',
+          title: 'book',
+          author: '',
+          sourceTitle: 'book',
+          format: 'PDF',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ];
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      const result = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+        cleanupPolicy: 'remove_managed_copy',
+      });
+
+      // Confirmed empty shelf: removals executed
+      expect(result.removed).toBe(1);
+      expect(appService.deletedBooks).toEqual(['h1']);
+      expect(store.entries.has('default:shelf-1:b1')).toBe(false);
+    });
+
+    it('offline before first page produces zero destructive removals and preserves prior store membership', async () => {
+      const adapter = new FakeShelfAdapter();
+      vi.spyOn(adapter, 'getShelfBooks').mockRejectedValue(new Error('Network offline'));
+
+      const appService = createMockAppService();
+      appService.files.set('h1/book.pdf', new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [
+        {
+          hash: 'h1',
+          title: 'book',
+          author: '',
+          sourceTitle: 'book',
+          format: 'PDF',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ];
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: () => {},
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('Network offline');
+
+      // ZERO destructive removals
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(appService.files.has('h1/book.pdf')).toBe(true);
+      // Prior membership preserved in store
+      expect(store.entries.has('default:shelf-1:b1')).toBe(true);
+    });
+
+    it('failed zero-book snapshot produces zero destructive removals and preserves membership', async () => {
+      const adapter = new FakeShelfAdapter();
+      // Adapter returns a failed snapshot object with 0 books
+      (
+        adapter as unknown as { getShelfSnapshot: () => Promise<ShelfSnapshot<FakeBook>> }
+      ).getShelfSnapshot = async () => ({
+        status: 'failed',
+        books: [],
+        error: new Error('Server returned 500 error payload'),
+      });
+
+      const appService = createMockAppService();
+      appService.files.set('h1/book.pdf', new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [
+        {
+          hash: 'h1',
+          title: 'book',
+          author: '',
+          sourceTitle: 'book',
+          format: 'PDF',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ];
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: () => {},
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('Server returned 500 error payload');
+
+      // ZERO destructive removals
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(appService.files.has('h1/book.pdf')).toBe(true);
+      // Prior membership preserved in store
+      expect(store.entries.has('default:shelf-1:b1')).toBe(true);
+    });
+
+    it('mid-pagination error produces zero destructive removals and preserves absent entries', async () => {
+      const adapter = new FakeShelfAdapter();
+      (
+        adapter as unknown as {
+          getShelfPage: (
+            type: string,
+            id: string,
+            opt?: { cursor?: string | null },
+          ) => Promise<ShelfPage<FakeBook>>;
+        }
+      ).getShelfPage = async (_type: string, _id: string, opt?: { cursor?: string | null }) => {
+        if (opt?.cursor === 'p2') {
+          throw new Error('Connection terminated on page 2');
+        }
+        return {
+          books: [{ bookId: 'b1', bookHash: 'h1', filename: 'book1.pdf', format: 'PDF' }],
+          nextCursor: 'p2',
+          hasMore: true,
+        };
+      };
+
+      const appService = createMockAppService();
+      appService.files.set('h1/book1.pdf', new Uint8Array([1, 2, 3]));
+      appService.files.set('h2/book2.pdf', new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [
+        {
+          hash: 'h1',
+          title: 'b1',
+          author: '',
+          sourceTitle: 'b1',
+          format: 'PDF',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+        {
+          hash: 'h2',
+          title: 'b2',
+          author: '',
+          sourceTitle: 'b2',
+          format: 'PDF',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ];
+
+      const store = createMockStore();
+      // Tracked both b1 and b2
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book1.pdf',
+          managedByProvider: true,
+        },
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b2',
+          bookHash: 'h2',
+          localPath: 'h2/book2.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      // Default: throws on incomplete snapshot
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: () => {},
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('Connection terminated on page 2');
+
+      // Neither book is deleted
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(appService.files.has('h2/book2.pdf')).toBe(true);
+      // Both entries remain in store
+      expect(store.entries.has('default:shelf-1:b1')).toBe(true);
+      expect(store.entries.has('default:shelf-1:b2')).toBe(true);
+
+      // Even if throwOnIncompleteSnapshot is false:
+      const nonThrowingResult = await engine.sync({
+        shelfType: 'default',
+        shelfId: 'shelf-1',
+        library,
+        onImported: () => {},
+        cleanupPolicy: 'remove_managed_copy',
+        throwOnIncompleteSnapshot: false,
+      });
+
+      expect(nonThrowingResult.removed).toBe(0);
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(store.entries.has('default:shelf-1:b2')).toBe(true);
+    });
+
+    it('restartRequired produces zero destructive removals and preserves membership', async () => {
+      const adapter = new FakeShelfAdapter();
+      (
+        adapter as unknown as {
+          getShelfPage: () => Promise<ShelfPage<FakeBook>>;
+        }
+      ).getShelfPage = async () => ({
+        books: [],
+        restartRequired: true,
+      });
+
+      const appService = createMockAppService();
+      appService.files.set('h1/book.pdf', new Uint8Array([1, 2, 3]));
+
+      const library: Book[] = [
+        {
+          hash: 'h1',
+          title: 'b',
+          author: '',
+          sourceTitle: 'b',
+          format: 'PDF',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ];
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, appService, store);
+
+      await expect(
+        engine.sync({
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          library,
+          onImported: () => {},
+          cleanupPolicy: 'remove_managed_copy',
+        }),
+      ).rejects.toThrow('restart required');
+
+      expect(appService.deletedBooks).toHaveLength(0);
+      expect(store.entries.has('default:shelf-1:b1')).toBe(true);
+    });
+
+    it('preview distinguishes confirmed empty from failed empty snapshot', async () => {
+      const adapter = new FakeShelfAdapter();
+      adapter.remoteShelves.set('default:shelf-1', []); // Confirmed empty
+
+      const store = createMockStore();
+      await store.markShelfEntries([
+        {
+          shelfType: 'default',
+          shelfId: 'shelf-1',
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book.pdf',
+          managedByProvider: true,
+        },
+      ]);
+
+      const engine = new ShelfSyncEngine(adapter, createMockAppService(), store);
+
+      // Confirmed empty: preview shows removed = 1
+      const confirmedPreview = await engine.preview('default', 'shelf-1', []);
+      expect(confirmedPreview.removed).toBe(1);
+
+      // Failed snapshot: preview returns 0 removed
+      vi.spyOn(adapter, 'getShelfBooks').mockRejectedValueOnce(new Error('Network error'));
+      const failedPreview = await engine.preview('default', 'shelf-1', []);
+      expect(failedPreview.removed).toBe(0);
+      expect(failedPreview.total).toBe(0);
     });
   });
 

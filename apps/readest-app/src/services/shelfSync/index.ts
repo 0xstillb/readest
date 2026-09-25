@@ -7,3 +7,4 @@ export * from './download';
 export * from './ShelfSyncStore';
 export * from './ShelfSyncEngine';
 export * from './migration';
+export * from './snapshot';

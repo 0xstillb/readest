@@ -164,4 +164,41 @@ describe('BookOrbitClient', () => {
     const headers = init.headers as Record<string, string>;
     expect(headers['X-Auth-Key']).toBe('a'.repeat(32));
   });
+
+  describe('getShelfBooks safety and normalization', () => {
+    it('returns empty array for confirmed complete empty shelf', async () => {
+      setFetch(async () => jsonResponse(200, []));
+      const client = new BookOrbitClient(makeConfig());
+      const books = await client.getShelfBooks('collection', 1);
+      expect(books).toEqual([]);
+
+      setFetch(async () => jsonResponse(200, { books: [] }));
+      const booksFromObj = await client.getShelfBooks('collection', 1);
+      expect(booksFromObj).toEqual([]);
+    });
+
+    it('rejects malformed responses and never mistakes them for empty shelf', async () => {
+      // Missing books collection
+      setFetch(async () => jsonResponse(200, { error: 'Not available' }));
+      const client = new BookOrbitClient(makeConfig());
+      await expect(client.getShelfBooks('collection', 1)).rejects.toThrow(
+        'missing books collection',
+      );
+
+      // Primitive string (e.g. HTML error page or raw text)
+      setFetch(async () => jsonResponse(200, '502 Bad Gateway'));
+      await expect(client.getShelfBooks('collection', 1)).rejects.toThrow(
+        'expected JSON object or array',
+      );
+    });
+
+    it('rejects restartRequired shelf responses with 409 status', async () => {
+      setFetch(async () => jsonResponse(200, { restartRequired: true, books: [] }));
+      const client = new BookOrbitClient(makeConfig());
+      const err = await client.getShelfBooks('collection', 1).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BookOrbitRequestError);
+      expect((err as BookOrbitRequestError).status).toBe(409);
+      expect((err as BookOrbitRequestError).message).toContain('restart required');
+    });
+  });
 });

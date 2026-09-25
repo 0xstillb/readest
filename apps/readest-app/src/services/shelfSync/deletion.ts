@@ -5,6 +5,7 @@ import type {
   ShelfDeletionDecision,
   ShelfDeletionPlan,
   ShelfDeletionReason,
+  ShelfSnapshotStatus,
   ShelfSyncEntry,
 } from './types';
 
@@ -19,6 +20,11 @@ export interface PlanShelfDeletionsOptions<TEntry extends ShelfSyncEntry<unknown
   referenceCounts?: Map<string, number>;
   /** Optional custom predicate to determine if entry is managed by the provider. */
   isManaged?: (entry: TEntry) => boolean;
+  /**
+   * Explicit status of the snapshot from which absentEntries was derived.
+   * Only 'complete' snapshots can produce removal decisions.
+   */
+  snapshotStatus?: ShelfSnapshotStatus;
   /**
    * Safety invariant guard: whether the snapshot that produced `absentEntries` was complete and successful.
    * If false, NO deletions are permitted regardless of other conditions.
@@ -49,8 +55,12 @@ export function planShelfDeletions<TEntry extends ShelfSyncEntry<unknown>>(
     library,
     referenceCounts = new Map<string, number>(),
     isManaged,
+    snapshotStatus,
     snapshotComplete = true,
   } = options;
+
+  const isComplete =
+    snapshotStatus !== undefined ? snapshotStatus === 'complete' : snapshotComplete;
 
   const decisions: ShelfDeletionDecision<TEntry>[] = [];
   const toDelete: Array<{ entry: TEntry; book?: Book; localPath: string }> = [];
@@ -59,7 +69,7 @@ export function planShelfDeletions<TEntry extends ShelfSyncEntry<unknown>>(
   const currentRefCounts = new Map(referenceCounts);
 
   for (const entry of absentEntries) {
-    if (!snapshotComplete) {
+    if (!isComplete) {
       const reason: ShelfDeletionReason = 'snapshot_incomplete';
       decisions.push({ action: 'keep', entry, reason });
       toKeep.push({ entry, reason });

@@ -8,6 +8,7 @@ import type {
 } from '@/services/shelfSync';
 import {
   buildLibraryPresenceIndex,
+  collectShelfSnapshot,
   planShelfSync,
   reconcileShelfSnapshot,
   ShelfSyncEngine,
@@ -100,12 +101,18 @@ export async function previewBookOrbitShelfSync(
       )
       .map(async (subscription) => {
         try {
-          const [remote, existing] = await Promise.all([
-            adapter.getShelfBooks(subscription.shelfType, subscription.shelfId),
+          const [snapshot, existing] = await Promise.all([
+            collectShelfSnapshot(adapter, subscription.shelfType, subscription.shelfId),
             store.getShelfEntries(subscription.shelfId, subscription.shelfType),
           ]);
+          if (snapshot.status !== 'complete') {
+            return { total: 0, added: 0, unchanged: 0, changed: 0, removed: 0, downloads: 0 };
+          }
           return summarizeShelfReconciliation(
-            reconcileShelfSnapshot(remote, existing, localHashes, localPaths),
+            reconcileShelfSnapshot(snapshot.books, existing, localHashes, localPaths, {
+              snapshotStatus: snapshot.status,
+              snapshotComplete: true,
+            }),
             subscription.downloadPolicy,
           );
         } catch {

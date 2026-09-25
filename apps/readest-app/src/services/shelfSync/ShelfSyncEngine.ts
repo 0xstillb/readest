@@ -15,6 +15,7 @@ import {
   summarizeShelfReconciliation,
 } from './reconciliation';
 import { planShelfDeletions } from './deletion';
+import { collectShelfSnapshot } from './snapshot';
 import type {
   IShelfSyncStore,
   LibraryPresenceIndex,
@@ -69,7 +70,33 @@ export class ShelfSyncEngine<
     const { shelfType, shelfId } = options;
 
     // 1. Fetch remote snapshot (if this fails, abort safely before touching any local state)
-    const remote = await this.adapter.getShelfBooks(shelfType, shelfId);
+    const snapshot =
+      options.snapshot ??
+      (await collectShelfSnapshot(this.adapter, shelfType, shelfId, {
+        signal: options.transfer?.signal,
+      }));
+
+    if (snapshot.status === 'cancelled') {
+      throw new Error('Shelf sync cancelled');
+    }
+    if (snapshot.status === 'restart_required') {
+      throw new Error('Shelf sync restart required');
+    }
+    if (snapshot.status === 'failed') {
+      throw snapshot.error instanceof Error
+        ? snapshot.error
+        : new Error(String(snapshot.error ?? 'Failed to fetch shelf snapshot'));
+    }
+    if (snapshot.status === 'partial') {
+      if (options.throwOnIncompleteSnapshot !== false) {
+        throw snapshot.error instanceof Error
+          ? snapshot.error
+          : new Error(String(snapshot.error ?? 'Shelf snapshot is incomplete (partial)'));
+      }
+    }
+
+    const isComplete = snapshot.status === 'complete';
+    const remote = snapshot.books;
 
     // 2. Fetch existing tracked entries
     const existing = await this.store.getShelfEntries(shelfId, shelfType);
@@ -99,8 +126,14 @@ export class ShelfSyncEngine<
       : new Set(presentBooks.map(getLocalBookFilename));
 
     // 4. Plan and reconcile
-    const plan = planShelfSync(remote, existing, localHashes, localPaths);
-    const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+    const plan = planShelfSync(remote, existing, localHashes, localPaths, {
+      snapshotStatus: snapshot.status,
+      snapshotComplete: isComplete,
+    });
+    const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths, {
+      snapshotStatus: snapshot.status,
+      snapshotComplete: isComplete,
+    });
 
     // 5. Record reused entries
     await this.store.markShelfEntries(
@@ -217,32 +250,35 @@ export class ShelfSyncEngine<
       cleanupPolicy,
       library: localLibrary,
       referenceCounts,
-      snapshotComplete: true,
+      snapshotStatus: snapshot.status,
+      snapshotComplete: isComplete,
     });
 
-    for (const item of deletionPlan.toDelete) {
-      if (item.book) {
-        const bookIndex = localLibrary.findIndex((book) => book.hash === item.book!.hash);
-        await this.appService.deleteBook(item.book, 'purge');
-        if (bookIndex >= 0) localLibrary.splice(bookIndex, 1);
-        if (options.presenceIndex) removeFromPresenceIndex(options.presenceIndex, item.book);
-        await options.onRemoved?.(item.book, [...localLibrary]);
-        removed += 1;
-      } else if (item.localPath && (await this.appService.exists(item.localPath, 'Books'))) {
-        await this.appService.deleteFile(item.localPath, 'Books');
-        removed += 1;
+    if (isComplete) {
+      for (const item of deletionPlan.toDelete) {
+        if (item.book) {
+          const bookIndex = localLibrary.findIndex((book) => book.hash === item.book!.hash);
+          await this.appService.deleteBook(item.book, 'purge');
+          if (bookIndex >= 0) localLibrary.splice(bookIndex, 1);
+          if (options.presenceIndex) removeFromPresenceIndex(options.presenceIndex, item.book);
+          await options.onRemoved?.(item.book, [...localLibrary]);
+          removed += 1;
+        } else if (item.localPath && (await this.appService.exists(item.localPath, 'Books'))) {
+          await this.appService.deleteFile(item.localPath, 'Books');
+          removed += 1;
+        }
       }
-    }
 
-    await this.store.removeShelfEntries(
-      plan.absent.map((entry) => ({
-        provider: this.adapter.provider,
-        connectionId: this.adapter.connectionId,
-        shelfType,
-        shelfId: String(shelfId),
-        bookId: String(entry.bookId),
-      })),
-    );
+      await this.store.removeShelfEntries(
+        plan.absent.map((entry) => ({
+          provider: this.adapter.provider,
+          connectionId: this.adapter.connectionId,
+          shelfType,
+          shelfId: String(shelfId),
+          bookId: String(entry.bookId),
+        })),
+      );
+    }
 
     return {
       reused: reconciliation.unchanged.length,
@@ -319,13 +355,22 @@ export class ShelfSyncEngine<
     library: Book[],
     downloadPolicy: ShelfDownloadPolicy = 'always',
   ): Promise<ShelfSyncPreview> {
-    const [remote, existing] = await Promise.all([
-      this.adapter.getShelfBooks(shelfType, shelfId),
+    const [snapshot, existing] = await Promise.all([
+      collectShelfSnapshot(this.adapter, shelfType, shelfId),
       this.store.getShelfEntries(shelfId, shelfType),
     ]);
+    if (snapshot.status !== 'complete') {
+      return { total: 0, added: 0, unchanged: 0, changed: 0, removed: 0, downloads: 0 };
+    }
     const localHashes = new Set(library.map((b) => b.hash));
     const localPaths = new Set(library.map(getLocalBookFilename));
-    const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+    const reconciliation = reconcileShelfSnapshot(
+      snapshot.books,
+      existing,
+      localHashes,
+      localPaths,
+      { snapshotStatus: snapshot.status, snapshotComplete: true },
+    );
     return summarizeShelfReconciliation(reconciliation, downloadPolicy);
   }
 

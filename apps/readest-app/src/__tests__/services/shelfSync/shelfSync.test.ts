@@ -3,6 +3,13 @@ import type { Book } from '@/types/book';
 import {
   addToPresenceIndex,
   buildLibraryPresenceIndex,
+  collectShelfSnapshot,
+  createCancelledSnapshot,
+  createCompleteSnapshot,
+  createFailedSnapshot,
+  createPartialSnapshot,
+  createRestartRequiredSnapshot,
+  isCompleteSnapshot,
   planShelfDeletions,
   planShelfSync,
   reconcileShelfSnapshot,
@@ -458,7 +465,7 @@ describe('Generic Shelf Sync Reconciliation and Planning', () => {
   });
 
   describe('data safety invariant: snapshot completeness guard', () => {
-    it('refuses to delete any files when snapshotComplete is false', () => {
+    it('proves confirmed empty shelf may plan removals while failed/partial empty produces zero destructive removals', () => {
       const absent = [
         {
           bookId: 1,
@@ -467,19 +474,333 @@ describe('Generic Shelf Sync Reconciliation and Planning', () => {
           managedByProvider: true,
         },
       ];
-      const book = makeMockBook({ hash: 'h1' });
+      const book = makeMockBook({ hash: 'h1', title: 'book', sourceTitle: 'book', format: 'EPUB' });
 
-      const deletionPlan = planShelfDeletions({
+      // 1. Confirmed complete empty shelf: plans removals
+      const confirmedPlan = planShelfDeletions({
         absentEntries: absent,
         cleanupPolicy: 'remove_managed_copy',
         library: [book],
         referenceCounts: new Map([['h1/book.epub', 1]]),
-        snapshotComplete: false, // Incomplete snapshot (offline / error / cancel)
+        snapshotStatus: 'complete',
+      });
+      expect(confirmedPlan.toDelete).toHaveLength(1);
+      expect(confirmedPlan.toDelete[0]?.book?.hash).toBe('h1');
+      expect(confirmedPlan.toKeep).toHaveLength(0);
+
+      // 2. Failed snapshot empty: zero destructive removals
+      const failedPlan = planShelfDeletions({
+        absentEntries: absent,
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['h1/book.epub', 1]]),
+        snapshotStatus: 'failed',
+      });
+      expect(failedPlan.toDelete).toHaveLength(0);
+      expect(failedPlan.toKeep).toHaveLength(1);
+      expect(failedPlan.toKeep[0]?.reason).toBe('snapshot_incomplete');
+
+      // 3. Partial snapshot empty: zero destructive removals
+      const partialPlan = planShelfDeletions({
+        absentEntries: absent,
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['h1/book.epub', 1]]),
+        snapshotStatus: 'partial',
+      });
+      expect(partialPlan.toDelete).toHaveLength(0);
+      expect(partialPlan.toKeep).toHaveLength(1);
+      expect(partialPlan.toKeep[0]?.reason).toBe('snapshot_incomplete');
+
+      // 4. Cancelled snapshot: zero destructive removals
+      const cancelledPlan = planShelfDeletions({
+        absentEntries: absent,
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['h1/book.epub', 1]]),
+        snapshotStatus: 'cancelled',
+      });
+      expect(cancelledPlan.toDelete).toHaveLength(0);
+      expect(cancelledPlan.toKeep).toHaveLength(1);
+      expect(cancelledPlan.toKeep[0]?.reason).toBe('snapshot_incomplete');
+
+      // 5. Restart-required snapshot: zero destructive removals
+      const restartPlan = planShelfDeletions({
+        absentEntries: absent,
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['h1/book.epub', 1]]),
+        snapshotStatus: 'restart_required',
+      });
+      expect(restartPlan.toDelete).toHaveLength(0);
+      expect(restartPlan.toKeep).toHaveLength(1);
+      expect(restartPlan.toKeep[0]?.reason).toBe('snapshot_incomplete');
+
+      // 6. snapshotComplete boolean guard compatibility
+      const boolIncompletePlan = planShelfDeletions({
+        absentEntries: absent,
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['h1/book.epub', 1]]),
+        snapshotComplete: false,
+      });
+      expect(boolIncompletePlan.toDelete).toHaveLength(0);
+      expect(boolIncompletePlan.toKeep).toHaveLength(1);
+      expect(boolIncompletePlan.toKeep[0]?.reason).toBe('snapshot_incomplete');
+    });
+
+    it('enforces that reconcileShelfSnapshot and planShelfSync only produce removals on complete snapshots', () => {
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: 'h1',
+          localPath: 'h1/book.epub',
+          managedByProvider: true,
+        },
+      ];
+
+      // Confirmed complete empty snapshot
+      const completeEmpty = createCompleteSnapshot([]);
+      expect(isCompleteSnapshot(completeEmpty)).toBe(true);
+
+      const completeReconciliation = reconcileShelfSnapshot(completeEmpty, existing, new Set());
+      expect(completeReconciliation.removed).toHaveLength(1);
+      expect(completeReconciliation.removed[0]?.bookId).toBe('b1');
+
+      const completePlan = planShelfSync(completeEmpty, existing, new Set());
+      expect(completePlan.absent).toHaveLength(1);
+
+      // Failed snapshot
+      const failedSnapshot = createFailedSnapshot(new Error('Network offline'));
+      expect(isCompleteSnapshot(failedSnapshot)).toBe(false);
+
+      const failedReconciliation = reconcileShelfSnapshot(failedSnapshot, existing, new Set());
+      expect(failedReconciliation.removed).toHaveLength(0);
+
+      const failedPlan = planShelfSync(failedSnapshot, existing, new Set());
+      expect(failedPlan.absent).toHaveLength(0);
+
+      // Partial snapshot
+      const partialSnapshot = createPartialSnapshot([]);
+      expect(isCompleteSnapshot(partialSnapshot)).toBe(false);
+
+      const partialReconciliation = reconcileShelfSnapshot(partialSnapshot, existing, new Set());
+      expect(partialReconciliation.removed).toHaveLength(0);
+
+      const partialPlan = planShelfSync(partialSnapshot, existing, new Set());
+      expect(partialPlan.absent).toHaveLength(0);
+
+      // Cancelled snapshot
+      const cancelledSnapshot = createCancelledSnapshot();
+      expect(isCompleteSnapshot(cancelledSnapshot)).toBe(false);
+
+      const cancelledReconciliation = reconcileShelfSnapshot(
+        cancelledSnapshot,
+        existing,
+        new Set(),
+      );
+      expect(cancelledReconciliation.removed).toHaveLength(0);
+
+      const cancelledPlan = planShelfSync(cancelledSnapshot, existing, new Set());
+      expect(cancelledPlan.absent).toHaveLength(0);
+
+      // Restart required snapshot
+      const restartSnapshot = createRestartRequiredSnapshot();
+      expect(isCompleteSnapshot(restartSnapshot)).toBe(false);
+
+      const restartReconciliation = reconcileShelfSnapshot(restartSnapshot, existing, new Set());
+      expect(restartReconciliation.removed).toHaveLength(0);
+
+      const restartPlan = planShelfSync(restartSnapshot, existing, new Set());
+      expect(restartPlan.absent).toHaveLength(0);
+    });
+
+    describe('collectShelfSnapshot pagination and offline scenarios', () => {
+      it('handles offline before first page as failed snapshot', async () => {
+        const adapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          async getShelfPage() {
+            throw new Error('TypeError: Failed to fetch (offline)');
+          },
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+
+        const snapshot = await collectShelfSnapshot(adapter, 'col', '1');
+        expect(snapshot.status).toBe('failed');
+        expect(snapshot.books).toHaveLength(0);
+        expect(isCompleteSnapshot(snapshot)).toBe(false);
       });
 
-      expect(deletionPlan.toDelete).toHaveLength(0);
-      expect(deletionPlan.toKeep).toHaveLength(1);
-      expect(deletionPlan.toKeep[0]?.reason).toBe('snapshot_incomplete');
+      it('handles mid-pagination error as partial snapshot preserving retrieved books', async () => {
+        let callCount = 0;
+        const adapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          async getShelfPage(_type: string, _id: string, options?: { cursor?: string | null }) {
+            callCount += 1;
+            if (options?.cursor === 'page-2') {
+              throw new Error('Connection reset mid-pagination');
+            }
+            return {
+              books: [
+                { bookId: 'b1', bookHash: 'h1', filename: 'b1.epub' },
+                { bookId: 'b2', bookHash: 'h2', filename: 'b2.epub' },
+              ],
+              nextCursor: 'page-2',
+              hasMore: true,
+            };
+          },
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+
+        const snapshot = await collectShelfSnapshot(adapter, 'col', '1');
+        expect(callCount).toBe(2);
+        expect(snapshot.status).toBe('partial');
+        expect(snapshot.books).toHaveLength(2);
+        expect(snapshot.books[0]?.bookId).toBe('b1');
+        expect(isCompleteSnapshot(snapshot)).toBe(false);
+      });
+
+      it('handles mid-pagination cancellation via AbortSignal', async () => {
+        const controller = new AbortController();
+        const adapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          async getShelfPage(_type: string, _id: string, options?: { cursor?: string | null }) {
+            if (options?.cursor === 'page-2') {
+              controller.abort();
+            }
+            return {
+              books: [{ bookId: 'b1', bookHash: 'h1', filename: 'b1.epub' }],
+              nextCursor: 'page-2',
+              hasMore: true,
+            };
+          },
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+
+        const snapshot = await collectShelfSnapshot(adapter, 'col', '1', {
+          signal: controller.signal,
+        });
+        expect(snapshot.status).toBe('cancelled');
+        expect(isCompleteSnapshot(snapshot)).toBe(false);
+      });
+
+      it('handles malformed page payloads gracefully', async () => {
+        // 1. Page is null
+        const nullAdapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          getShelfPage: async () => null as unknown as { books: [] },
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+        const nullSnap = await collectShelfSnapshot(nullAdapter, 'col', '1');
+        expect(nullSnap.status).toBe('failed');
+
+        // 2. Books is not array
+        const notArrayAdapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          getShelfPage: async () => ({ books: 'not an array' }) as unknown as { books: [] },
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+        const notArraySnap = await collectShelfSnapshot(notArrayAdapter, 'col', '1');
+        expect(notArraySnap.status).toBe('failed');
+
+        // 3. Books has malformed item (missing bookId)
+        const corruptItemAdapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          getShelfPage: async () => ({
+            books: [{ filename: 'no-id.epub' }] as unknown as [],
+          }),
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+        const corruptSnap = await collectShelfSnapshot(corruptItemAdapter, 'col', '1');
+        expect(corruptSnap.status).toBe('failed');
+      });
+
+      it('handles restartRequired flag in paginated responses', async () => {
+        const adapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          getShelfPage: async () => ({
+            books: [],
+            restartRequired: true,
+          }),
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+
+        const snapshot = await collectShelfSnapshot(adapter, 'col', '1');
+        expect(snapshot.status).toBe('restart_required');
+        expect(snapshot.restartRequired).toBe(true);
+        expect(isCompleteSnapshot(snapshot)).toBe(false);
+      });
+
+      it('detects looping cursor when nextCursor repeats current cursor', async () => {
+        const adapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          getShelfPage: async (
+            _type: string,
+            _id: string,
+            options?: { cursor?: string | null },
+          ) => ({
+            books: [{ bookId: `b-${options?.cursor ?? 'first'}`, bookHash: 'h', filename: 'f' }],
+            nextCursor: 'loop-cursor',
+            hasMore: true,
+          }),
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+
+        const snapshot = await collectShelfSnapshot(adapter, 'col', '1');
+        expect(snapshot.status).toBe('partial');
+        expect(snapshot.error).toBeInstanceOf(Error);
+        expect((snapshot.error as Error).message).toContain('Looping cursor detected');
+        expect(isCompleteSnapshot(snapshot)).toBe(false);
+      });
+
+      it('detects cyclic cursor when nextCursor repeats an earlier visited cursor', async () => {
+        let page = 0;
+        const adapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          getShelfPage: async () => {
+            page += 1;
+            // page 1 -> cursor-A -> page 2 -> cursor-B -> page 3 -> cursor-A (cycle)
+            const nextCursor = page === 1 ? 'cursor-A' : page === 2 ? 'cursor-B' : 'cursor-A';
+            return {
+              books: [{ bookId: `b-${page}`, bookHash: 'h', filename: 'f' }],
+              nextCursor,
+              hasMore: true,
+            };
+          },
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+
+        const snapshot = await collectShelfSnapshot(adapter, 'col', '1');
+        expect(snapshot.status).toBe('partial');
+        expect((snapshot.error as Error).message).toContain('Looping cursor detected');
+        expect(isCompleteSnapshot(snapshot)).toBe(false);
+      });
+
+      it('successfully collects confirmed complete empty shelf', async () => {
+        const adapter = {
+          provider: 'test-p',
+          connectionId: 'c1',
+          getShelfPage: async () => ({
+            books: [],
+            hasMore: false,
+          }),
+          downloadBook: async () => new ArrayBuffer(0),
+        };
+
+        const snapshot = await collectShelfSnapshot(adapter, 'col', '1');
+        expect(snapshot.status).toBe('complete');
+        expect(snapshot.books).toEqual([]);
+        expect(isCompleteSnapshot(snapshot)).toBe(true);
+      });
     });
   });
 

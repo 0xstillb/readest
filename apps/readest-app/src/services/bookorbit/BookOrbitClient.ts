@@ -328,12 +328,25 @@ export class BookOrbitClient implements BookOrbitShelfClient {
   }
 
   private normalizeShelfBooks(data: unknown): BookOrbitShelfBook[] {
-    if (!data) return [];
-    let list: unknown[] = [];
+    if (data === null || data === undefined) {
+      throw new BookOrbitRequestError(500, 'Malformed shelf response: received empty payload');
+    }
+    if (typeof data !== 'object') {
+      throw new BookOrbitRequestError(
+        500,
+        'Malformed shelf response: expected JSON object or array',
+      );
+    }
+
+    const obj = data as Record<string, unknown>;
+    if (obj['restartRequired'] === true || obj['restart_required'] === true) {
+      throw new BookOrbitRequestError(409, 'BookOrbit shelf pagination restart required');
+    }
+
+    let list: unknown[] | null = null;
     if (Array.isArray(data)) {
       list = data;
-    } else if (typeof data === 'object') {
-      const obj = data as Record<string, unknown>;
+    } else {
       const books = obj['books'];
       const items = obj['items'];
       const results = obj['results'];
@@ -344,12 +357,23 @@ export class BookOrbitClient implements BookOrbitShelfClient {
       else if (Array.isArray(dataItems)) list = dataItems;
     }
 
+    if (list === null) {
+      throw new BookOrbitRequestError(500, 'Malformed shelf response: missing books collection');
+    }
+
     const books: BookOrbitShelfBook[] = [];
     for (const item of list) {
-      if (!item || typeof item !== 'object') continue;
+      if (!item || typeof item !== 'object') {
+        throw new BookOrbitRequestError(
+          500,
+          'Malformed shelf response: invalid book entry in collection',
+        );
+      }
       const record = item as Record<string, unknown>;
       const bookId = record['bookId'] ?? record['id'];
-      if (bookId == null) continue;
+      if (bookId == null) {
+        throw new BookOrbitRequestError(500, 'Malformed shelf response: book missing identifier');
+      }
 
       const fileId = record['fileId'] ?? record['bookFileId'] ?? record['primaryFileId'] ?? null;
       const contentVersion =

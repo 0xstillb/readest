@@ -140,6 +140,33 @@ export interface ShelfSyncPlan<
   absent: TEntry[];
 }
 
+export type ShelfSnapshotStatus =
+  | 'complete'
+  | 'failed'
+  | 'partial'
+  | 'cancelled'
+  | 'restart_required';
+
+export interface ShelfSnapshot<TBook = ShelfSyncBook<unknown>> {
+  status: ShelfSnapshotStatus;
+  books: TBook[];
+  error?: unknown;
+  cursor?: string | null;
+  restartRequired?: boolean;
+}
+
+export interface ShelfPage<TBook = ShelfSyncBook<unknown>> {
+  books: TBook[];
+  nextCursor?: string | null;
+  hasMore?: boolean;
+  restartRequired?: boolean;
+}
+
+export interface ShelfPageOptions {
+  cursor?: string | null;
+  signal?: AbortSignal;
+}
+
 export type ShelfDeletionReason =
   | 'policy_keep_local'
   | 'not_managed_by_provider'
@@ -210,7 +237,29 @@ export interface ShelfSyncAdapter<
   /**
    * Fetch all books in a remote shelf.
    */
-  getShelfBooks(shelfType: string, shelfId: TId): Promise<TBook[]>;
+  getShelfBooks?(
+    shelfType: string,
+    shelfId: TId,
+    options?: { signal?: AbortSignal },
+  ): Promise<TBook[] | ShelfSnapshot<TBook>>;
+
+  /**
+   * Optional direct snapshot retrieval method.
+   */
+  getShelfSnapshot?(
+    shelfType: string,
+    shelfId: TId,
+    options?: { signal?: AbortSignal },
+  ): Promise<ShelfSnapshot<TBook>>;
+
+  /**
+   * Optional paginated retrieval method for providers supporting cursor/offset paging.
+   */
+  getShelfPage?(
+    shelfType: string,
+    shelfId: TId,
+    options?: ShelfPageOptions,
+  ): Promise<ShelfPage<TBook>>;
 
   /**
    * Download a shelf book into memory as an ArrayBuffer.
@@ -260,6 +309,8 @@ export interface ShelfSyncRunOptions<
   cleanupPolicy?: ShelfCleanupPolicy;
   downloadPolicy?: ShelfDownloadPolicy;
   presenceIndex?: LibraryPresenceIndex;
+  snapshot?: ShelfSnapshot<TBook>;
+  throwOnIncompleteSnapshot?: boolean;
 }
 
 export interface ShelfSubscribedSyncOptions<
