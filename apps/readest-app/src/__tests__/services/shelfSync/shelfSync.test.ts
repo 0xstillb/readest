@@ -1264,4 +1264,331 @@ describe('Generic Shelf Sync Reconciliation and Planning', () => {
       expect(index.paths.size).toBe(0);
     });
   });
+
+  describe('Phase 8C: Managed Cleanup and Reference Safety (Data Safety Invariant)', () => {
+    it('never purges user-owned books even under remove_managed_copy', () => {
+      const userEntry = {
+        bookId: 'u1',
+        bookHash: 'user-hash',
+        localPath: 'user-hash/UserBook.epub',
+        managedByProvider: false,
+      };
+      const book = makeMockBook({
+        hash: 'user-hash',
+        title: 'UserBook',
+        sourceTitle: 'UserBook',
+        format: 'EPUB',
+      });
+
+      const plan = planShelfDeletions({
+        absentEntries: [userEntry],
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['user-hash/UserBook.epub', 1]]),
+        snapshotComplete: true,
+      });
+
+      expect(plan.toDelete).toHaveLength(0);
+      expect(plan.toKeep).toHaveLength(1);
+      expect(plan.toKeep[0]?.reason).toBe('not_managed_by_provider');
+    });
+
+    it('approves deletion when single managed reference, remove policy, and complete snapshot', () => {
+      const entry = {
+        bookId: 'm1',
+        bookHash: 'm-hash',
+        localPath: 'm-hash/Managed.epub',
+        managedByProvider: true,
+      };
+      const book = makeMockBook({
+        hash: 'm-hash',
+        title: 'Managed',
+        sourceTitle: 'Managed',
+        format: 'EPUB',
+      });
+
+      const plan = planShelfDeletions({
+        absentEntries: [entry],
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['m-hash/Managed.epub', 1]]),
+        snapshotComplete: true,
+      });
+
+      expect(plan.toDelete).toHaveLength(1);
+      expect(plan.toDelete[0]?.book?.hash).toBe('m-hash');
+      expect(plan.toKeep).toHaveLength(0);
+    });
+
+    it('keeps managed copy when cleanupPolicy is keep_local', () => {
+      const entry = {
+        bookId: 'm1',
+        bookHash: 'm-hash',
+        localPath: 'm-hash/Managed.epub',
+        managedByProvider: true,
+      };
+      const book = makeMockBook({
+        hash: 'm-hash',
+        title: 'Managed',
+        sourceTitle: 'Managed',
+        format: 'EPUB',
+      });
+
+      const plan = planShelfDeletions({
+        absentEntries: [entry],
+        cleanupPolicy: 'keep_local',
+        library: [book],
+        referenceCounts: new Map([['m-hash/Managed.epub', 1]]),
+        snapshotComplete: true,
+      });
+
+      expect(plan.toDelete).toHaveLength(0);
+      expect(plan.toKeep).toHaveLength(1);
+      expect(plan.toKeep[0]?.reason).toBe('policy_keep_local');
+    });
+
+    it('preserves managed file when multiple references exist (two shelves or cross-provider)', () => {
+      const entry = {
+        bookId: 'm1',
+        bookHash: 'm-hash',
+        localPath: 'm-hash/Managed.epub',
+        managedByProvider: true,
+      };
+      const book = makeMockBook({
+        hash: 'm-hash',
+        title: 'Managed',
+        sourceTitle: 'Managed',
+        format: 'EPUB',
+      });
+
+      // refCount = 2 (e.g. 2 shelves or BookOrbit + GrimmLink)
+      const plan = planShelfDeletions({
+        absentEntries: [entry],
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['m-hash/Managed.epub', 2]]),
+        snapshotComplete: true,
+      });
+
+      expect(plan.toDelete).toHaveLength(0);
+      expect(plan.toKeep).toHaveLength(1);
+      expect(plan.toKeep[0]?.reason).toBe('multiple_references');
+    });
+
+    it('preserves book when user replaced the file with a different hash', () => {
+      const entry = {
+        bookId: 'm1',
+        bookHash: 'm-hash',
+        localPath: 'm-hash/Managed.epub',
+        managedByProvider: true,
+      };
+      // Library book at the path has a different hash (replaced by user)
+      const book = makeMockBook({
+        hash: 'user-replaced-hash',
+        title: 'Managed',
+        sourceTitle: 'Managed',
+        format: 'EPUB',
+      });
+
+      const plan = planShelfDeletions({
+        absentEntries: [entry],
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book],
+        referenceCounts: new Map([['m-hash/Managed.epub', 1]]),
+        snapshotComplete: true,
+      });
+
+      expect(plan.toDelete).toHaveLength(0);
+      expect(plan.toKeep).toHaveLength(1);
+      expect(plan.toKeep[0]?.reason).toBe('unmatched_managed_entry');
+    });
+
+    it('preserves book when multiple library books match the path (ambiguous path)', () => {
+      const entry = {
+        bookId: 'm1',
+        bookHash: 'm-hash',
+        localPath: 'm-hash/Managed.epub',
+        managedByProvider: true,
+      };
+      const book1 = makeMockBook({
+        hash: 'm-hash',
+        title: 'Managed',
+        sourceTitle: 'Managed',
+        format: 'EPUB',
+      });
+      const book2 = makeMockBook({
+        hash: 'm-hash',
+        title: 'Managed Duplicate',
+        sourceTitle: 'Managed',
+        format: 'EPUB',
+      });
+
+      const plan = planShelfDeletions({
+        absentEntries: [entry],
+        cleanupPolicy: 'remove_managed_copy',
+        library: [book1, book2],
+        referenceCounts: new Map([['m-hash/Managed.epub', 1]]),
+        snapshotComplete: true,
+      });
+
+      expect(plan.toDelete).toHaveLength(0);
+      expect(plan.toKeep).toHaveLength(1);
+      expect(plan.toKeep[0]?.reason).toBe('ambiguous_local_path');
+    });
+
+    it('keeps remote-only entry with nothing to delete', () => {
+      const entry = {
+        bookId: 'r1',
+        bookHash: 'r-hash',
+        localPath: null,
+        managedByProvider: false,
+      };
+
+      const plan = planShelfDeletions({
+        absentEntries: [entry],
+        cleanupPolicy: 'remove_managed_copy',
+        library: [],
+        snapshotComplete: true,
+      });
+
+      expect(plan.toDelete).toHaveLength(0);
+      expect(plan.toKeep).toHaveLength(1);
+      expect(plan.toKeep[0]?.reason).toBe('not_managed_by_provider');
+
+      // Even if managedByProvider was true, missing localPath keeps
+      const managedRemoteOnly = {
+        bookId: 'r2',
+        bookHash: 'r-hash',
+        localPath: null,
+        managedByProvider: true,
+      };
+
+      const plan2 = planShelfDeletions({
+        absentEntries: [managedRemoteOnly],
+        cleanupPolicy: 'remove_managed_copy',
+        library: [],
+        snapshotComplete: true,
+      });
+
+      expect(plan2.toDelete).toHaveLength(0);
+      expect(plan2.toKeep).toHaveLength(1);
+      expect(plan2.toKeep[0]?.reason).toBe('missing_local_path');
+    });
+
+    it('keeps all entries when snapshot is failed, partial, cancelled, or restart_required', () => {
+      const entry = {
+        bookId: 'm1',
+        bookHash: 'm-hash',
+        localPath: 'm-hash/Managed.epub',
+        managedByProvider: true,
+      };
+      const book = makeMockBook({
+        hash: 'm-hash',
+        title: 'Managed',
+        sourceTitle: 'Managed',
+        format: 'EPUB',
+      });
+
+      for (const status of ['failed', 'partial', 'cancelled', 'restart_required'] as const) {
+        const plan = planShelfDeletions({
+          absentEntries: [entry],
+          cleanupPolicy: 'remove_managed_copy',
+          library: [book],
+          referenceCounts: new Map([['m-hash/Managed.epub', 1]]),
+          snapshotStatus: status,
+        });
+
+        expect(plan.toDelete).toHaveLength(0);
+        expect(plan.toKeep).toHaveLength(1);
+        expect(plan.toKeep[0]?.reason).toBe('snapshot_incomplete');
+      }
+    });
+
+    it('canDeleteObsoleteRevision strictly requires complete snapshot, remove policy, managed copy, and 0 references', () => {
+      const prev = {
+        bookId: 'b1',
+        bookHash: 'h1',
+        localPath: 'h1/book.epub',
+        managedByProvider: true,
+      };
+      const importedBook = makeMockBook({
+        hash: 'h2',
+        title: 'book',
+        sourceTitle: 'book',
+        format: 'EPUB',
+      });
+
+      // Baseline: should succeed
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 0,
+          snapshotStatus: 'complete',
+        }),
+      ).toBe(true);
+
+      // Incomplete snapshot -> false
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 0,
+          snapshotStatus: 'partial',
+        }),
+      ).toBe(false);
+
+      // keep_local policy -> false
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook,
+          cleanupPolicy: 'keep_local',
+          referenceCount: 0,
+          snapshotStatus: 'complete',
+        }),
+      ).toBe(false);
+
+      // not managed by provider -> false
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: { ...prev, managedByProvider: false },
+          importedBook,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 0,
+          snapshotStatus: 'complete',
+        }),
+      ).toBe(false);
+
+      // referenceCount > 0 (other shelf references it) -> false
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 1,
+          snapshotStatus: 'complete',
+        }),
+      ).toBe(false);
+
+      // same path -> false
+      const samePathBook = makeMockBook({
+        hash: 'h1',
+        title: 'book',
+        sourceTitle: 'book',
+        format: 'EPUB',
+      });
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook: samePathBook,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 0,
+          snapshotStatus: 'complete',
+        }),
+      ).toBe(false);
+    });
+  });
 });

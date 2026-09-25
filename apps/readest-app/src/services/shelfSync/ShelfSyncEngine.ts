@@ -1,6 +1,6 @@
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
-import { getLocalBookFilename } from '@/utils/book';
+import { getBookDirOfPath, getLocalBookFilename } from '@/utils/book';
 import { isTauriAppPlatform } from '@/services/environment';
 import { safeShelfFilename, validateShelfDownload } from './validation';
 import {
@@ -235,10 +235,17 @@ export class ShelfSyncEngine<
               snapshotComplete: isComplete,
             })
           ) {
+            // Guard: Verify that the old book in the library strictly corresponds to the managed previousEntry.
+            // Path must match AND (if recorded) content hash must match.
+            // If the user replaced the book or path is ambiguous, KEEP the local book.
+            const prevDir = previous.localPath ? getBookDirOfPath(previous.localPath) : undefined;
             const oldBook = localLibrary.find(
               (b) =>
-                getLocalBookFilename(b) === previous.localPath ||
-                (previous.bookHash && b.hash === previous.bookHash),
+                (getLocalBookFilename(b) === previous.localPath ||
+                  (prevDir !== undefined && b.hash === prevDir)) &&
+                (!previous.bookHash ||
+                  b.hash === previous.bookHash ||
+                  (prevDir !== undefined && b.hash === prevDir)),
             );
             if (oldBook && oldBook.hash !== imported.hash) {
               const bookIndex = localLibrary.findIndex((b) => b.hash === oldBook.hash);
@@ -246,12 +253,6 @@ export class ShelfSyncEngine<
               if (bookIndex >= 0) localLibrary.splice(bookIndex, 1);
               if (options.presenceIndex) removeFromPresenceIndex(options.presenceIndex, oldBook);
               await options.onRemoved?.(oldBook, [...localLibrary]);
-              removed += 1;
-            } else if (
-              previous.localPath &&
-              (await this.appService.exists(previous.localPath, 'Books'))
-            ) {
-              await this.appService.deleteFile(previous.localPath, 'Books');
               removed += 1;
             }
           }
@@ -302,8 +303,12 @@ export class ShelfSyncEngine<
       snapshotComplete: isComplete,
     });
 
+    // 7. Plan and execute reference-safe deletions
+    // Enforces Data Safety Invariant: Automatic deletion requires ALL 6 criteria.
+    // When uncertain, KEEP the local book. Failed/partial/cancelled snapshots NEVER trigger deletion.
     if (isComplete) {
       for (const item of deletionPlan.toDelete) {
+        // Guard: Only delete when item.book is verified and corresponds to the managed entry
         if (item.book) {
           const bookIndex = localLibrary.findIndex((book) => book.hash === item.book!.hash);
           await this.appService.deleteBook(item.book, 'purge');
@@ -311,12 +316,10 @@ export class ShelfSyncEngine<
           if (options.presenceIndex) removeFromPresenceIndex(options.presenceIndex, item.book);
           await options.onRemoved?.(item.book, [...localLibrary]);
           removed += 1;
-        } else if (item.localPath && (await this.appService.exists(item.localPath, 'Books'))) {
-          await this.appService.deleteFile(item.localPath, 'Books');
-          removed += 1;
         }
       }
 
+      // Guard: Only remove tracked entries when snapshot was complete and successful
       await this.store.removeShelfEntries(
         plan.absent.map((entry) => ({
           provider: this.adapter.provider,

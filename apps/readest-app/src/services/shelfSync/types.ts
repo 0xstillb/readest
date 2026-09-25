@@ -175,7 +175,9 @@ export type ShelfDeletionReason =
   | 'not_managed_by_provider'
   | 'missing_local_path'
   | 'multiple_references'
-  | 'snapshot_incomplete';
+  | 'snapshot_incomplete'
+  | 'unmatched_managed_entry'
+  | 'ambiguous_local_path';
 
 export interface ShelfDeletionDecision<TEntry extends ShelfSyncEntry<unknown> = ShelfSyncEntry> {
   action: 'delete' | 'keep';

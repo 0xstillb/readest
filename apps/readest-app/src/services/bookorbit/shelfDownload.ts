@@ -1,6 +1,6 @@
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
-import { getLocalBookFilename } from '@/utils/book';
+import { getBookDirOfPath, getLocalBookFilename } from '@/utils/book';
 import { isLanAddress } from '@/utils/network';
 import { normalizeCustomHeaders } from '@/utils/customHeaders';
 import { isTauriAppPlatform } from '@/services/environment';
@@ -374,21 +374,23 @@ export async function downloadAndImportBookOrbitBook(
           referenceCount: refCount,
         })
       ) {
+        // Guard: Verify that the old book in the library strictly corresponds to the managed previousEntry.
+        // Path must match AND (if recorded) content hash must match.
+        // If the user replaced the book or path is ambiguous, KEEP the local book.
+        const prevDir = getBookDirOfPath(options.previousEntry!.localPath);
         const oldBook = library.find(
           (b) =>
-            getLocalBookFilename(b) === options.previousEntry!.localPath ||
-            (options.previousEntry!.bookHash && b.hash === options.previousEntry!.bookHash),
+            (getLocalBookFilename(b) === options.previousEntry!.localPath ||
+              (prevDir !== undefined && b.hash === prevDir)) &&
+            (!options.previousEntry!.bookHash ||
+              b.hash === options.previousEntry!.bookHash ||
+              (prevDir !== undefined && b.hash === prevDir)),
         );
         if (oldBook && oldBook.hash !== imported.hash) {
           const idx = library.findIndex((b) => b.hash === oldBook.hash);
           await appService.deleteBook(oldBook, 'purge');
           if (idx >= 0) library.splice(idx, 1);
           await options.onRemoved?.(oldBook, [...library]);
-        } else if (
-          options.previousEntry.localPath &&
-          (await appService.exists(options.previousEntry.localPath, 'Books'))
-        ) {
-          await appService.deleteFile(options.previousEntry.localPath, 'Books');
         }
       }
     }

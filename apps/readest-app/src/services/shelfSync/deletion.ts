@@ -1,5 +1,5 @@
 import type { Book } from '@/types/book';
-import { getLocalBookFilename } from '@/utils/book';
+import { getBookDirOfPath, getLocalBookFilename } from '@/utils/book';
 import type {
   ShelfCleanupPolicy,
   ShelfDeletionDecision,
@@ -107,7 +107,65 @@ export function planShelfDeletions<TEntry extends ShelfSyncEntry<unknown>>(
       continue;
     }
 
-    const book = library.find((b) => getLocalBookFilename(b) === entry.localPath);
+    // Guard 6 (Invariant): Tracked local file must still correspond to managed entry.
+    // When uncertain, KEEP the local book. Prefer extra file over false deletion.
+
+    // 6a. Check path ambiguity: exactly one book in library should match entry.localPath
+    const localDir = getBookDirOfPath(entry.localPath);
+    const matchingBooks = library.filter(
+      (b) =>
+        getLocalBookFilename(b) === entry.localPath ||
+        (localDir !== undefined && b.hash === localDir),
+    );
+    if (matchingBooks.length > 1) {
+      const reason: ShelfDeletionReason = 'ambiguous_local_path';
+      decisions.push({ action: 'keep', entry, reason, localPath: entry.localPath });
+      toKeep.push({ entry, reason });
+      continue;
+    }
+
+    const book = matchingBooks[0];
+
+    // 6b. Check hash correspondence and detect user replacements
+    if (entry.bookHash) {
+      // If a book with this hash exists in library at a DIFFERENT path/directory, path is ambiguous
+      const booksWithHash = library.filter((b) => b.hash === entry.bookHash);
+      if (
+        booksWithHash.length > 1 ||
+        (booksWithHash.length === 1 &&
+          localDir !== undefined &&
+          booksWithHash[0]!.hash !== localDir &&
+          getLocalBookFilename(booksWithHash[0]!) !== entry.localPath)
+      ) {
+        const reason: ShelfDeletionReason = 'ambiguous_local_path';
+        decisions.push({ action: 'keep', entry, reason, localPath: entry.localPath });
+        toKeep.push({ entry, reason });
+        continue;
+      }
+
+      // If the book matches neither the tracked bookHash nor the tracked local path directory, user replaced it
+      if (
+        book &&
+        book.hash !== entry.bookHash &&
+        (localDir === undefined || book.hash !== localDir)
+      ) {
+        const reason: ShelfDeletionReason = 'unmatched_managed_entry';
+        decisions.push({ action: 'keep', entry, reason, localPath: entry.localPath });
+        toKeep.push({ entry, reason });
+        continue;
+      }
+    }
+
+    // 6c. If the book was not found in library, correspondence cannot be proven.
+    // Prefer extra file over false deletion.
+    if (!book) {
+      const reason: ShelfDeletionReason = 'unmatched_managed_entry';
+      decisions.push({ action: 'keep', entry, reason, localPath: entry.localPath });
+      toKeep.push({ entry, reason });
+      continue;
+    }
+
+    // All 6 safety criteria satisfied: eligible for deletion
     decisions.push({
       action: 'delete',
       entry,
