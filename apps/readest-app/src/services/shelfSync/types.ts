@@ -80,6 +80,7 @@ export interface ShelfSyncBook<TId = number | string> {
   author?: string;
   fileId?: string | number | null;
   contentVersion?: string | null;
+  fileHash?: string | null;
 }
 
 /**
@@ -88,6 +89,8 @@ export interface ShelfSyncBook<TId = number | string> {
 export interface ShelfSyncEntry<TId = number | string> {
   bookId: TId;
   bookHash: string | null;
+  fileId?: string | number | null;
+  contentVersion?: string | null;
   localPath: string | null;
   managedByProvider?: boolean;
 }

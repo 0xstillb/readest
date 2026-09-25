@@ -123,3 +123,46 @@ export function planShelfDeletions<TEntry extends ShelfSyncEntry<unknown>>(
 
   return { decisions, toDelete, toKeep };
 }
+
+export interface CanDeleteObsoleteRevisionOptions<TEntry extends ShelfSyncEntry<unknown>> {
+  previousEntry: TEntry;
+  importedBook: Book;
+  cleanupPolicy: ShelfCleanupPolicy;
+  referenceCount: number;
+  snapshotStatus?: ShelfSnapshotStatus;
+  snapshotComplete?: boolean;
+}
+
+/**
+ * Evaluates whether an obsolete managed copy replaced by a newer revision can be safely deleted.
+ * Follows the Data Safety Invariant:
+ * 1. Snapshot must be complete
+ * 2. cleanup_policy must be remove_managed_copy
+ * 3. previous entry must be managed_by_provider
+ * 4. local path must exist and differ from the replacement book
+ * 5. no remaining shelf or provider references (referenceCount === 0)
+ */
+export function canDeleteObsoleteRevision<TEntry extends ShelfSyncEntry<unknown>>(
+  options: CanDeleteObsoleteRevisionOptions<TEntry>,
+): boolean {
+  const isComplete =
+    options.snapshotStatus !== undefined
+      ? options.snapshotStatus === 'complete'
+      : (options.snapshotComplete ?? true);
+
+  if (!isComplete) return false;
+  if (options.cleanupPolicy !== 'remove_managed_copy') return false;
+  if (!options.previousEntry.managedByProvider) return false;
+  if (!options.previousEntry.localPath) return false;
+
+  const newPath = getLocalBookFilename(options.importedBook);
+  if (options.previousEntry.localPath === newPath) return false;
+  if (
+    options.previousEntry.bookHash &&
+    options.previousEntry.bookHash === options.importedBook.hash
+  ) {
+    return false;
+  }
+
+  return options.referenceCount === 0;
+}

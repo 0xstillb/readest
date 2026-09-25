@@ -8,10 +8,12 @@ import { tauriDownload, type ProgressHandler } from '@/utils/transfer';
 import { safeShelfFilename } from '@/services/shelfSync/validation';
 import type {
   IShelfSyncStore,
+  ShelfCleanupPolicy,
   ShelfEntryWrite,
   ShelfSyncAdapter,
   ShelfSyncAppService,
   ShelfSyncBook,
+  ShelfSyncEntry,
 } from '@/services/shelfSync/types';
 
 export interface BookOrbitShelfDownloadItem {
@@ -56,7 +58,10 @@ export interface BookOrbitShelfDownloadOptions {
   shelfType?: string;
   shelfId?: string | number;
   connectionId?: string;
+  cleanupPolicy?: ShelfCleanupPolicy;
+  previousEntry?: ShelfSyncEntry<unknown>;
   onImported?: (book: Book, library: Book[]) => Promise<void> | void;
+  onRemoved?: (book: Book, library: Book[]) => Promise<void> | void;
   onProgress?: ProgressHandler;
   signal?: AbortSignal;
 }
@@ -347,11 +352,46 @@ export async function downloadAndImportBookOrbitBook(
       bookId: String(item.bookId),
       fileId: item.fileId != null ? String(item.fileId) : null,
       contentVersion: item.contentVersion != null ? String(item.contentVersion) : null,
-      bookHash: imported.hash,
+      bookHash: item.fileHash ?? item.bookHash ?? imported.hash,
       localPath: getLocalBookFilename(imported),
       managedByProvider: true,
     };
     await store.markShelfEntries([entry]);
+
+    if (
+      options.cleanupPolicy === 'remove_managed_copy' &&
+      options.previousEntry?.managedByProvider &&
+      options.previousEntry.localPath
+    ) {
+      const counts = await store.getAllShelfReferenceCounts([options.previousEntry.localPath]);
+      const refCount = counts.get(options.previousEntry.localPath) ?? 0;
+      const { canDeleteObsoleteRevision } = await import('@/services/shelfSync/deletion');
+      if (
+        canDeleteObsoleteRevision({
+          previousEntry: options.previousEntry,
+          importedBook: imported,
+          cleanupPolicy: options.cleanupPolicy,
+          referenceCount: refCount,
+        })
+      ) {
+        const oldBook = library.find(
+          (b) =>
+            getLocalBookFilename(b) === options.previousEntry!.localPath ||
+            (options.previousEntry!.bookHash && b.hash === options.previousEntry!.bookHash),
+        );
+        if (oldBook && oldBook.hash !== imported.hash) {
+          const idx = library.findIndex((b) => b.hash === oldBook.hash);
+          await appService.deleteBook(oldBook, 'purge');
+          if (idx >= 0) library.splice(idx, 1);
+          await options.onRemoved?.(oldBook, [...library]);
+        } else if (
+          options.previousEntry.localPath &&
+          (await appService.exists(options.previousEntry.localPath, 'Books'))
+        ) {
+          await appService.deleteFile(options.previousEntry.localPath, 'Books');
+        }
+      }
+    }
 
     return imported;
   } finally {

@@ -3,6 +3,7 @@ import type { Book } from '@/types/book';
 import {
   addToPresenceIndex,
   buildLibraryPresenceIndex,
+  canDeleteObsoleteRevision,
   collectShelfSnapshot,
   createCancelledSnapshot,
   createCompleteSnapshot,
@@ -131,6 +132,403 @@ describe('Generic Shelf Sync Reconciliation and Planning', () => {
       const preview = summarizeShelfReconciliation(reconciliation);
       expect(preview.changed).toBe(1);
       expect(preview.downloads).toBe(1);
+    });
+
+    it('detects changed revision when remote provides fileHash differing from tracked bookHash', () => {
+      const remote = [
+        {
+          bookId: 'b1',
+          fileHash: 'filehash-v2',
+          bookHash: null,
+          filename: 'book.epub',
+          format: 'EPUB',
+        },
+      ];
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: 'hash-v1',
+          localPath: 'hash-v1/book.epub',
+          managedByProvider: true,
+        },
+      ];
+      const localHashes = new Set(['hash-v1']);
+      const localPaths = new Set(['hash-v1/book.epub']);
+
+      const plan = planShelfSync(remote, existing, localHashes, localPaths);
+      expect(plan.download).toEqual(remote);
+      expect(plan.reuse).toEqual([]);
+
+      const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+      expect(reconciliation.changed).toHaveLength(1);
+      expect(reconciliation.changed[0]?.next.fileHash).toBe('filehash-v2');
+    });
+
+    it('treats same remote bookId as changed revision when contentVersion changes', () => {
+      const remote = [
+        {
+          bookId: 'b1',
+          bookHash: 'hash-same',
+          contentVersion: '2',
+          filename: 'book.epub',
+          format: 'EPUB',
+        },
+      ];
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: 'hash-same',
+          contentVersion: '1',
+          localPath: 'hash-same/book.epub',
+          managedByProvider: true,
+        },
+      ];
+      const localHashes = new Set(['hash-same']);
+      const localPaths = new Set(['hash-same/book.epub']);
+
+      const plan = planShelfSync(remote, existing, localHashes, localPaths);
+      // Because contentVersion changed, it plans download rather than reuse
+      expect(plan.download).toEqual(remote);
+      expect(plan.reuse).toEqual([]);
+
+      const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+      expect(reconciliation.changed).toHaveLength(1);
+      expect(reconciliation.changed[0]?.previous.contentVersion).toBe('1');
+      expect(reconciliation.changed[0]?.next.contentVersion).toBe('2');
+    });
+
+    it('treats same remote bookId as changed revision when fileId changes', () => {
+      const remote = [
+        {
+          bookId: 'b1',
+          bookHash: 'hash-same',
+          fileId: 202,
+          filename: 'book.epub',
+          format: 'EPUB',
+        },
+      ];
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: 'hash-same',
+          fileId: 101,
+          localPath: 'hash-same/book.epub',
+          managedByProvider: true,
+        },
+      ];
+      const localHashes = new Set(['hash-same']);
+      const localPaths = new Set(['hash-same/book.epub']);
+
+      const plan = planShelfSync(remote, existing, localHashes, localPaths);
+      expect(plan.download).toEqual(remote);
+      expect(plan.reuse).toEqual([]);
+
+      const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+      expect(reconciliation.changed).toHaveLength(1);
+      expect(reconciliation.changed[0]?.previous.fileId).toBe(101);
+      expect(reconciliation.changed[0]?.next.fileId).toBe(202);
+    });
+
+    it('detects null-hash revision when contentVersion changes', () => {
+      const remote = [
+        {
+          bookId: 'b1',
+          bookHash: null,
+          contentVersion: 'v2',
+          filename: 'book.epub',
+          format: 'EPUB',
+        },
+      ];
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: null,
+          contentVersion: 'v1',
+          localPath: 'path/book.epub',
+          managedByProvider: true,
+        },
+      ];
+      const localHashes = new Set<string>();
+      const localPaths = new Set(['path/book.epub']);
+
+      const plan = planShelfSync(remote, existing, localHashes, localPaths);
+      expect(plan.download).toEqual(remote);
+      expect(plan.reuse).toEqual([]);
+
+      const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+      expect(reconciliation.changed).toHaveLength(1);
+      expect(reconciliation.changed[0]?.next.contentVersion).toBe('v2');
+    });
+
+    it('detects null-hash revision when fileId changes', () => {
+      const remote = [
+        {
+          bookId: 'b1',
+          bookHash: null,
+          fileId: 'file-new',
+          filename: 'book.epub',
+          format: 'EPUB',
+        },
+      ];
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: null,
+          fileId: 'file-old',
+          localPath: 'path/book.epub',
+          managedByProvider: true,
+        },
+      ];
+      const localHashes = new Set<string>();
+      const localPaths = new Set(['path/book.epub']);
+
+      const plan = planShelfSync(remote, existing, localHashes, localPaths);
+      expect(plan.download).toEqual(remote);
+      expect(plan.reuse).toEqual([]);
+
+      const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+      expect(reconciliation.changed).toHaveLength(1);
+      expect(reconciliation.changed[0]?.next.fileId).toBe('file-new');
+    });
+
+    it('conservatively reuses null-hash book when version and fileId are unchanged and local file exists', () => {
+      const remote = [
+        {
+          bookId: 'b1',
+          bookHash: null,
+          fileId: 'f1',
+          contentVersion: '1',
+          filename: 'book.epub',
+          format: 'EPUB',
+        },
+      ];
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: null,
+          fileId: 'f1',
+          contentVersion: '1',
+          localPath: 'path/book.epub',
+          managedByProvider: true,
+        },
+      ];
+      const localHashes = new Set<string>();
+      const localPaths = new Set(['path/book.epub']);
+
+      const plan = planShelfSync(remote, existing, localHashes, localPaths);
+      expect(plan.reuse).toEqual(['b1']);
+      expect(plan.download).toEqual([]);
+
+      const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+      expect(reconciliation.unchanged).toEqual(remote);
+      expect(reconciliation.changed).toEqual([]);
+      expect(reconciliation.added).toEqual([]);
+    });
+
+    it('conservatively reuses null-hash remote book when tracked has hash but version/fileId match', () => {
+      const remote = [
+        {
+          bookId: 'b1',
+          bookHash: null,
+          fileId: 'f1',
+          contentVersion: '1',
+          filename: 'book.epub',
+          format: 'EPUB',
+        },
+      ];
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: 'hash-known',
+          fileId: 'f1',
+          contentVersion: '1',
+          localPath: 'path/book.epub',
+          managedByProvider: true,
+        },
+      ];
+      const localHashes = new Set(['hash-known']);
+      const localPaths = new Set(['path/book.epub']);
+
+      const plan = planShelfSync(remote, existing, localHashes, localPaths);
+      expect(plan.reuse).toEqual(['b1']);
+      expect(plan.download).toEqual([]);
+
+      const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+      expect(reconciliation.unchanged).toEqual(remote);
+      expect(reconciliation.changed).toEqual([]);
+    });
+
+    it('reconciles changed revision as unchanged when new revision is already present locally', () => {
+      const remote = [
+        {
+          bookId: 'b1',
+          bookHash: 'hash-v2',
+          filename: 'book.epub',
+          format: 'EPUB',
+        },
+      ];
+      const existing = [
+        {
+          bookId: 'b1',
+          bookHash: 'hash-v1',
+          localPath: 'hash-v1/book.epub',
+          managedByProvider: true,
+        },
+      ];
+      // hash-v2 is already local in library!
+      const localHashes = new Set(['hash-v1', 'hash-v2']);
+      const localPaths = new Set(['hash-v1/book.epub', 'hash-v2/book.epub']);
+
+      const plan = planShelfSync(remote, existing, localHashes, localPaths);
+      expect(plan.reuse).toEqual(['b1']);
+      expect(plan.download).toEqual([]);
+
+      const reconciliation = reconcileShelfSnapshot(remote, existing, localHashes, localPaths);
+      expect(reconciliation.unchanged).toEqual(remote);
+      expect(reconciliation.changed).toEqual([]);
+      expect(reconciliation.added).toEqual([]);
+    });
+  });
+
+  describe('canDeleteObsoleteRevision', () => {
+    const makeBook = (hash: string, filename: string): Book => ({
+      hash,
+      title: filename,
+      author: 'Author',
+      sourceTitle: filename,
+      format: 'EPUB',
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    it('approves deletion when all invariant conditions are satisfied', () => {
+      const prev = {
+        bookId: 'b1',
+        bookHash: 'hash-v1',
+        localPath: 'hash-v1/book.epub',
+        managedByProvider: true,
+      };
+      const imported = makeBook('hash-v2', 'book-v2.epub');
+
+      const canDelete = canDeleteObsoleteRevision({
+        previousEntry: prev,
+        importedBook: imported,
+        cleanupPolicy: 'remove_managed_copy',
+        referenceCount: 0,
+        snapshotComplete: true,
+      });
+
+      expect(canDelete).toBe(true);
+    });
+
+    it('forbids deletion when snapshot is incomplete', () => {
+      const prev = {
+        bookId: 'b1',
+        bookHash: 'hash-v1',
+        localPath: 'hash-v1/book.epub',
+        managedByProvider: true,
+      };
+      const imported = makeBook('hash-v2', 'book-v2.epub');
+
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook: imported,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 0,
+          snapshotComplete: false,
+        }),
+      ).toBe(false);
+
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook: imported,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 0,
+          snapshotStatus: 'partial',
+        }),
+      ).toBe(false);
+    });
+
+    it('forbids deletion when cleanupPolicy is keep_local', () => {
+      const prev = {
+        bookId: 'b1',
+        bookHash: 'hash-v1',
+        localPath: 'hash-v1/book.epub',
+        managedByProvider: true,
+      };
+      const imported = makeBook('hash-v2', 'book-v2.epub');
+
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook: imported,
+          cleanupPolicy: 'keep_local',
+          referenceCount: 0,
+          snapshotComplete: true,
+        }),
+      ).toBe(false);
+    });
+
+    it('forbids deletion when not managed by provider', () => {
+      const prev = {
+        bookId: 'b1',
+        bookHash: 'hash-v1',
+        localPath: 'hash-v1/book.epub',
+        managedByProvider: false,
+      };
+      const imported = makeBook('hash-v2', 'book-v2.epub');
+
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook: imported,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 0,
+          snapshotComplete: true,
+        }),
+      ).toBe(false);
+    });
+
+    it('forbids deletion when other shelves still reference previous localPath', () => {
+      const prev = {
+        bookId: 'b1',
+        bookHash: 'hash-v1',
+        localPath: 'hash-v1/book.epub',
+        managedByProvider: true,
+      };
+      const imported = makeBook('hash-v2', 'book-v2.epub');
+
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook: imported,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 1, // another shelf references it!
+          snapshotComplete: true,
+        }),
+      ).toBe(false);
+    });
+
+    it('forbids deletion when imported book has same hash or localPath', () => {
+      const prev = {
+        bookId: 'b1',
+        bookHash: 'hash-same',
+        localPath: 'hash-same/book.epub',
+        managedByProvider: true,
+      };
+      const imported = makeBook('hash-same', 'book.epub');
+
+      expect(
+        canDeleteObsoleteRevision({
+          previousEntry: prev,
+          importedBook: imported,
+          cleanupPolicy: 'remove_managed_copy',
+          referenceCount: 0,
+          snapshotComplete: true,
+        }),
+      ).toBe(false);
     });
   });
 

@@ -10,11 +10,12 @@ import {
 } from './download';
 import { addToPresenceIndex, buildLibraryPresenceIndex, removeFromPresenceIndex } from './presence';
 import {
+  getRemoteBookHash,
   planShelfSync,
   reconcileShelfSnapshot,
   summarizeShelfReconciliation,
 } from './reconciliation';
-import { planShelfDeletions } from './deletion';
+import { canDeleteObsoleteRevision, planShelfDeletions } from './deletion';
 import { collectShelfSnapshot } from './snapshot';
 import type {
   IShelfSyncStore,
@@ -138,12 +139,13 @@ export class ShelfSyncEngine<
     // 5. Record reused entries
     await this.store.markShelfEntries(
       plan.reuse.map((bookId) => {
-        const remoteBook = remote.find((book) => book.bookId === bookId)!;
-        const tracked = existing.find((entry) => entry.bookId === String(bookId));
+        const remoteBook = remote.find((book) => String(book.bookId) === String(bookId))!;
+        const tracked = existing.find((entry) => String(entry.bookId) === String(bookId));
+        const remoteHash = getRemoteBookHash(remoteBook);
 
-        const localBook = remoteBook.bookHash
-          ? (options.presenceIndex?.booksByHash.get(remoteBook.bookHash) ??
-            presentBooks.find((book) => book.hash === remoteBook.bookHash))
+        const localBook = remoteHash
+          ? (options.presenceIndex?.booksByHash.get(remoteHash) ??
+            presentBooks.find((book) => book.hash === remoteHash))
           : tracked?.localPath
             ? (options.presenceIndex?.booksByPath.get(tracked.localPath) ??
               presentBooks.find((book) => getLocalBookFilename(book) === tracked.localPath))
@@ -155,11 +157,11 @@ export class ShelfSyncEngine<
         if (localBook) {
           resolvedLocalPath = getLocalBookFilename(localBook);
           const isSamePath = tracked?.localPath === resolvedLocalPath;
-          const isSameHash = (tracked?.bookHash ?? null) === (remoteBook.bookHash ?? null);
+          const isSameHash = (tracked?.bookHash ?? null) === (remoteHash ?? null);
           managedByProvider = !!tracked?.managedByProvider && isSamePath && isSameHash;
         } else if (tracked?.localPath && localPaths.has(tracked.localPath)) {
           resolvedLocalPath = tracked.localPath;
-          const isSameHash = (tracked?.bookHash ?? null) === (remoteBook.bookHash ?? null);
+          const isSameHash = (tracked?.bookHash ?? null) === (remoteHash ?? null);
           managedByProvider = !!tracked.managedByProvider && isSameHash;
         }
 
@@ -174,7 +176,7 @@ export class ShelfSyncEngine<
             remoteBook.contentVersion != null
               ? String(remoteBook.contentVersion)
               : (tracked?.contentVersion ?? null),
-          bookHash: remoteBook.bookHash,
+          bookHash: remoteHash ?? tracked?.bookHash ?? null,
           localPath: resolvedLocalPath,
           managedByProvider,
         };
@@ -186,9 +188,15 @@ export class ShelfSyncEngine<
       ...reconciliation.added,
       ...reconciliation.changed.map((item) => item.next),
     ];
+    const changedByBookId = new Map(
+      reconciliation.changed.map((item) => [String(item.next.bookId), item.previous]),
+    );
     const downloadPolicy = options.downloadPolicy ?? 'always';
     const downloadsBlocked =
       downloadPolicy === 'off' || (downloadPolicy === 'wifi_only' && isMeteredConnection());
+
+    let removed = 0;
+    const cleanupPolicy = options.cleanupPolicy ?? 'keep_local';
 
     if (!downloadsBlocked) {
       // Deliberately serial: one import at a time bounds memory and prevents
@@ -197,7 +205,8 @@ export class ShelfSyncEngine<
         if (options.transfer?.signal?.aborted) {
           throw new Error('Shelf sync cancelled');
         }
-        await this.downloadAndImport({
+        const previous = changedByBookId.get(String(remoteBook.bookId));
+        const imported = await this.downloadAndImport({
           shelfType,
           shelfId,
           remoteBook,
@@ -206,6 +215,47 @@ export class ShelfSyncEngine<
           transfer: options.transfer,
           presenceIndex: options.presenceIndex,
         });
+
+        // Safe replacement order:
+        // detect → download → validate → successful import → update tracking (in downloadAndImport) → only then consider obsolete managed cleanup.
+        // Never delete old valid copy before replacement succeeds.
+        if (previous) {
+          const counts = previous.localPath
+            ? await this.store.getAllShelfReferenceCounts([previous.localPath])
+            : new Map<string, number>();
+          const refCount = previous.localPath ? (counts.get(previous.localPath) ?? 0) : 0;
+
+          if (
+            canDeleteObsoleteRevision({
+              previousEntry: previous,
+              importedBook: imported,
+              cleanupPolicy,
+              referenceCount: refCount,
+              snapshotStatus: snapshot.status,
+              snapshotComplete: isComplete,
+            })
+          ) {
+            const oldBook = localLibrary.find(
+              (b) =>
+                getLocalBookFilename(b) === previous.localPath ||
+                (previous.bookHash && b.hash === previous.bookHash),
+            );
+            if (oldBook && oldBook.hash !== imported.hash) {
+              const bookIndex = localLibrary.findIndex((b) => b.hash === oldBook.hash);
+              await this.appService.deleteBook(oldBook, 'purge');
+              if (bookIndex >= 0) localLibrary.splice(bookIndex, 1);
+              if (options.presenceIndex) removeFromPresenceIndex(options.presenceIndex, oldBook);
+              await options.onRemoved?.(oldBook, [...localLibrary]);
+              removed += 1;
+            } else if (
+              previous.localPath &&
+              (await this.appService.exists(previous.localPath, 'Books'))
+            ) {
+              await this.appService.deleteFile(previous.localPath, 'Books');
+              removed += 1;
+            }
+          }
+        }
       }
     } else {
       // Persist remote-only membership so a later policy change can retry it,
@@ -220,7 +270,7 @@ export class ShelfSyncEngine<
           fileId: remoteBook.fileId != null ? String(remoteBook.fileId) : null,
           contentVersion:
             remoteBook.contentVersion != null ? String(remoteBook.contentVersion) : null,
-          bookHash: remoteBook.bookHash,
+          bookHash: getRemoteBookHash(remoteBook),
           localPath: null,
           managedByProvider: false,
         })),
@@ -228,8 +278,6 @@ export class ShelfSyncEngine<
     }
 
     // 7. Plan and execute reference-safe deletions
-    let removed = 0;
-    const cleanupPolicy = options.cleanupPolicy ?? 'keep_local';
     const referenceCounts = new Map<string, number>();
 
     if (cleanupPolicy === 'remove_managed_copy') {
@@ -390,7 +438,7 @@ export class ShelfSyncEngine<
     onImported: (book: Book, library: Book[]) => Promise<void> | void;
     transfer?: ShelfSyncTransfer<TBook>;
     presenceIndex?: LibraryPresenceIndex;
-  }): Promise<void> {
+  }): Promise<Book> {
     transfer?.onStage?.({ stage: 'downloading', book: remoteBook });
 
     const tempFolder = this.adapter.tempFolder ?? this.adapter.provider;
@@ -436,13 +484,13 @@ export class ShelfSyncEngine<
               fileId: remoteBook.fileId != null ? String(remoteBook.fileId) : null,
               contentVersion:
                 remoteBook.contentVersion != null ? String(remoteBook.contentVersion) : null,
-              bookHash: remoteBook.bookHash ?? imported.hash,
+              bookHash: getRemoteBookHash(remoteBook) ?? imported.hash,
               localPath: getLocalBookFilename(imported),
               managedByProvider: true,
             },
           ]);
           if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
-          return;
+          return imported;
         }
       } finally {
         await this.appService.deleteFile(tempPath, 'Temp').catch(() => {});
@@ -456,17 +504,17 @@ export class ShelfSyncEngine<
       transfer?.signal,
     );
 
+    if (this.adapter.validateBookData) {
+      this.adapter.validateBookData(remoteBook.filename, downloaded, remoteBook.size);
+    } else {
+      validateShelfDownload(remoteBook.filename, downloaded, remoteBook.size);
+    }
+
     const data = this.adapter.repairBookData
       ? await this.adapter.repairBookData(downloaded, remoteBook)
       : remoteBook.filename.toLowerCase().endsWith('.epub')
         ? await repairMalformedEpubOpfNamespace(downloaded)
         : downloaded;
-
-    if (this.adapter.validateBookData) {
-      this.adapter.validateBookData(remoteBook.filename, data, remoteBook.size);
-    } else {
-      validateShelfDownload(remoteBook.filename, data, remoteBook.size);
-    }
 
     transfer?.onStage?.({ stage: 'importing', book: remoteBook });
     const useNativeImport = data.byteLength >= NATIVE_IMPORT_THRESHOLD_BYTES;
@@ -508,11 +556,12 @@ export class ShelfSyncEngine<
           fileId: remoteBook.fileId != null ? String(remoteBook.fileId) : null,
           contentVersion:
             remoteBook.contentVersion != null ? String(remoteBook.contentVersion) : null,
-          bookHash: remoteBook.bookHash ?? imported.hash,
+          bookHash: getRemoteBookHash(remoteBook) ?? imported.hash,
           localPath: getLocalBookFilename(imported),
           managedByProvider: true,
         },
       ]);
+      return imported;
     } finally {
       if (useNativeImport) {
         await this.appService.deleteFile(tempPath, 'Temp').catch(() => {});
