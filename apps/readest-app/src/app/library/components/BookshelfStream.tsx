@@ -1,8 +1,22 @@
 import clsx from 'clsx';
 import { LibraryPageDurationsContext } from '@/hooks/useMedianPageDurationSecs';
 import { HideBookCoversContext } from '@/components/BookCover';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Virtuoso, type Components, type ItemProps } from 'react-virtuoso';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  Virtuoso,
+  type Components,
+  type ItemProps,
+  type StateSnapshot,
+  type VirtuosoHandle,
+} from 'react-virtuoso';
 import { MdChevronLeft, MdChevronRight } from 'react-icons/md';
 import type { Book, BooksGroup } from '@/types/book';
 import type { BookshelfDefinition } from '@/types/bookshelf';
@@ -31,8 +45,19 @@ interface StreamProps {
   importAction?: ReactNode;
   importTile?: ReactNode;
   pageNavigation?: boolean;
+  /** Drop the e-ink Previous/Next buttons; keys still page. */
+  hidePageButtons?: boolean;
   navigationBottomInset?: number;
+  /** Identifies the shelf view; its scroll state survives remounts (open a book, come back). */
+  scrollKey?: string;
 }
+// Module-scoped so the position outlives the library page while the reader is open.
+// Virtuoso's measured sizes are per row index, so a snapshot is kept with the
+// rows that produced it and only restored onto the same rows.
+const savedScrollStates = new Map<string, { rowKeys: string; state: StateSnapshot }>();
+// Seeds the first render after a remount, so the grid starts with the column
+// count (and rows) it had when the snapshot was taken.
+let lastStreamWidth = 0;
 type StreamRow = {
   key: string;
   section: ShelfSection;
@@ -90,11 +115,13 @@ export const BookshelfCarousel = ({
   columns,
   width,
   renderItem,
+  hidePageButtons = false,
 }: {
   section: ShelfSection;
   columns: number;
   width: number;
   renderItem: StreamProps['renderItem'];
+  hidePageButtons?: boolean;
 }) => {
   const _ = useTranslation();
   const scroller = useRef<HTMLDivElement>(null);
@@ -200,7 +227,7 @@ export const BookshelfCarousel = ({
             </button>
           );
         })}
-        {section.items.length > columns && (
+        {!hidePageButtons && section.items.length > columns && (
           <div className='not-eink:hidden flex justify-end gap-2 pb-1 sm:px-4 sm:pb-3'>
             {[-1, 1].map((direction) => (
               <button
@@ -240,7 +267,10 @@ const StreamItem = ({
   </div>
 );
 const StreamFooter = ({ context }: { context?: StreamContext }) => (
-  <div style={{ paddingBottom: context?.height || 34 }}>{context?.action}</div>
+  <div style={{ paddingBottom: context?.height || 34 }}>
+    {/* Rides the pull-to-refresh rubber band with the shelf rows. */}
+    {context?.action && <div className='transform-wrapper'>{context.action}</div>}
+  </div>
 );
 const COMPONENTS: Components<StreamRow, StreamContext> = {
   Item: StreamItem,
@@ -258,11 +288,14 @@ export default function BookshelfStream({
   pageDurations,
   scale = 1,
   pageNavigation = false,
+  hidePageButtons = false,
   navigationBottomInset = 0,
+  scrollKey,
 }: StreamProps) {
   const _ = useTranslation();
   const root = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const virtuoso = useRef<VirtuosoHandle>(null);
+  const [width, setWidth] = useState(lastStreamWidth);
   const [height, setHeight] = useState(0);
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
   const handleScrollerRef = useCallback(
@@ -279,6 +312,7 @@ export default function BookshelfStream({
     const element = root.current;
     if (!element) return;
     const measure = () => {
+      lastStreamWidth = element.clientWidth;
       setWidth(element.clientWidth);
       setHeight(element.clientHeight);
     };
@@ -293,9 +327,34 @@ export default function BookshelfStream({
     () => buildBookshelfRows(sections, columns, includeImport),
     [sections, columns, includeImport],
   );
+  const rowKeys = useMemo(() => rows.map((row) => row.key).join('\n'), [rows]);
+  const [restoreState] = useState(() => {
+    const saved = scrollKey === undefined ? undefined : savedScrollStates.get(scrollKey);
+    return saved?.rowKeys === rowKeys ? saved.state : undefined;
+  });
+  const latest = useRef({ scrollKey, rowKeys });
+  useLayoutEffect(() => {
+    latest.current = { scrollKey, rowKeys };
+  });
+  // Save on unmount (opening a book leaves the library), even mid-scroll. A
+  // layout cleanup runs before Virtuoso's own handle is torn down.
+  useLayoutEffect(
+    () => () => {
+      const { scrollKey, rowKeys } = latest.current;
+      if (scrollKey === undefined) return;
+      virtuoso.current?.getState((state) => savedScrollStates.set(scrollKey, { rowKeys, state }));
+    },
+    [],
+  );
+  // Virtuoso mounts its footer before it has measured the viewport and placed
+  // any row, which flashed the import action at the top of the page on every
+  // library load. Hold it back until these rows are on screen (or there are
+  // none to wait for); a shelf switch swaps the rows without a remount.
+  const [renderedRows, setRenderedRows] = useState<StreamRow[] | null>(null);
+  const showAction = renderedRows === rows || rows.length === 0;
   const context = useMemo(
-    () => ({ height: footerHeight, action: importAction, scale }),
-    [footerHeight, importAction, scale],
+    () => ({ height: footerHeight, action: showAction ? importAction : undefined, scale }),
+    [footerHeight, importAction, showAction, scale],
   );
   return (
     <LibraryPageDurationsContext.Provider value={pageDurations || {}}>
@@ -307,6 +366,8 @@ export default function BookshelfStream({
         {/* Hide native scrollbars before the deferred overlay initializes. */}
         <div className='min-h-0 flex-1' data-overlayscrollbars-initialize=''>
           <Virtuoso
+            ref={virtuoso}
+            restoreStateFrom={restoreState}
             style={scale !== 1 ? { overflowX: 'hidden' } : undefined}
             data={rows}
             overscan={pageNavigation ? Math.max(400, height) : 400}
@@ -314,6 +375,9 @@ export default function BookshelfStream({
             context={context}
             components={COMPONENTS}
             scrollerRef={handleScrollerRef}
+            itemsRendered={(items) => {
+              if (items.length > 0) setRenderedRows(rows);
+            }}
             atTopStateChange={setStart}
             atBottomStateChange={setEnd}
             atTopThreshold={1}
@@ -354,6 +418,7 @@ export default function BookshelfStream({
                       columns={columns}
                       width={width / scale}
                       renderItem={renderItem}
+                      hidePageButtons={hidePageButtons}
                     />
                   </div>
                 );
@@ -386,7 +451,7 @@ export default function BookshelfStream({
             }}
           />
         </div>
-        {pageNavigation && (
+        {pageNavigation && !hidePageButtons && (
           <nav
             aria-label={_('Pagination')}
             className='not-eink:hidden bg-base-100 border-base-content shrink-0 border-t px-4 sm:px-6'

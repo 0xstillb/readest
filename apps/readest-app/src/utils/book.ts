@@ -299,6 +299,64 @@ export const pickFresherGroup = <T extends BookGroupFields>(
   };
 };
 
+/**
+ * Move a book into a group, or out of one when both are undefined. Only the
+ * group's own clock is stamped: `updatedAt` is the Date Read sort key and
+ * regrouping is not reading (#6414). A removal MUST be stamped too — an
+ * unstamped ungrouped row loses to a grouped peer by design (#5911).
+ */
+export const setBookGroup = (
+  book: Book,
+  groupId: string | undefined,
+  groupName: string | undefined,
+  now = Date.now(),
+) => {
+  book.groupId = groupId;
+  book.groupName = groupName;
+  book.groupUpdatedAt = now;
+};
+
+/**
+ * Stamp a delete so every device hides the book, erasing its reading progress
+ * when the caller asks for a purge.
+ *
+ * `updatedAt` is bumped on purpose here, unlike the group/metadata/cover clocks
+ * (#6414): the cloud merge is whole-row last-write-wins, and a delete used to
+ * leave `updatedAt` alone — so the row's own older page-turn progress outranked
+ * the tombstone, the next pull cleared `deletedAt`, and the book came back with
+ * its progress, as if the delete (and the purge) had done nothing (#6663). The
+ * demo-shelf comment in useBooksSync names the same mechanism.
+ */
+export const markBookDeleted = (book: Book, deletedAt: number, purge: boolean) => {
+  book.deletedAt = deletedAt;
+  // A library tombstone alone is not permission to destroy bytes on a
+  // third-party file mirror. Bind the explicit cloud-and-device intent to this
+  // exact tombstone so the file-sync engine can distinguish it from a
+  // local-only or indirectly-created delete (#5695, the third recurrence of
+  // #5084).
+  book.fileSyncDeletionRequestedAt = deletedAt;
+  book.downloadedAt = null;
+  book.coverDownloadedAt = null;
+  // Strictly above any future-dated stamp a fast-clocked peer left on the row:
+  // lowering it would hand the merge back to the cloud row (ties go to it).
+  book.updatedAt = Math.max(deletedAt, (book.updatedAt ?? 0) + 1);
+  // null (not undefined, which JSON drops) clears it in the cloud too (#6532).
+  if (purge) book.progress = null;
+};
+
+/**
+ * The latest local edit on any of a book row's clocks. Group, metadata and
+ * cover edits stamp only their own clock and leave `updatedAt` alone (#6414),
+ * so the sync push has to look at all of them to know the row changed.
+ */
+export const getBookChangedAt = (book: Book): number =>
+  Math.max(
+    book.updatedAt ?? 0,
+    book.groupUpdatedAt ?? 0,
+    book.metadataUpdatedAt ?? 0,
+    book.coverUpdatedAt ?? 0,
+  );
+
 /** True when `resolved` names a different group than `current` does. */
 export const bookGroupDiffers = (current: BookGroupFields, resolved: BookGroupFields): boolean =>
   (current.groupId ?? undefined) !== (resolved.groupId ?? undefined) ||
@@ -313,7 +371,6 @@ export const getBookWithUpdatedMetadata = (
   metadata: BookMetadata,
   tags?: string[],
 ): Book => {
-  const now = Date.now();
   const updatedBook: Book = {
     ...book,
     metadata,
@@ -321,10 +378,10 @@ export const getBookWithUpdatedMetadata = (
     title: formatTitle(metadata.title),
     author: formatAuthors(metadata.author),
     primaryLanguage: getPrimaryLanguage(metadata.language),
-    updatedAt: now,
     // The metadata group merges on its own clock so a page turn elsewhere
-    // (which dominates updatedAt) cannot clobber this edit (issue #5438).
-    metadataUpdatedAt: now,
+    // (which dominates updatedAt) cannot clobber this edit (issue #5438), and
+    // updatedAt stays put so the edit doesn't reorder Date Read (#6414).
+    metadataUpdatedAt: Date.now(),
   };
   const newCoverImageUrl = metadata.coverImageBlobUrl || metadata.coverImageUrl;
   if (newCoverImageUrl) {
@@ -412,7 +469,7 @@ export const getCurrentPage = (book: Book, progress: BookProgress) => {
  * manually-marked-unread books. A book actively being read has `readingStatus`
  * either `undefined` (cleared from 'unread' on first open) or `'reading'`, both
  * of which pass. Shared by the library's recently-read shelf and the
- * home-screen reading widget so the two surfaces stay in sync.
+ * home-screen bookshelf widget so the two surfaces stay in sync.
  */
 export const isCurrentlyReadingBook = (book: Book): boolean =>
   !book.deletedAt &&

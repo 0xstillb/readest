@@ -97,6 +97,48 @@ describe('mixed bookshelf stream in Chromium', () => {
     }
   });
 
+  it('shows the import action after the shelves and moves it with the overscroll', async () => {
+    const { container } = render(
+      <div style={{ width: 900, height: 600 }}>
+        <BookshelfStream
+          sections={[section('books', 'carousel', 3)]}
+          autoColumns={false}
+          fixedColumns={3}
+          importAction={<button type='button'>Import Books</button>}
+          renderItem={renderItem}
+        />
+      </div>,
+    );
+    const locator = page.getByRole('button', { name: 'Import Books' });
+    await expect.element(locator).toBeInTheDocument();
+    const button = locator.element();
+    expect(container.querySelector('[data-book]')).not.toBeNull();
+    // The pull-to-refresh rubber band translates every `.transform-wrapper`.
+    expect(button.closest('.transform-wrapper')).not.toBeNull();
+  });
+  it('holds the import action back for new rows and keeps it for recomputed ones', async () => {
+    const stream = (sections: ShelfSection[]) => (
+      <div style={{ width: 900, height: 600 }}>
+        <BookshelfStream
+          sections={sections}
+          autoColumns={false}
+          fixedColumns={3}
+          importAction={<button type='button'>Import Books</button>}
+          renderItem={renderItem}
+        />
+      </div>
+    );
+    const { rerender } = render(stream([section('books', 'carousel', 3)]));
+    const locator = page.getByRole('button', { name: 'Import Books' });
+    await expect.element(locator).toBeInTheDocument();
+    // Same rows, new identity (a store update recomputing the shelves).
+    rerender(stream([section('books', 'carousel', 3)]));
+    await expect.element(locator).toBeInTheDocument();
+    // Another shelf: the action waits for its rows, then returns.
+    rerender(stream([section('other', 'grid', 6)]));
+    await expect.element(locator).toBeInTheDocument();
+    expect(document.querySelector('[data-section="other"]')).not.toBeNull();
+  });
   it('shows the library page controls only in e-ink mode', () => {
     const { queryByRole } = render(
       <div style={{ width: 900, height: 600 }}>
@@ -115,6 +157,27 @@ describe('mixed bookshelf stream in Chromium', () => {
     document.documentElement.setAttribute('data-eink', 'false');
     expect(queryByRole('button', { name: 'Next page' })).toBeNull();
     expect(queryByRole('button', { name: 'Previous page' })).toBeNull();
+  });
+  it('hides the e-ink page buttons on request but keeps key paging', async () => {
+    document.documentElement.setAttribute('data-eink', 'true');
+    const { container, queryByRole } = render(
+      <div style={{ width: 900, height: 600 }}>
+        <BookshelfStream
+          pageNavigation
+          hidePageButtons
+          sections={[section('carousel', 'carousel', 12), section('books', 'grid', 60)]}
+          autoColumns={false}
+          fixedColumns={3}
+          renderItem={renderItem}
+        />
+      </div>,
+    );
+    const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller]')!;
+    await waitFor(() => expect(container.querySelector('[data-book]')).toBeTruthy());
+    expect(queryByRole('button', { name: 'Next page' })).toBeNull();
+    expect(queryByRole('button', { name: 'Next books' })).toBeNull();
+    fireEvent.keyDown(window, { key: 'PageDown', code: 'PageDown' });
+    await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
   });
   it('keeps a heading with its first grid row across mixed shelves and reaches the last page', async () => {
     document.documentElement.setAttribute('data-eink', 'true');
@@ -497,6 +560,56 @@ describe('mixed bookshelf stream in Chromium', () => {
       });
     }
   }
+  it('returns to the same place after the library remounts (opening a book and coming back)', async () => {
+    const shelves = (count: number) => [
+      section('reading', 'carousel', 12),
+      section('books', 'list', count),
+      section('more', 'grid', 60),
+    ];
+    const stream = (count = 300) => (
+      <div style={{ width: 900, height: 600 }}>
+        <BookshelfStream
+          sections={shelves(count)}
+          autoColumns
+          fixedColumns={3}
+          renderItem={renderItem}
+          scrollKey='group=a'
+        />
+      </div>
+    );
+    const scrollerOf = (root: HTMLElement) =>
+      root.querySelector<HTMLElement>('[data-virtuoso-scroller]')!;
+    const firstVisible = (root: HTMLElement) => {
+      const top = scrollerOf(root).getBoundingClientRect().top;
+      return Array.from(root.querySelectorAll<HTMLElement>('[data-book]')).find(
+        (el) => el.getBoundingClientRect().bottom > top,
+      );
+    };
+    const visibleId = (root: HTMLElement) => {
+      const el = firstVisible(root);
+      return el && `${el.dataset['section']}:${el.dataset['book']}`;
+    };
+    const first = render(stream());
+    const scroller = scrollerOf(first.container);
+    await waitFor(() => expect(scroller.scrollHeight).toBeGreaterThan(8000));
+    scroller.scrollTop = 6000;
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(visibleId(first.container)).toMatch(/^books:\d{2,}$/));
+    // Unmount right away, as when a book is tapped before the scroll settles.
+    const scrollTop = scroller.scrollTop;
+    const book = visibleId(first.container);
+    first.unmount();
+
+    const second = render(stream());
+    await waitFor(() => expect(scrollerOf(second.container).scrollTop).toBe(scrollTop));
+    expect(visibleId(second.container)).toBe(book);
+    second.unmount();
+
+    // Different rows: the saved row sizes no longer apply, so start at the top.
+    const changed = render(stream(250));
+    await waitFor(() => expect(visibleId(changed.container)).toBe('reading:0'));
+    expect(scrollerOf(changed.container).scrollTop).toBe(0);
+  });
   it('keeps very large carousels horizontally virtualized and scrollable', async () => {
     document.documentElement.setAttribute('data-eink', 'true');
     const { container, getByRole } = render(
