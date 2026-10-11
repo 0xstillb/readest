@@ -58,6 +58,9 @@ swift-rs = { path = "packages/swift-rs" }
 # Windows during Android cross-compilation and incorrectly adds -ladvapi32.
 # Keep the forked target-aware build script for Android.
 turso_ext = { path = "packages/turso_ext" }
+# The Linux CEF runtime crate exists only on feat/cef; .cargo/cef.toml takes it
+# from there. Other builds only need it to resolve. See the stub's manifest.
+tauri-runtime-cef = { path = "packages/tauri-runtime-cef-stub" }
 
 [profile.release]
 # The Android library is 95% of the APK, and one codegen unit is the one knob

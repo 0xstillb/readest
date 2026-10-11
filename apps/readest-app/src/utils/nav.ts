@@ -1,30 +1,34 @@
 import { redirect, useRouter } from 'next/navigation';
 import { getCurrentWindow, ScrollBarStyle } from '@tauri-apps/api/window';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { version as osVersion } from '@tauri-apps/plugin-os';
+import { getAllWebviewWindows, WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isPWA, isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import { BOOK_IDS_SEPARATOR } from '@/services/constants';
 import { AppService } from '@/types/system';
+import { windowNeedsClientOutline } from '@/utils/window';
 
-// Windows 10 renders the native shadow of an undecorated window as a 1px
-// border on the left, right and bottom edges but not the top, which reads as
-// a broken frame (tauri-apps/tauri#13134). Windows 11 draws a uniform border,
-// so only there is the shadow worth keeping. Keep in sync with
-// `undecorated_shadow_is_symmetric` in src-tauri/src/lib.rs.
-const WINDOWS_11_BUILD = 22000;
+// Labels handed out whose windows are not created yet, so two overlapping
+// launches that read the same window list do not pick the same label.
+const pendingLabels = new Set<string>();
 
-const undecoratedShadowIsSymmetric = (appService: AppService) => {
-  if (!appService.isWindowsApp) return true;
-  const build = parseInt(osVersion().split('.')[2] ?? '', 10);
-  return Number.isNaN(build) ? true : build >= WINDOWS_11_BUILD;
+// Take the first label no open or pending window holds. A counter of open
+// windows would hand out the label of a window that is still open once an
+// earlier one closes, and Tauri refuses to create a second window with that
+// label (#6363).
+const reserveWindowLabel = async (prefix: string) => {
+  const labels = new Set((await getAllWebviewWindows()).map((w) => w.label));
+  let index = 0;
+  while (labels.has(`${prefix}-${index}`) || pendingLabels.has(`${prefix}-${index}`)) index += 1;
+  const label = `${prefix}-${index}`;
+  pendingLabels.add(label);
+  return label;
 };
 
-let readerWindowsCount = 0;
-const createReaderWindow = (appService: AppService, url: string) => {
+const createReaderWindow = async (appService: AppService, url: string) => {
   const currentWindow = getCurrentWindow();
   const label = currentWindow.label;
   const newLabelPrefix = label === 'main' ? 'reader' : label;
-  const win = new WebviewWindow(`${newLabelPrefix}-${readerWindowsCount}`, {
+  const newLabel = await reserveWindowLabel(newLabelPrefix);
+  const win = new WebviewWindow(newLabel, {
     url,
     width: 800,
     height: 600,
@@ -35,7 +39,7 @@ const createReaderWindow = (appService: AppService, url: string) => {
     // Linux stays opaque: a transparent WebKitGTK window turns invisible when
     // its web process is busy (#3682). macOS uses native decorations instead.
     transparent: !appService.isMacOSApp && !appService.isLinuxApp,
-    shadow: appService.isMacOSApp ? undefined : undecoratedShadowIsSymmetric(appService),
+    shadow: appService.isMacOSApp ? undefined : !windowNeedsClientOutline(appService),
     titleBarStyle: appService.isMacOSApp ? 'overlay' : undefined,
     // Enum ScrollBarStyle is exported as type by tauri, so it cannot be used directly.
     scrollBarStyle: (appService.osPlatform === 'windows'
@@ -43,14 +47,11 @@ const createReaderWindow = (appService: AppService, url: string) => {
       : 'default') as unknown as ScrollBarStyle,
   });
   win.once('tauri://created', () => {
-    console.log('new window created');
-    readerWindowsCount += 1;
+    pendingLabels.delete(newLabel);
   });
   win.once('tauri://error', (e) => {
+    pendingLabels.delete(newLabel);
     console.error('error creating window', e);
-  });
-  win.once('tauri://destroyed', () => {
-    readerWindowsCount -= 1;
   });
 };
 
@@ -63,14 +64,14 @@ export const showReaderWindow = (
   const params = new URLSearchParams(queryParams || '');
   params.set('ids', ids);
   const url = `/reader?${params.toString()}`;
-  createReaderWindow(appService, url);
+  return createReaderWindow(appService, url);
 };
 
 export const showLibraryWindow = (appService: AppService, filenames: string[]) => {
   const params = new URLSearchParams();
   filenames.forEach((filename) => params.append('file', filename));
   const url = `/library?${params.toString()}`;
-  createReaderWindow(appService, url);
+  return createReaderWindow(appService, url);
 };
 
 // Bring the main library window back when a reader window asks to "go to library".
@@ -97,7 +98,7 @@ export const ensureMainLibraryWindow = async (appService: AppService) => {
     // Linux stays opaque: a transparent WebKitGTK window turns invisible when
     // its web process is busy (#3682). macOS uses native decorations instead.
     transparent: !appService.isMacOSApp && !appService.isLinuxApp,
-    shadow: appService.isMacOSApp ? undefined : undecoratedShadowIsSymmetric(appService),
+    shadow: appService.isMacOSApp ? undefined : !windowNeedsClientOutline(appService),
     titleBarStyle: appService.isMacOSApp ? 'overlay' : undefined,
     scrollBarStyle: (appService.osPlatform === 'windows'
       ? 'fluentOverlay'
@@ -131,8 +132,31 @@ export const navigateToLogin = (router: ReturnType<typeof useRouter>) => {
   router.push(`/auth?redirect=${encodeURIComponent(currentPath)}`);
 };
 
+export const navigateToHardcoverConnect = (router: ReturnType<typeof useRouter>) => {
+  const redirect = encodeURIComponent(window.location.pathname + window.location.search);
+  router.push(`/hardcover/connect?redirect=${redirect}`);
+};
+
+// Remember the opener so leaving the profile returns to it, e.g. the book
+// being read when Plans was opened from the reader settings (#6607). The
+// direction picks the slide of the route view transition (useAppRouter).
 export const navigateToProfile = (router: ReturnType<typeof useRouter>) => {
-  router.push('/user');
+  const { pathname, search } = window.location;
+  document.documentElement.setAttribute('data-nav-direction', 'forward');
+  router.push(`/user?redirect=${encodeURIComponent(pathname + search)}`);
+};
+
+export const navigateBackFromProfile = (
+  router: ReturnType<typeof useRouter>,
+  redirect: string | null | undefined,
+) => {
+  document.documentElement.setAttribute('data-nav-direction', 'back');
+  // Browsers read a backslash as '/', so a redirect like '/\host' leaves the app.
+  if (redirect?.startsWith('/') && !redirect.startsWith('//') && !redirect.includes('\\')) {
+    router.replace(redirect);
+  } else {
+    navigateToLibrary(router);
+  }
 };
 
 export const navigateToLibrary = (

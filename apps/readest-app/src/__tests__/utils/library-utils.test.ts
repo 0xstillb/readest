@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseAuthors,
   createBookGroups,
   createWithinGroupSorter,
   createGroupSorter,
   getGroupSortValue,
+  compareSortValues,
   createBookSorter,
   ensureLibrarySortByType,
   ensureLibrarySecondarySortByType,
@@ -15,6 +16,7 @@ import {
   getGroupDisplayName,
   expandBookshelfSelection,
   selectDownloadableBooks,
+  selectAbsOfflineBooks,
   buildGroupNameUpdatedAt,
   resolveCurrentShelfBooks,
   withTimeRemainingLast,
@@ -788,6 +790,15 @@ describe('getGroupSortValue', () => {
   });
 });
 
+describe('compareSortValues', () => {
+  it('preserves locale defaults when sorting by keys other than title', () => {
+    for (const sortBy of [undefined, LibrarySortByType.Author, LibrarySortByType.Series]) {
+      expect(compareSortValues('Volume 3', 'Volume 12', 'en', sortBy)).toBeGreaterThan(0);
+      expect(compareSortValues('Volume 3', 'Volume 12', 'en-u-kn-true', sortBy)).toBeLessThan(0);
+    }
+  });
+});
+
 describe('createGroupSorter', () => {
   const createMockGroup = (overrides: Partial<BooksGroup> = {}): BooksGroup => ({
     id: 'test-group',
@@ -941,6 +952,66 @@ describe('createGroupSorter', () => {
 });
 
 describe('createBookSorter', () => {
+  it.each([true, false])('sorts numbered titles naturally (ascending: %s)', (ascending) => {
+    const books = [22, 1, 12, 3].map((index) => createMockBook({ title: `Volume ${index}` }));
+    const expected = ['Volume 1', 'Volume 3', 'Volume 12', 'Volume 22'];
+    const sorter = createBookSorter(LibrarySortByType.Title, 'en', 'none', ascending);
+
+    expect(books.sort(sorter).map((book) => book.title)).toEqual(
+      ascending ? expected : expected.reverse(),
+    );
+  });
+
+  it.each([
+    true,
+    false,
+  ])('sorts a secondary title naturally in its own direction (%s)', (ascending) => {
+    const books = [12, 3, 22, 1].map((index) => createMockBook({ title: `Volume ${index}` }));
+    const expected = ['Volume 1', 'Volume 3', 'Volume 12', 'Volume 22'];
+    const sorter = createBookSorter(
+      LibrarySortByType.Author,
+      'en',
+      LibrarySortByType.Title,
+      !ascending,
+      ascending,
+    );
+
+    expect(books.sort(sorter).map((book) => book.title)).toEqual(
+      ascending ? expected : expected.reverse(),
+    );
+  });
+
+  it('sorts titles with a cached collator rather than per-comparison localeCompare', () => {
+    // localeCompare with an options object builds a fresh collator on every call,
+    // which made large-library title sorts ~20x slower in V8.
+    const localeCompare = vi.spyOn(String.prototype, 'localeCompare');
+    const books = [22, 1, 12, 3].map((index) => createMockBook({ title: `Volume ${index}` }));
+    const groups = [12, 3].map((index) => ({
+      id: `${index}`,
+      name: `Volume ${index}`,
+      displayName: `Volume ${index}`,
+      books: [books[0]!],
+      updatedAt: 0,
+    }));
+
+    books.sort(createBookSorter(LibrarySortByType.Title, 'en'));
+    groups.sort(createGroupSorter(LibrarySortByType.Title, 'en'));
+
+    expect(localeCompare).not.toHaveBeenCalled();
+    expect(groups.map((group) => group.name)).toEqual(['Volume 3', 'Volume 12']);
+    localeCompare.mockRestore();
+  });
+
+  it('retains locale-specific alphabetic order alongside numeric title sorting', () => {
+    const books = ['Öga 1', 'Äventyr 1', 'År 12', 'År 3', 'Zebra 1'].map((title) =>
+      createMockBook({ title }),
+    );
+
+    expect(
+      books.sort(createBookSorter(LibrarySortByType.Title, 'sv')).map((book) => book.title),
+    ).toEqual(['Zebra 1', 'År 3', 'År 12', 'Äventyr 1', 'Öga 1']);
+  });
+
   it('should sort by title alphabetically', () => {
     const books = [
       createMockBook({ title: 'Zebra' }),
@@ -1490,6 +1561,36 @@ describe('selectDownloadableBooks', () => {
 
   it('returns an empty array when nothing is selected', () => {
     expect(selectDownloadableBooks([], [], [])).toEqual([]);
+  });
+});
+
+describe('selectAbsOfflineBooks', () => {
+  // Bulk Download in select mode keeps Audiobookshelf audiobooks on the
+  // device (#6256), the same action as the per-book "Download for Offline".
+  it('picks ABS audiobooks not yet downloaded for offline', () => {
+    const abs = createMockBook({ hash: 'abs', format: 'ABS' });
+    const offline = createMockBook({ hash: 'offline', format: 'ABS', absDownloadedAt: 100 });
+    const podcast = createMockBook({ hash: 'podcast', format: 'ABS', absMediaType: 'podcast' });
+    const epub = createMockBook({ hash: 'epub', format: 'EPUB', uploadedAt: 100 });
+    const gone = createMockBook({ hash: 'gone', format: 'ABS', deletedAt: 300 });
+    const books = [abs, offline, podcast, epub, gone];
+
+    expect(
+      selectAbsOfflineBooks(
+        books.map((b) => b.hash),
+        books,
+        books,
+      ),
+    ).toEqual([abs]);
+  });
+
+  it('expands a selected group into its ABS audiobooks', () => {
+    const abs = createMockBook({ hash: 'abs', format: 'ABS', groupName: 'Audio' });
+    const items: (Book | BooksGroup)[] = [
+      { id: 'group-audio', name: 'Audio', displayName: 'Audio', books: [abs], updatedAt: 0 },
+    ];
+
+    expect(selectAbsOfflineBooks(['group-audio'], items, [abs])).toEqual([abs]);
   });
 });
 
