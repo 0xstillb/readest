@@ -140,6 +140,8 @@ fn is_under_executable_directory(file_path: &Path, executable_path: &Path) -> bo
         return false;
     };
     resolve_path(file_path).is_ok_and(|resolved| resolved.starts_with(executable_dir))
+}
+
 /// A custom data location keeps every file beneath a folder named `Readest`,
 /// which the `**/Readest/**/*` fs capability already grants to the fs plugin.
 /// Match a whole path component so `Readest-agent.plist` stays foreign.
