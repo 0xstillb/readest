@@ -347,6 +347,33 @@ pub(crate) async fn refresh_eink_screen<R: Runtime>(
     app.native_bridge().refresh_eink_screen()
 }
 
+/// Handwriting: capability probe backing `services/handwriting/capabilities.ts`.
+/// Always resolves (never a hard error) so a non-BOOX or non-mobile platform
+/// just gets `{ isBoox: false, rawDrawing: false }` and falls back to the
+/// generic pointer backend.
+#[command]
+pub(crate) async fn query_pen_capabilities<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<QueryPenCapabilitiesResponse> {
+    Ok(app
+        .native_bridge()
+        .query_pen_capabilities()
+        .unwrap_or_default())
+}
+
+#[command]
+pub(crate) async fn start_raw_drawing<R: Runtime>(
+    app: AppHandle<R>,
+    payload: StartRawDrawingRequest,
+) -> Result<()> {
+    app.native_bridge().start_raw_drawing(payload)
+}
+
+#[command]
+pub(crate) async fn stop_raw_drawing<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+    app.native_bridge().stop_raw_drawing()
+}
+
 #[command]
 pub(crate) async fn is_eink_refresh_supported<R: Runtime>(
     app: AppHandle<R>,
@@ -416,24 +443,42 @@ pub(crate) async fn capture_webview_region<R: Runtime>(
     Ok(tauri::ipc::Response::new(png))
 }
 
+#[command]
+pub(crate) async fn paper_curl<R: Runtime>(
+    app: AppHandle<R>,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        app.native_bridge().paper_curl(payload)
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = (app, payload);
+        Err(crate::Error::UnsupportedPlatformError)
+    }
+}
+
 /// Freeze the on-screen pixels of a webview region behind a native layer
 /// that `capture_webview_region` does not see, for the two-column page curl
-/// (#6106). iOS only so far; other platforms reject and the JS side keeps
-/// a paper back on the leaf.
+/// (#6106) and a backward turn's previous page. Android, iOS and macOS;
+/// other platforms reject.
 #[command]
 pub(crate) async fn cover_webview_region<R: Runtime>(
     app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
     payload: CaptureWebviewRegionRequest,
 ) -> Result<CoverWebviewRegionResponse> {
-    app.native_bridge().cover_webview_region(payload)
+    app.native_bridge().cover_webview_region(&window, payload)
 }
 
 #[command]
 pub(crate) async fn uncover_webview_region<R: Runtime>(
     app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
     payload: UncoverWebviewRegionRequest,
 ) -> Result<()> {
-    app.native_bridge().uncover_webview_region(payload)
+    app.native_bridge().uncover_webview_region(&window, payload)
 }
 
 #[command]

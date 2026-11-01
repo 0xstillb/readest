@@ -57,6 +57,26 @@ describe('mergeNotes (element-set CRDT)', () => {
     expect(out.find((n) => n.id === 'a')!.deletedAt).toBe(9);
   });
 
+  // Latest change wins, the rule native sync's useNotesSync applies (#6762).
+  test('a live note changed after the remote deletion survives it', () => {
+    const remote = note('a', 5, 10);
+    const { deletedAt: _omit, ...live } = note('a', 20);
+    const out = mergeNotes([live], [remote]).find((n) => n.id === 'a')!;
+    expect(out.deletedAt).toBeFalsy();
+    expect(out.updatedAt).toBe(20);
+  });
+
+  test('a remote note changed after the local deletion brings it back', () => {
+    const { deletedAt: _omit, ...live } = note('a', 20);
+    const out = mergeNotes([note('a', 5, 10)], [live]).find((n) => n.id === 'a')!;
+    expect(out.deletedAt).toBeFalsy();
+  });
+
+  test('a deletion made after the other side changed the note sticks', () => {
+    expect(mergeNotes([note('a', 5, 30)], [note('a', 20)])[0]!.deletedAt).toBe(30);
+    expect(mergeNotes([note('a', 20)], [note('a', 5, 30)])[0]!.deletedAt).toBe(30);
+  });
+
   test('idempotent on identical input (id set + field values stable)', () => {
     const a = [note('a', 1), note('b', 2)];
     const once = mergeNotes(a, a);
@@ -118,6 +138,33 @@ describe('mergeBookConfig (LWW scalars + CRDT notes)', () => {
     });
     const { config } = mergeBookConfig(local, r);
     expect(config.location).toBe('keepme');
+  });
+});
+
+describe('mergeBookConfig read-aloud packs', () => {
+  test('unions both sides even when the remote config is older', () => {
+    // Recording audio never bumps updatedAt (it must not move progress), so
+    // the side that wins the scalar race may lack the other side's packs.
+    const local = {
+      updatedAt: 200,
+      booknotes: [],
+      ttsPacks: { webdav: ['1-a.mp3'] },
+    } as BookConfig;
+    const r = envelope({ config: { updatedAt: 100 }, ttsPacks: { webdav: ['2-b.mp3'], s3: [] } });
+    expect(mergeBookConfig(local, r).config.ttsPacks).toEqual({
+      webdav: ['1-a.mp3', '2-b.mp3'],
+      s3: [],
+    });
+  });
+
+  test('a newer remote without packs keeps the local ones', () => {
+    const local = {
+      updatedAt: 100,
+      booknotes: [],
+      ttsPacks: { webdav: ['1-a.mp3'] },
+    } as BookConfig;
+    const r = envelope({ config: { updatedAt: 200 } });
+    expect(mergeBookConfig(local, r).config.ttsPacks).toEqual({ webdav: ['1-a.mp3'] });
   });
 });
 

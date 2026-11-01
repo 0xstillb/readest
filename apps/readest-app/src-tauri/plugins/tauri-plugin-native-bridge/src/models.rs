@@ -249,6 +249,30 @@ pub struct GetSafeAreaInsetsResponse {
     /// iOS: whether the root view controller currently hides the status bar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_bar_hidden: Option<bool>,
+    /// iPhone Duo: hinge status and folding region; absent elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<FoldState>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldState {
+    /// `closed`, `partial`, `open` or `unknown`.
+    pub status: String,
+    /// Whether the folding region currently divides the display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_active: Option<bool>,
+    /// The folding region in window points (CSS px).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<FoldRegion>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FoldRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -560,6 +584,32 @@ pub struct RefreshEinkScreenResponse {
 #[serde(rename_all = "camelCase")]
 pub struct EinkRefreshSupportedResponse {
     pub supported: bool,
+}
+
+/// `isBoox` is a device-identity check (always available); `rawDrawing` is
+/// true only when this build was compiled against the BOOX Pen SDK (the
+/// `booxPen` Gradle flavor) and the SDK reports it can drive raw drawing on
+/// this device/firmware. JS treats `rawDrawing: false` as "use the generic
+/// pointer backend", regardless of why.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryPenCapabilitiesResponse {
+    pub is_boox: bool,
+    pub raw_drawing: bool,
+}
+
+/// Starts (or restarts) BOOX raw drawing over a region of the webview, in CSS
+/// px. Width and color style the SDK's low-latency preview only; the stored
+/// stroke is drawn by the web canvas.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartRawDrawingRequest {
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
+    pub stroke_width: f64,
+    pub stroke_color: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

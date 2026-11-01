@@ -7,6 +7,7 @@ import {
 import {
   formatAuthors,
   formatTitle,
+  getBookPageCount,
   getContributorNames,
   isCurrentlyReadingBook,
 } from '@/utils/book';
@@ -478,6 +479,8 @@ const compareBookByKey = (
       return a.format.localeCompare(b.format, uiLanguage || navigator.language);
     case LibrarySortByType.Progress:
       return getBookReadRatio(a) - getBookReadRatio(b);
+    case LibrarySortByType.Pages:
+      return (getBookPageCount(a) ?? 0) - (getBookPageCount(b) ?? 0);
     case LibrarySortByType.Series: {
       // Group by series name first so books of the same series stay consecutive,
       // then order within a series by index. Comparing index alone would interleave
@@ -901,6 +904,9 @@ export const getBookSortValue = (book: Book, sortBy: LibrarySortByType): number 
     case LibrarySortByType.Progress:
       return getBookReadRatio(book);
 
+    case LibrarySortByType.Pages:
+      return getBookPageCount(book) ?? 0;
+
     case LibrarySortByType.Published: {
       const published = book.metadata?.published;
       if (!published) return 0;
@@ -926,13 +932,16 @@ export const getGroupSortValue = (
   groupBy?: LibraryGroupByType,
 ): number | string => {
   const books = group.books;
+  // A subgroup's name is its full path ("Languages/Chinese"); it sorts among
+  // the parent group's books by its own name, as it is shown (#7062).
+  const name = groupBy === LibraryGroupByType.Group ? group.displayName : group.name;
 
   if (books.length === 0) {
     return sortBy === LibrarySortByType.Title ||
       sortBy === LibrarySortByType.Series ||
       sortBy === LibrarySortByType.Author ||
       sortBy === LibrarySortByType.Format
-      ? group.name
+      ? name
       : 0;
   }
 
@@ -940,7 +949,7 @@ export const getGroupSortValue = (
     case LibrarySortByType.Title:
     case LibrarySortByType.Series:
     case LibrarySortByType.Format:
-      return group.name;
+      return name;
 
     case LibrarySortByType.Author: {
       if (groupBy === LibraryGroupByType.Author) {
@@ -953,7 +962,7 @@ export const getGroupSortValue = (
         return formatAuthors(firstBook.author, firstBook.primaryLanguage || 'en', true);
       }
       // Custom/other groups: fall back to group name
-      return group.name;
+      return name;
     }
 
     case LibrarySortByType.Updated:
@@ -967,6 +976,10 @@ export const getGroupSortValue = (
     case LibrarySortByType.Progress:
       // Return the most-progressed book's read ratio
       return Math.max(...books.map((b) => getBookReadRatio(b)));
+
+    case LibrarySortByType.Pages:
+      // Return the group's total page count
+      return books.reduce((sum, b) => sum + (getBookPageCount(b) ?? 0), 0);
 
     case LibrarySortByType.Published: {
       // Return the most recent published date
@@ -1185,4 +1198,10 @@ export const getBookContextMenuItemIds = (
   }
   ids.push('delete');
   return ids;
+};
+
+/** The group every book shares, or undefined when they don't share one. */
+export const getCommonGroupName = (books: Book[]): string | undefined => {
+  const name = books[0]?.groupName;
+  return name && books.every((book) => book.groupName === name) ? name : undefined;
 };

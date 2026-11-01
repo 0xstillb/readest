@@ -1,6 +1,8 @@
+import { mergeTTSPacks } from '@/utils/ttsPacks';
 import { Book, BookConfig, BookNote } from '@/types/book';
 import { resolveReferencePageCount } from '@/utils/progress';
 import { bookGroupDiffers, pickFresherGroup } from '@/utils/book';
+import { incomingNoteWins } from '@/utils/booknoteStamp';
 import { RemoteBookConfig } from './wire';
 
 /**
@@ -22,14 +24,9 @@ import { RemoteBookConfig } from './wire';
 
 /**
  * Per-note merge: pick the locally-stored copy or the remote copy of each
- * note based on `updatedAt` / `deletedAt`. Mirrors `processNewNote` in
- * `useNotesSync.ts` so users get the same semantics regardless of which
- * sync backend produced the row.
- *
- * A note is keyed by `id`. When the same id exists on both sides we keep
- * whichever side has the larger updatedAt; ties go to the side whose
- * `deletedAt` is more recent (which usually means the deletion came after
- * the creation/edit).
+ * note by `incomingNoteWins`, the rule `useNotesSync.ts` applies too, so
+ * users get the same semantics regardless of which sync backend produced
+ * the row. A note is keyed by `id`.
  */
 export const mergeNotes = (local: BookNote[], remote: BookNote[]): BookNote[] => {
   const byId = new Map<string, BookNote>();
@@ -40,15 +37,10 @@ export const mergeNotes = (local: BookNote[], remote: BookNote[]): BookNote[] =>
       byId.set(r.id, r);
       continue;
     }
-    const lUpdated = l.updatedAt ?? 0;
-    const rUpdated = r.updatedAt ?? 0;
-    const lDeleted = l.deletedAt ?? 0;
-    const rDeleted = r.deletedAt ?? 0;
-    if (rUpdated > lUpdated || rDeleted > lDeleted) {
-      byId.set(r.id, { ...l, ...r });
-    } else {
-      byId.set(r.id, { ...r, ...l });
-    }
+    const [winner, loser] = incomingNoteWins(l, r) ? [r, l] : [l, r];
+    // Pin the winner's deletedAt so a live winner never inherits the loser's
+    // tombstone through a key it doesn't carry.
+    byId.set(r.id, { ...loser, ...winner, deletedAt: winner.deletedAt });
   }
   return Array.from(byId.values());
 };
@@ -82,6 +74,10 @@ export const mergeBookConfig = (
       : ({ ...filteredRemote, ...local } as BookConfig);
   const notes = mergeNotes(local.booknotes ?? [], remote.booknotes ?? []);
   merged.booknotes = notes;
+  // A union, whichever side won the scalars: recording audio never bumps
+  // updatedAt, so the winner may lack the other side's packs.
+  const ttsPacks = mergeTTSPacks(local.ttsPacks, remote.ttsPacks);
+  if (ttsPacks) merged.ttsPacks = ttsPacks;
   // The reference page count is the one viewSettings key that crosses devices
   // (issue #5716) — it describes the book's print edition, not the screen. It
   // arrives as its own envelope key, so apply it to viewSettings by hand

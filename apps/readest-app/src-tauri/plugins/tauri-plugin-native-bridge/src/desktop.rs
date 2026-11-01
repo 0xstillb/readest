@@ -426,6 +426,21 @@ impl<R: Runtime> NativeBridge<R> {
         Err(crate::Error::UnsupportedPlatformError)
     }
 
+    /// BOOX pen hardware doesn't exist on desktop; report no capability
+    /// rather than erroring so callers can treat this the same as any other
+    /// non-BOOX platform and fall back to the pointer backend.
+    pub fn query_pen_capabilities(&self) -> crate::Result<QueryPenCapabilitiesResponse> {
+        Ok(QueryPenCapabilitiesResponse::default())
+    }
+
+    pub fn start_raw_drawing(&self, _payload: StartRawDrawingRequest) -> crate::Result<()> {
+        Err(crate::Error::UnsupportedPlatformError)
+    }
+
+    pub fn stop_raw_drawing(&self) -> crate::Result<()> {
+        Err(crate::Error::UnsupportedPlatformError)
+    }
+
     /// E-ink panels exist only on the mobile (Android) side. Desktop has no
     /// e-ink controller, so the deep refresh is never supported here.
     pub fn is_eink_refresh_supported(&self) -> crate::Result<EinkRefreshSupportedResponse> {
@@ -511,16 +526,35 @@ impl<R: Runtime> NativeBridge<R> {
     /// desktop, where the leaf keeps a paper back.
     pub fn cover_webview_region(
         &self,
-        _payload: CaptureWebviewRegionRequest,
+        window: &tauri::WebviewWindow<R>,
+        payload: CaptureWebviewRegionRequest,
     ) -> crate::Result<CoverWebviewRegionResponse> {
-        Err(crate::Error::UnsupportedPlatformError)
+        #[cfg(target_os = "macos")]
+        {
+            crate::platform::macos::cover_webview_region(window, payload)
+                .map(|token| CoverWebviewRegionResponse { token })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (window, payload);
+            Err(crate::Error::UnsupportedPlatformError)
+        }
     }
 
     pub fn uncover_webview_region(
         &self,
-        _payload: UncoverWebviewRegionRequest,
+        window: &tauri::WebviewWindow<R>,
+        payload: UncoverWebviewRegionRequest,
     ) -> crate::Result<()> {
-        Err(crate::Error::UnsupportedPlatformError)
+        #[cfg(target_os = "macos")]
+        {
+            crate::platform::macos::uncover_webview_region(window, payload.token)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (window, payload);
+            Err(crate::Error::UnsupportedPlatformError)
+        }
     }
 
     /// Probe the iCloud ubiquity container. Non-macOS desktops report

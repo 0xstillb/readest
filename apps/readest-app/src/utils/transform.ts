@@ -23,6 +23,7 @@ export const transformBookConfigToDB = (bookConfig: unknown, userId: string): DB
     rsvpPosition,
     searchConfig,
     viewSettings,
+    ttsPacks,
     updatedAt,
   } = bookConfig as BookConfig;
 
@@ -36,6 +37,8 @@ export const transformBookConfigToDB = (bookConfig: unknown, userId: string): DB
     rsvp_position: rsvpPosition && JSON.stringify(rsvpPosition),
     search_config: searchConfig && JSON.stringify(searchConfig),
     view_settings: viewSettings && JSON.stringify(viewSettings),
+    // Only a book with Read Aloud history writes the column.
+    ...(ttsPacks ? { tts_packs: JSON.stringify(ttsPacks) } : {}),
     updated_at: new Date(updatedAt ?? Date.now()).toISOString(),
   };
 };
@@ -50,6 +53,7 @@ export const transformBookConfigFromDB = (dbBookConfig: DBBookConfig): BookConfi
     rsvp_position,
     search_config,
     view_settings,
+    tts_packs,
     updated_at,
   } = dbBookConfig;
   return {
@@ -61,6 +65,7 @@ export const transformBookConfigFromDB = (dbBookConfig: DBBookConfig): BookConfi
     rsvpPosition: rsvp_position && JSON.parse(rsvp_position),
     searchConfig: search_config && JSON.parse(search_config),
     viewSettings: view_settings && JSON.parse(view_settings),
+    ...(tts_packs ? { ttsPacks: JSON.parse(tts_packs) } : {}),
     updatedAt: new Date(updated_at!).getTime(),
   } as BookConfig;
 };
@@ -82,6 +87,7 @@ export const transformBookToDB = (book: unknown, userId: string): DBBook => {
     readingStatusUpdatedAt,
     coverHash,
     coverUpdatedAt,
+    pageCount,
     metadata,
     metadataUpdatedAt,
     createdAt,
@@ -108,6 +114,7 @@ export const transformBookToDB = (book: unknown, userId: string): DBBook => {
       : null,
     cover_hash: coverHash ?? null,
     cover_updated_at: coverUpdatedAt ? new Date(coverUpdatedAt).toISOString() : null,
+    page_count: pageCount ?? null,
     source_title: sanitizeString(sourceTitle),
     metadata: metadata ? sanitizeString(JSON.stringify(metadata)) : null,
     metadata_updated_at: metadataUpdatedAt ? new Date(metadataUpdatedAt).toISOString() : null,
@@ -134,6 +141,7 @@ export const transformBookFromDB = (dbBook: DBBook): Book => {
     reading_status_updated_at,
     cover_hash,
     cover_updated_at,
+    page_count,
     source_title,
     metadata,
     metadata_updated_at,
@@ -168,6 +176,9 @@ export const transformBookFromDB = (dbBook: DBBook): Book => {
     deletedAt: deleted_at ? new Date(deleted_at).getTime() : null,
     uploadedAt: uploaded_at ? new Date(uploaded_at).getTime() : null,
   };
+  // Only when set: an undefined key would wipe the local count in the pull
+  // merge's `{ ...local, ...remote }` spread.
+  if (page_count != null) book.pageCount = page_count;
   // Native cloud DBBook has no `url` column; a feed book carries its feed URL in
   // metadata so the reader can rebuild the feed:// descriptor here.
   if (!book.url && book.metadata?.feedUrl) {
@@ -197,6 +208,7 @@ export const transformBookNoteToDB = (bookNote: unknown, userId: string): DBBook
     color,
     note,
     global,
+    ink,
     createdAt,
     updatedAt,
     deletedAt,
@@ -217,6 +229,8 @@ export const transformBookNoteToDB = (bookNote: unknown, userId: string): DBBook
     color,
     note,
     global,
+    // Absent for other notes, so an upsert never clears stored strokes.
+    ink,
     created_at: new Date(createdAt ?? Date.now()).toISOString(),
     updated_at: new Date(updatedAt ?? Date.now()).toISOString(),
     // note that only null deleted_at is updated to the database, undefined is not
@@ -239,6 +253,7 @@ export const transformBookNoteFromDB = (dbBookNote: DBBookNote): BookNote => {
     color,
     note,
     global,
+    ink,
     created_at,
     updated_at,
     deleted_at,
@@ -258,6 +273,9 @@ export const transformBookNoteFromDB = (dbBookNote: DBBookNote): BookNote => {
     color: color as HighlightColor,
     note,
     global,
+    // No key without strokes: a pulled note is merged over the local one, and
+    // a server without the column must not wipe strokes held locally.
+    ...(ink ? { ink } : {}),
     createdAt: new Date(created_at!).getTime(),
     updatedAt: new Date(updated_at!).getTime(),
     deletedAt: deleted_at ? new Date(deleted_at).getTime() : null,

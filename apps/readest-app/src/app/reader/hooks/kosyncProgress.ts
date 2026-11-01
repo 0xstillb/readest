@@ -12,9 +12,16 @@ import { KoSyncProgress } from '@/services/sync/KOSyncClient';
  * every one of them the same way: through the XPointer's own `DocFragment[N]`.
  * A server's `percentage` never picks the section (see `getCFIFromXPointer`),
  * so no server sniffing is needed here.
+ *
+ * crengine reads FB2 natively, so an FB2 book's XPointer starts at its
+ * FictionBook root instead: `/FictionBook/body[1]/section[3]/p[9]/text().322`,
+ * and a MOBI book's at its HTML root: `/html/body/body/div[8]/p[152]/text().596`.
+ * Newer crengine writes `[1]` on every first step, so the roots can also read
+ * `/body[1]`, `/FictionBook[1]` and `/html[1]`.
  */
 export const isXPointerProgress = (progress?: string): boolean =>
-  !!progress && progress.startsWith('/body');
+  !!progress &&
+  ['/body', '/FictionBook', '/html/', '/html[1]/'].some((root) => progress.startsWith(root));
 
 /**
  * Remote reading completion as a 0–1 fraction suitable for

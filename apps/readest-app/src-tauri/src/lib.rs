@@ -35,6 +35,8 @@ mod discord_rpc;
 #[cfg(any(target_os = "android", test))]
 mod eink_identity;
 mod epub_parser;
+#[cfg(desktop)]
+mod file_reveal;
 #[cfg(all(target_os = "linux", any(feature = "cef", test)))]
 mod linux_display;
 #[cfg(all(target_os = "linux", any(feature = "cef", test)))]
@@ -385,6 +387,25 @@ fn restore_main_window_state(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Re-applies the main window's saved maximized and fullscreen state on Linux,
+/// now that the window is shown.
+///
+/// The main window is created hidden, and the window-state plugin maximizes
+/// it before showing it. On X11 a window changes those states by asking the
+/// window manager with a `_NET_WM_STATE` client message, which the window
+/// manager ignores while the window is still unmapped — so the window always
+/// came back at its restored size, never maximized (#6657). Asked again after
+/// the plugin's `show()`, the request reaches the window manager after the
+/// map, as it does for a window created visible.
+#[cfg(target_os = "linux")]
+fn restore_main_window_maximized<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use tauri_plugin_window_state::{StateFlags, WindowExt};
+
+    if let Err(e) = window.restore_state(StateFlags::MAXIMIZED | StateFlags::FULLSCREEN) {
+        log::error!("Failed to restore the main window's maximized state: {e}");
+    }
+}
+
 // Pure decision for whether the in-app updater should be hidden. Kept
 // dependency-free so it can be unit tested for every platform combination.
 //
@@ -643,6 +664,8 @@ pub fn run() {
             upload_file,
             get_environment_variable,
             get_executable_dir,
+            #[cfg(desktop)]
+            file_reveal::reveal_item_in_dir,
             set_webview_info,
             get_webview_version,
             #[cfg(desktop)]
@@ -678,6 +701,7 @@ pub fn run() {
             web_browser::open_web_browser,
             browser_fetch::fetch_web_browser_resource,
             media_proxy::get_media_proxy_base,
+            media_proxy::get_media_file_url,
             web_browser::set_web_browser_status,
             web_browser::extract_web_browser_archive,
             localsend::commands::localsend_start,
@@ -747,12 +771,17 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(window_state::init());
 
+    // The in-app browser window gets a new `browser-N` label on every open;
+    // pool them under one state key so it reopens where it was last closed
+    // (see `web_browser::window_state_label`).
+    #[cfg(desktop)]
+    let window_state = tauri_plugin_window_state::Builder::default();
+    #[cfg(desktop)]
+    let window_state = window_state.map_label(web_browser::window_state_label);
     // The main window restores its saved geometry manually on Windows (see
     // `restore_main_window_state`): restoring into the freshly created hidden
     // window bakes the stale creation-time client area into the saved size,
     // growing the window on every launch (#6373).
-    #[cfg(desktop)]
-    let window_state = tauri_plugin_window_state::Builder::default();
     #[cfg(all(desktop, windows))]
     let window_state = window_state.skip_initial_state("main");
     #[cfg(desktop)]
@@ -1017,6 +1046,8 @@ pub fn run() {
                 let _main_window = win_builder.build().unwrap();
                 #[cfg(windows)]
                 restore_main_window_state(&_main_window);
+                #[cfg(target_os = "linux")]
+                restore_main_window_maximized(&_main_window);
                 // The window is created hidden and the state-restore show is
                 // suppressed (see restore_main_window_state): the frontend
                 // signals once the theme is applied — WebView2 has painted

@@ -1,3 +1,5 @@
+import type { TTSPacks } from '@/utils/ttsPacks';
+import type { InkStroke } from '@/services/handwriting/model';
 import { BookMetadata } from '@/libs/document';
 import { TTSHighlightOptions } from '@/services/tts/types';
 import { TTSHighlightGranularity } from '@/services/tts/types';
@@ -24,7 +26,7 @@ export type BookFormat =
   | 'OPDSAUDIO'
   // Streaming audiobook from BookOrbit's audiobook API; filePath is bookorbit://<bookId> (#6224)
   | 'BOOKORBIT';
-export type BookNoteType = 'bookmark' | 'annotation' | 'excerpt' | 'notebook';
+export type BookNoteType = 'bookmark' | 'annotation' | 'excerpt' | 'notebook' | 'ink';
 export type ReadingStatus = 'unread' | 'reading' | 'finished' | 'abandoned';
 export type HighlightStyle = 'highlight' | 'underline' | 'squiggly';
 // Predefined highlight colors, can be extended with custom hex colors
@@ -159,6 +161,10 @@ export interface Book {
   // library can badge it without opening the file. Derived from the file on
   // every import, like `format` — not user data, so it needs no LWW timestamp.
   hasNarration?: boolean;
+  // The page total the reader will lay out, counted from the file at import so
+  // an unopened book can show and sort by it (#6662). Like `hasNarration`, it is
+  // re-derived on every import; once opened, `progress[1]` holds the same total.
+  pageCount?: number;
   duration?: number; // total audio length in seconds (ABS audiobooks)
   // Marks this ABS stub as a podcast show or ebook rather than an audiobook.
   // Audio books remain unmarked (absMediaType undefined).
@@ -217,6 +223,12 @@ export interface BookNote {
    * bookmarks and excerpts, and for fixed-layout formats (e.g. PDF).
    */
   global?: boolean;
+  /**
+   * Handwriting of an `ink` note: strokes pinned to the content at `cfi` (a
+   * reflowable book) or drawn on the page at `cfi` (fixed layout). See
+   * services/handwriting.
+   */
+  ink?: InkStroke[];
 
   createdAt: number;
   updatedAt: number;
@@ -247,6 +259,9 @@ export interface BookLayout {
   /* Centre gap of a two-column spread in px; 0 derives it from the margins
      and gapPercent as before. */
   columnGapPx: number;
+  /* iPhone Duo, inner display in landscape: show two pages, one on each side
+     of the hinge (true), or a single page (false). Ignored in other poses. */
+  duoBookMode: boolean;
   scrolled: boolean;
   scrolledDirection: 'vertical' | 'horizontal';
   webtoonMode: boolean;
@@ -346,11 +361,14 @@ export interface BookLanguage {
 
 // 'push' slides the whole strip; 'slide' and 'curl' layer the outgoing page
 // over the still incoming page (Apple Books style, needs View Transitions).
-export type PageTurnStyle = 'push' | 'slide' | 'curl';
+// 'flip' lifts the whole sheet over the spine. The apps' captured and native
+// turns draw it; a spread and the web turn it as a 'curl'.
+export type PageTurnStyle = 'push' | 'slide' | 'curl' | 'flip';
 export interface ViewConfig {
   sideBarTab: string;
   uiLanguage: string;
   sortedTOC: boolean;
+  showTOCThumbnails: boolean;
 
   doubleBorder: boolean;
   borderColor: string;
@@ -366,6 +384,7 @@ export interface ViewConfig {
   showCurrentBatteryStatus: boolean;
   showBatteryPercentage: boolean;
   showPaginationButtons: boolean;
+  stablePageNumbers: boolean;
   progressStyle: 'percentage' | 'fraction' | 'reference';
   referencePageCount: number;
 
@@ -682,6 +701,14 @@ export interface BookConfig {
   audiobook?: PairedAudiobook;
   hardcover?: HardcoverBookLink;
   pagebound?: PageboundBookLink;
+  /**
+   * Downloaded read-aloud packs each sync destination holds, by destination
+   * id. Both syncs carry it and merge it as a union, never by updatedAt, so
+   * recording audio can't move reading progress. A device lists a destination
+   * only when this says it has audio the device lacks, or lacks audio the
+   * device has.
+   */
+  ttsPacks?: TTSPacks;
   /**
    * The pages of a comic laid out as spreads of their own (wide images), by
    * page path: a device-local cache of measuring them, so a later open skips

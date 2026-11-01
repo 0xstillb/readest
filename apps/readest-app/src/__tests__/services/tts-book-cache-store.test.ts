@@ -36,6 +36,44 @@ vi.mock('@/services/tts/providers/opfsPackFs', () => ({
   createOpfsPackFs: vi.fn(async () => packState.fs),
 }));
 
+const bookData = vi.hoisted(() => ({
+  destinations: [{ id: 'webdav' }, { id: 'readest' }],
+  getBookDataDestinations: vi.fn(async () => [] as { id: string }[]),
+  pullBookData: vi.fn(async () => 0),
+  pushBookData: vi.fn(async () => 0),
+}));
+
+const bookConfig = vi.hoisted(() => ({
+  config: null as { ttsPacks?: Record<string, string[]>; updatedAt?: number } | null,
+  setConfig: vi.fn((_key: string, update: object) => {
+    bookConfig.config = { ...bookConfig.config, ...update };
+  }),
+  book: { hash: 'hash-rec4' },
+  settings: { kind: 'settings' },
+}));
+vi.mock('@/store/libraryStore', () => ({
+  useLibraryStore: { getState: () => ({ getBookByHash: () => bookConfig.book }) },
+}));
+vi.mock('@/store/settingsStore', () => ({
+  useSettingsStore: { getState: () => ({ settings: bookConfig.settings }) },
+}));
+vi.mock('@/store/bookDataStore', () => ({
+  useBookDataStore: {
+    getState: () => ({
+      getConfig: () => bookConfig.config,
+      setConfig: bookConfig.setConfig,
+    }),
+  },
+}));
+
+vi.mock('@/services/sync/bookData/destinationsFor', () => ({
+  getBookDataDestinations: bookData.getBookDataDestinations,
+}));
+vi.mock('@/services/sync/bookData/engine', () => ({
+  pullBookData: bookData.pullBookData,
+  pushBookData: bookData.pushBookData,
+}));
+
 import { NodeDatabaseService } from '@/services/database/nodeDatabaseService';
 import {
   BookTTSCacheStore,
@@ -74,6 +112,7 @@ describe('BookTTSCacheStore', () => {
       writeFile,
       deleteFile,
       readDirectory: vi.fn().mockResolvedValue([]),
+      saveBookConfig: vi.fn(async () => {}),
     } as unknown as AppService;
   });
 
@@ -93,6 +132,248 @@ describe('BookTTSCacheStore', () => {
     expect(createDir).toHaveBeenCalledWith('tts-cache/hash123', 'Cache', true);
     expect(openDatabase).toHaveBeenCalledTimes(1);
     expect(openDatabase).toHaveBeenCalledWith('tts-cache', 'tts-cache/hash123/cache.db', 'Cache');
+  });
+
+  test('forwards the keys a synced pack brought, from before its pull starts', async () => {
+    const register = vi.spyOn(SqliteTTSCacheStore.prototype, 'onImported');
+    const store = new BookTTSCacheStore(appService, () => 'hash123', 1024 * 1024);
+    const imported = vi.fn();
+    store.onImported(imported);
+    await store.open();
+    expect(register).toHaveBeenCalledTimes(1);
+    register.mock.calls[0]![0](['k1']);
+    expect(imported).toHaveBeenCalledWith(['k1']);
+    register.mockRestore();
+  });
+
+  test('opening syncs through every book-data destination, pull before push', async () => {
+    // A section downloaded while sync was off: no later compaction creates
+    // its pack again, so the open is the only chance to upload it.
+    const sqliteStore = new SqliteTTSCacheStore(db, {
+      budgetBytes: 1024 * 1024,
+      packFs: packState.fs,
+    });
+    await sqliteStore.beginDownloadSections([7]);
+    await sqliteStore.registerSectionMarks(7, ['0:a']);
+    await sqliteStore.put('k1', entry());
+    await sqliteStore.recordMarkKey(7, 0, 'k1');
+    await sqliteStore.compact();
+    await sqliteStore.completeDownloadSections([7]);
+
+    bookData.getBookDataDestinations.mockResolvedValue(bookData.destinations);
+    bookData.pullBookData.mockClear();
+    bookData.pushBookData.mockClear();
+    const store = new BookTTSCacheStore(appService, () => 'hash123', 1024 * 1024);
+    await store.open();
+    await vi.waitFor(() =>
+      expect(bookData.pushBookData).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'tts' }),
+        'hash123',
+        bookData.destinations,
+        expect.any(Map),
+      ),
+    );
+    expect(bookData.getBookDataDestinations).toHaveBeenCalledWith(appService, 'hash123');
+    expect(bookData.pullBookData).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'tts' }),
+      'hash123',
+      bookData.destinations,
+      expect.any(Map),
+    );
+    expect(bookData.pullBookData).toHaveBeenCalledBefore(bookData.pushBookData);
+  });
+
+  test('opening with no book-data destination moves nothing', async () => {
+    bookData.getBookDataDestinations.mockResolvedValue([]);
+    bookData.pullBookData.mockClear();
+    bookData.pushBookData.mockClear();
+    const store = new BookTTSCacheStore(appService, () => 'hash123', 1024 * 1024);
+    await store.open();
+    await vi.waitFor(() => expect(bookData.getBookDataDestinations).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(bookData.pullBookData).not.toHaveBeenCalled();
+    expect(bookData.pushBookData).not.toHaveBeenCalled();
+  });
+
+  test('finishing a download pushes its pack even when listening already made it', async () => {
+    // Section 7 was packed by ordinary listening, so the open's push skipped
+    // it and the download creates no new pack.
+    const sqliteStore = new SqliteTTSCacheStore(db, {
+      budgetBytes: 1024 * 1024,
+      packFs: packState.fs,
+    });
+    await sqliteStore.registerSectionMarks(7, ['0:a']);
+    await sqliteStore.put('k1', entry());
+    await sqliteStore.recordMarkKey(7, 0, 'k1');
+    await sqliteStore.compact();
+
+    bookData.getBookDataDestinations.mockResolvedValue(bookData.destinations);
+    const store = new BookTTSCacheStore(appService, () => 'hash777', 1024 * 1024);
+    await store.open();
+    const pushed = () =>
+      expect(bookData.pushBookData).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'tts' }),
+        'hash777',
+        bookData.destinations,
+        expect.any(Map),
+      );
+    await vi.waitFor(pushed);
+    bookData.pushBookData.mockClear();
+    await store.beginDownloadSections([7]);
+    await store.compact();
+    await store.completeDownloadSections([7]);
+    await vi.waitFor(pushed);
+  });
+
+  test("a book's sync rounds run one after another", async () => {
+    // Overlapping rounds would both see a pack missing and upload it twice,
+    // through the same Cache outbox file.
+    bookData.getBookDataDestinations.mockResolvedValue(bookData.destinations);
+    let release: () => void = () => {};
+    bookData.pushBookData.mockClear();
+    bookData.pushBookData.mockImplementationOnce(
+      () => new Promise<number>((resolve) => (release = () => resolve(0))),
+    );
+    const store = new BookTTSCacheStore(appService, () => 'hash555', 1024 * 1024);
+    await store.open();
+    await vi.waitFor(() => expect(bookData.pushBookData).toHaveBeenCalledTimes(1));
+    await store.completeDownloadSections([]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(bookData.pushBookData).toHaveBeenCalledTimes(1);
+    release();
+    await vi.waitFor(() => expect(bookData.pushBookData).toHaveBeenCalledTimes(2));
+  });
+
+  test("a book's push rounds reuse the open's destinations and listings", async () => {
+    // Each finished section of a download starts a push round; fresh
+    // destinations would list and prepare folders again every round.
+    bookData.getBookDataDestinations.mockImplementation(async () => [
+      { id: 'webdav' },
+      { id: 'readest' },
+    ]);
+    bookData.pullBookData.mockClear();
+    bookData.pushBookData.mockClear();
+    const store = new BookTTSCacheStore(appService, () => 'hash444', 1024 * 1024);
+    await store.open();
+    await vi.waitFor(() => expect(bookData.pushBookData).toHaveBeenCalledTimes(1));
+    await store.completeDownloadSections([]);
+    await vi.waitFor(() => expect(bookData.pushBookData).toHaveBeenCalledTimes(2));
+
+    const [, , pulledTo, pullListings] = bookData.pullBookData.mock.calls[0] as unknown[];
+    const [, , pushedTo, pushListings] = bookData.pushBookData.mock.calls[1] as unknown[];
+    expect(pullListings).toBeInstanceOf(Map);
+    expect(pushListings).toBe(pullListings);
+    expect((pushedTo as unknown[])[0]).toBe((pulledTo as unknown[])[0]);
+    expect((pushedTo as unknown[])[1]).toBe((pulledTo as unknown[])[1]);
+    bookData.getBookDataDestinations.mockReset();
+    bookData.getBookDataDestinations.mockResolvedValue([]);
+  });
+
+  describe('with the packs recorded in the book config', () => {
+    const openWith = async (hash: string, ttsPacks?: Record<string, string[]>) => {
+      bookConfig.config = { ttsPacks, updatedAt: 42 };
+      bookConfig.setConfig.mockClear();
+      bookData.getBookDataDestinations.mockResolvedValue(bookData.destinations);
+      bookData.pullBookData.mockClear();
+      bookData.pushBookData.mockClear();
+      const store = new BookTTSCacheStore(appService, () => hash, 1024 * 1024);
+      await store.open();
+      await vi.waitFor(() => expect(bookData.pushBookData).toHaveBeenCalled());
+    };
+
+    test('an open pulls nothing when every destination is recorded and nothing is missing', async () => {
+      // A book without audio, synced before: no listing at all.
+      await openWith('hash-rec1', { webdav: [], readest: [] });
+      expect(bookData.pullBookData).not.toHaveBeenCalled();
+    });
+
+    test('keeps an entry another sync merged while the round ran', async () => {
+      // The reader's open-time pull can merge a peer's record while this
+      // round awaits its listings; writing back the record read at the start
+      // would drop it.
+      bookData.pullBookData.mockImplementationOnce(async (...args: unknown[]) => {
+        const listings = args[3] as Map<string, Set<string> | null>;
+        listings.set('webdav', new Set(['1-a.mp3', '1-a.json']));
+        bookConfig.config = { ...bookConfig.config, ttsPacks: { gdrive: ['9-z.mp3'] } };
+        return 0;
+      });
+      await openWith('hash-rec6', undefined);
+      await vi.waitFor(() =>
+        expect(bookConfig.setConfig).toHaveBeenCalledWith('hash-rec6', {
+          ttsPacks: { gdrive: ['9-z.mp3'], webdav: ['1-a.mp3'] },
+        }),
+      );
+    });
+
+    test('keeps a pack merged into a destination while the round listed it', async () => {
+      // A peer's pack can land in the record after this round's listing began;
+      // replacing the destination with the listing would drop it, and the next
+      // open would skip pulling it. Entries the round started with are still
+      // replaced by the listing.
+      bookData.pullBookData.mockImplementationOnce(async (...args: unknown[]) => {
+        const listings = args[3] as Map<string, Set<string> | null>;
+        listings.set('webdav', new Set(['1-a.mp3', '1-a.json']));
+        bookConfig.config = {
+          ...bookConfig.config,
+          ttsPacks: { webdav: ['0-gone.mp3', '2-b.mp3'] },
+        };
+        return 0;
+      });
+      await openWith('hash-rec7', { webdav: ['0-gone.mp3'] });
+      await vi.waitFor(() =>
+        expect(bookConfig.setConfig).toHaveBeenCalledWith('hash-rec7', {
+          ttsPacks: { webdav: ['1-a.mp3', '2-b.mp3'] },
+        }),
+      );
+    });
+
+    test('the push never trusts the record, so purged packs are uploaded again', async () => {
+      // The record only grows by merging: after a book's audio is purged from
+      // a destination (the book removed from Readest Cloud) it still names
+      // those packs, and a push trusting it would never upload them again.
+      await openWith('hash-rec5', { readest: ['1-a.mp3'] });
+      expect(bookData.pushBookData).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'tts' }),
+        'hash-rec5',
+        bookData.destinations,
+        expect.any(Map),
+      );
+      expect(bookData.pushBookData.mock.calls[0]).toHaveLength(4);
+    });
+
+    test('an open pulls when the record lists a pack this device lacks', async () => {
+      await openWith('hash-rec2', { webdav: ['9-x.mp3'], readest: [] });
+      expect(bookData.pullBookData).toHaveBeenCalled();
+    });
+
+    test('an open lists a destination the config never recorded', async () => {
+      await openWith('hash-rec3', { webdav: [] });
+      expect(bookData.pullBookData).toHaveBeenCalled();
+    });
+
+    test('records what each listed destination holds, a declining one as empty', async () => {
+      bookData.pullBookData.mockImplementationOnce(async (...args: unknown[]) => {
+        const listings = args[3] as Map<string, Set<string> | null>;
+        listings.set('webdav', new Set(['1-a.mp3', '1-a.json', '2-b.mp3']));
+        listings.set('readest', null);
+        return 0;
+      });
+      await openWith('hash-rec4', undefined);
+      await vi.waitFor(() =>
+        expect(bookConfig.setConfig).toHaveBeenCalledWith('hash-rec4', {
+          ttsPacks: { webdav: ['1-a.mp3'], readest: [] },
+        }),
+      );
+      // Saved to the book's config file at once, so a quit before the next
+      // page turn keeps it; updatedAt untouched, so progress can't move.
+      await vi.waitFor(() =>
+        expect(appService.saveBookConfig).toHaveBeenCalledWith(
+          bookConfig.book,
+          { updatedAt: 42, ttsPacks: { webdav: ['1-a.mp3'], readest: [] } },
+          bookConfig.settings,
+        ),
+      );
+    });
   });
 
   test('an open failure degrades to a no-op cache', async () => {
@@ -255,23 +536,23 @@ describe('BookTTSCacheStore', () => {
 });
 
 describe('getTTSCacheConfig', () => {
-  test('defaults to enabled, 200 MB budget, sync off', () => {
+  test('defaults to enabled, 200 MB budget', () => {
     localStorage.removeItem('readest-tts-cache');
-    expect(getTTSCacheConfig()).toEqual({ enabled: true, budgetMB: 200, syncEnabled: false });
+    expect(getTTSCacheConfig()).toEqual({ enabled: true, budgetMB: 200 });
   });
 
-  test('reads overrides from localStorage', () => {
+  test('reads overrides from localStorage and ignores the old sync switch', () => {
     localStorage.setItem(
       'readest-tts-cache',
       JSON.stringify({ enabled: false, budgetMB: 50, syncEnabled: true }),
     );
-    expect(getTTSCacheConfig()).toEqual({ enabled: false, budgetMB: 50, syncEnabled: true });
+    expect(getTTSCacheConfig()).toEqual({ enabled: false, budgetMB: 50 });
     localStorage.removeItem('readest-tts-cache');
   });
 
   test('setTTSCacheConfig round-trips through getTTSCacheConfig', () => {
-    setTTSCacheConfig({ enabled: false, budgetMB: 500, syncEnabled: false });
-    expect(getTTSCacheConfig()).toEqual({ enabled: false, budgetMB: 500, syncEnabled: false });
+    setTTSCacheConfig({ enabled: false, budgetMB: 500 });
+    expect(getTTSCacheConfig()).toEqual({ enabled: false, budgetMB: 500 });
     localStorage.removeItem('readest-tts-cache');
   });
 });

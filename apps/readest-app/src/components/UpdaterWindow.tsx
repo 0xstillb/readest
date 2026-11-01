@@ -23,7 +23,7 @@ import {
 } from '@/utils/bridge';
 import { join } from '@tauri-apps/api/path';
 import { getLocale } from '@/utils/misc';
-import { setLastShownReleaseNotesVersion } from '@/helpers/updater';
+import { getAndroidPlatformKey, setLastShownReleaseNotesVersion } from '@/helpers/updater';
 import type { ResolvedNightlyUpdate } from '@/helpers/updater';
 import { READEST_UPDATER_FILE, READEST_CHANGELOG_FILE } from '@/services/constants';
 import Dialog from '@/components/Dialog';
@@ -134,9 +134,8 @@ export const UpdaterContent = ({
       const response = await fetch(READEST_UPDATER_FILE);
       const data = await response.json();
       if (semver.gt(data.version, currentVersion)) {
-        const OS_ARCH = osArch();
-        const platformKey = OS_ARCH === 'aarch64' ? 'android-arm64' : 'android-universal';
-        const arch = OS_ARCH === 'aarch64' ? 'arm64' : 'universal';
+        const platformKey = getAndroidPlatformKey(osArch());
+        const arch = platformKey.replace('android-', '');
         const entry = data.platforms[platformKey];
         const downloadUrl = entry?.url as string | undefined;
         const signature = entry?.signature as string | undefined;

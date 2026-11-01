@@ -18,6 +18,8 @@ import { getCachedEinkRefreshSupported, refreshEinkScreen } from '@/utils/bridge
 import { isTauriAppPlatform } from '@/services/environment';
 import { tauriGetWindowLogicalPosition } from '@/utils/window';
 import { getReadingRulerMoveDirection } from '../utils/readingRuler';
+import { isPageOverflowing } from '../utils/pageOverflow';
+import { isDragPastPanEdge } from '../utils/turnGestureArena';
 import { useTouchInterceptor } from './useTouchInterceptor';
 
 export type ScrollSource = 'touch' | 'mouse';
@@ -45,6 +47,16 @@ const hasHorizontalPanning = (
 ) => {
   if (!view || !viewSettings) return false;
   return isPanningView(view, viewSettings) && view.isOverflowX();
+};
+
+// Zoom a fixed-layout page and keep the saved setting in step, as a pinch does.
+export const setFixedLayoutZoom = (bookKey: string, view: FoliateView, zoomLevel: number) => {
+  const { getViewSettings, setViewSettings } = useReaderStore.getState();
+  const viewSettings = getViewSettings(bookKey);
+  if (!viewSettings || viewSettings.zoomLevel === zoomLevel) return;
+  view.renderer.setAttribute('scale-factor', zoomLevel);
+  viewSettings.zoomLevel = zoomLevel;
+  setViewSettings(bookKey, viewSettings);
 };
 
 export const hasVerticalPanning = (
@@ -334,19 +346,43 @@ export const usePagination = (
             } else {
               windowStartX = window.screenX;
             }
+            // A page-filling image or table in a two-page spread fills only its
+            // column, so the zones are measured on that column; the spread's
+            // own center falls on the gutter (#6745).
+            const columnCount =
+              msg.data.media && !bookData.isFixedLayout && !viewSettings.vertical
+                ? (viewRef.current?.renderer.columnCount ?? 1)
+                : 1;
+            const zoneWidth = viewRect.width / columnCount;
             const viewStartX = windowStartX + viewRect.left;
-            const viewCenterX = viewStartX + viewRect.width / 2;
-            const consumed = eventDispatcher.dispatchSync('iframe-single-click');
+            const column = Math.floor((screenX - viewStartX) / zoneWidth);
+            const zoneStartX =
+              viewStartX + Math.max(0, Math.min(column, columnCount - 1)) * zoneWidth;
+            const zoneCenterX = zoneStartX + zoneWidth / 2;
+            const consumed = eventDispatcher.dispatchSync('iframe-single-click', {
+              bookKey,
+              windowX: msg.data.windowX,
+              windowY: msg.data.windowY,
+            });
             if (!consumed) {
-              const centerStartX = viewStartX + viewRect.width * 0.375;
-              const centerEndX = viewStartX + viewRect.width * 0.625;
+              const centerStartX = zoneStartX + zoneWidth * 0.375;
+              const centerEndX = zoneStartX + zoneWidth * 0.625;
               if (
                 viewSettings.disableClick! ||
                 (screenX >= centerStartX && screenX <= centerEndX)
               ) {
                 // A page-filling image/table leaves nowhere else to tap for
-                // its viewer, so the center opens it (#6424).
-                if (msg.data.media) {
+                // its viewer, so the center opens it (#6424). Only media
+                // from the reader's own handlers, which post from this window.
+                // A fixed-layout page that runs past the viewport hides its
+                // title, the other way to the toolbar, so the center keeps the
+                // toolbar (#6866).
+                const titleHidden =
+                  bookData.isFixedLayout &&
+                  !viewSettings.vertical &&
+                  !!viewRef.current &&
+                  isPageOverflowing(viewRef.current.renderer);
+                if (msg.data.media && msg.source === window && !titleHidden) {
                   window.postMessage(
                     { type: 'iframe-open-media', bookKey, ...msg.data.media },
                     '*',
@@ -364,7 +400,7 @@ export const usePagination = (
               }
 
               const side: PaginationSide =
-                screenX >= viewCenterX
+                screenX >= zoneCenterX
                   ? viewSettings.fullscreenClickArea
                     ? 'down'
                     : viewSettings.swapClickArea
@@ -439,6 +475,18 @@ export const usePagination = (
     } else {
       if (msg.type === 'click') {
         const { clientX } = msg;
+        // A click beside the page lands here, outside the page iframes. Like a
+        // click on the page, it dismisses the selection toolbar first instead
+        // of turning the page under it (#6958).
+        if (
+          eventDispatcher.dispatchSync('iframe-single-click', {
+            bookKey,
+            windowX: clientX,
+            windowY: msg.clientY,
+          })
+        ) {
+          return;
+        }
         const width = window.innerWidth;
         const leftThreshold = width * 0.5;
         const rightThreshold = width * 0.5;
@@ -592,18 +640,17 @@ export const usePagination = (
   // Volume-key page-flip interception (mobile only). Acquired only while the
   // setting is on and TTS isn't playing; the matching release on re-run/unmount
   // keeps the reference count balanced.
+  const volumeKeysToFlip = !!getViewSettings(bookKey)?.volumeKeysToFlip;
   useEffect(() => {
     if (!appService?.isMobileApp) return;
-
-    const viewSettings = getViewSettings(bookKey);
-    if (!viewSettings?.volumeKeysToFlip || ttsPlaying) return;
+    if (!volumeKeysToFlip || ttsPlaying) return;
 
     acquireVolumeKeyInterception();
     return () => {
       releaseVolumeKeyInterception();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ttsPlaying]);
+  }, [volumeKeysToFlip, ttsPlaying]);
 
   // Hardware page turner: native-key + DOM-key listeners and native
   // media-key interception, re-evaluated whenever the setting changes.
@@ -654,21 +701,43 @@ export const usePagination = (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hardwarePageTurner]);
 
+  // Horizontal pan of a zoomed page when the current touch began (see below);
+  // undefined when this interceptor did not see the touch start.
+  const swipeStartPanXRef = useRef<number | null | undefined>(undefined);
+
   // Touch swipe page flip for fixed-layout books — registered as a touch interceptor
   // so it participates in the priority-based consumption chain.
   useTouchInterceptor(
     `swipe-flip-${bookKey}`,
     (bk, detail) => {
-      if (bk !== bookKey || detail.phase !== 'end') return false;
+      if (bk !== bookKey) return false;
+      if (detail.phase === 'start') {
+        swipeStartPanXRef.current = viewRef.current?.renderer.panX ?? null;
+        return false;
+      }
+      if (detail.phase !== 'end') return false;
+      const startPanX = swipeStartPanXRef.current;
+      swipeStartPanXRef.current = undefined;
       const bookData = getBookData(bookKey);
       const viewSettings = getViewSettings(bookKey);
       if (!bookData?.isFixedLayout || viewSettings?.scrolled) return false;
       if (viewSettings?.disableSwipe) return false;
-      if (isPanningView(viewRef.current, viewSettings)) return false;
 
       const { deltaX, deltaY, deltaT } = detail;
+      // A zoomed page pans under a drag, unless it is pulled past its edge.
+      const panning = isPanningView(viewRef.current, viewSettings);
+      if (panning) {
+        if (startPanX === undefined || !isDragPastPanEdge(startPanX, deltaX)) return false;
+      }
       const vx = Math.abs(deltaX / (deltaT || 1));
       if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 30 && vx > 0.2) {
+        // Like Photos, the page turned to opens at 100% zoom. A swipe at the
+        // book's first or last page turns nowhere and keeps the zoom.
+        const view = viewRef.current;
+        const forward = viewSettings?.rtl ? deltaX > 0 : deltaX < 0;
+        if (panning && view && !(forward ? view.renderer.atEnd : view.renderer.atStart)) {
+          setFixedLayoutZoom(bookKey, view, 100);
+        }
         viewPagination(viewRef.current, viewSettings, deltaX > 0 ? 'left' : 'right');
         return true;
       }

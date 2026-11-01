@@ -1,3 +1,4 @@
+import { mergeTTSPacks, type TTSPacks } from '@/utils/ttsPacks';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { NextRequest, NextResponse } from 'next/server';
 import { PostgrestError } from '@supabase/supabase-js';
@@ -100,6 +101,46 @@ export function resolveCoverMerge(
   return ms(client.cover_updated_at) >= ms(server.cover_updated_at)
     ? { cover_hash: client.cover_hash, cover_updated_at: client.cover_updated_at }
     : { cover_hash: server.cover_hash, cover_updated_at: server.cover_updated_at };
+}
+
+/**
+ * A books row's page count, counted from the file at import (#6662): the row
+ * winner's value, else the other side's. Old clients, the KOReader and Calibre
+ * plugins, and devices that never counted the book push no page_count, so a
+ * row without one must never erase it.
+ */
+export function resolvePageCountMerge(
+  client: Pick<DBBook, 'page_count'>,
+  server: Pick<DBBook, 'page_count'>,
+  clientIsNewer: boolean,
+): number | null {
+  const [winner, loser] = clientIsNewer ? [client, server] : [server, client];
+  return winner.page_count ?? loser.page_count ?? null;
+}
+
+const parseTTSPacks = (value: unknown): TTSPacks | undefined => {
+  if (!value) return undefined;
+  try {
+    return (typeof value === 'string' ? JSON.parse(value) : value) as TTSPacks;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * A book config's read-aloud packs (BookConfig.ttsPacks): the union of both
+ * rows, whichever wins on updated_at. Recording audio never bumps updated_at
+ * (it must not move reading progress), so the older row can hold packs the
+ * newer lacks. `changed` when the client adds a pack the server row lacks.
+ */
+export function resolveTTSPacksMerge(
+  client: Pick<DBBookConfig, 'tts_packs'>,
+  server: Pick<DBBookConfig, 'tts_packs'>,
+): { value: string | null; changed: boolean } {
+  const serverPacks = parseTTSPacks(server.tts_packs);
+  const merged = mergeTTSPacks(serverPacks, parseTTSPacks(client.tts_packs));
+  const value = merged ? JSON.stringify(merged) : null;
+  return { value, changed: value !== (serverPacks ? JSON.stringify(serverPacks) : null) };
 }
 
 type BookMetadataFields = Pick<
@@ -755,6 +796,7 @@ export async function POST(req: NextRequest) {
                   | 'group_id'
                   | 'group_name'
                   | 'group_updated_at'
+                  | 'page_count'
                 >
               > &
               Pick<DBBook, 'title' | 'author' | 'tags'>;
@@ -766,6 +808,7 @@ export async function POST(req: NextRequest) {
             const meta = resolveMetadataMerge(clientBook, serverBook, clientIsNewer);
             // Group membership likewise merges on its own clock (issue #5911).
             const group = resolveGroupMerge(clientBook, serverBook, clientIsNewer);
+            const pageCount = resolvePageCountMerge(clientBook, serverBook, clientIsNewer);
             if (clientIsNewer) {
               // Client wins the row; graft the fresher status + cover +
               // metadata onto it (server's may be the newer one even though
@@ -782,6 +825,7 @@ export async function POST(req: NextRequest) {
               clientBook.group_id = group.group_id;
               clientBook.group_name = group.group_name;
               clientBook.group_updated_at = group.group_updated_at;
+              clientBook.page_count = pageCount;
               toUpdate.push(clientBook);
             } else {
               // Only rewrite when a resolved field VALUE differs from the
@@ -794,7 +838,14 @@ export async function POST(req: NextRequest) {
               const coverChanged = (cover.cover_hash ?? null) !== (serverBook.cover_hash ?? null);
               const metadataChanged = bookMetadataChanged(meta, serverBook);
               const groupChanged = bookGroupChanged(group, serverBook);
-              if (statusChanged || coverChanged || metadataChanged || groupChanged) {
+              const pageCountChanged = pageCount !== (serverBook.page_count ?? null);
+              if (
+                statusChanged ||
+                coverChanged ||
+                metadataChanged ||
+                groupChanged ||
+                pageCountChanged
+              ) {
                 // Server wins the row, but the client's status, cover and/or
                 // metadata is the fresher one. Graft the fresher fields onto
                 // the server row and leave updated_at untouched; the
@@ -818,10 +869,33 @@ export async function POST(req: NextRequest) {
                 propagated.group_id = group.group_id;
                 propagated.group_name = group.group_name;
                 propagated.group_updated_at = group.group_updated_at;
+                propagated.page_count = pageCount;
                 toUpdate.push(propagated);
               } else {
                 batchAuthoritativeRecords.push(serverData);
               }
+            }
+          } else if (table === 'book_configs') {
+            // The row is LWW, but its read-aloud packs merge as a union.
+            const ttsPacks = resolveTTSPacksMerge(
+              dbRec as DBBookConfig,
+              serverData as Pick<DBBookConfig, 'tts_packs'>,
+            );
+            if (clientIsNewer) {
+              if (ttsPacks.value) (dbRec as DBBookConfig).tts_packs = ttsPacks.value;
+              toUpdate.push(dbRec);
+            } else if (ttsPacks.changed) {
+              // Server wins the row; graft the packs without touching
+              // updated_at, so no device's progress is overridden. Readers
+              // re-fetch a book's config on open (since=0) and see them.
+              // The runtime row carries every DBBookConfig column; the static
+              // BookDataRecord type is narrower, as in the books branch above.
+              toUpdate.push({
+                ...(serverData as unknown as DBBookConfig),
+                tts_packs: ttsPacks.value ?? undefined,
+              });
+            } else {
+              batchAuthoritativeRecords.push(serverData);
             }
           } else if (clientIsNewer) {
             toUpdate.push(dbRec);

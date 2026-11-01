@@ -413,6 +413,12 @@ const colorPanelItems = [
     section: 'TTS',
   },
   {
+    id: 'settings.tts.customServices',
+    labelKey: _('Custom TTS Services'),
+    keywords: ['tts', 'custom', 'voice', 'api key', 'openai', 'kokoro', 'speech', 'byok'],
+    section: 'TTS',
+  },
+  {
     id: 'settings.tts.playerStyle',
     labelKey: _('TTS Player Style'),
     keywords: ['tts', 'player', 'mini', 'style', 'cover', 'full', 'minimal'],
@@ -486,6 +492,21 @@ const controlPanelItems = [
     id: 'settings.control.showPaginationButtons',
     labelKey: _('Show Page Navigation Buttons'),
     keywords: ['show', 'pagination', 'buttons', 'navigation', 'arrows', 'chevron', 'page', 'turn'],
+    section: 'Pagination',
+  },
+  {
+    id: 'settings.control.stablePageNumbers',
+    labelKey: _('Stable Page Numbers'),
+    keywords: [
+      'stable',
+      'page',
+      'number',
+      'count',
+      'screen',
+      'calibrate',
+      'measured',
+      'pagination',
+    ],
     section: 'Pagination',
   },
   {

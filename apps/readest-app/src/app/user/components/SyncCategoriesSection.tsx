@@ -37,6 +37,10 @@ const useCategoryCopy = (): Record<SyncCategory, CategoryCopy> => {
       title: _('Annotations'),
       description: _('Highlights and notes'),
     },
+    book_data: {
+      title: _('Book Data'),
+      description: _('Downloaded read-aloud audio and translations'),
+    },
     dictionary: {
       title: _('Dictionaries'),
       description: _('Imported dictionary bundles and settings'),
@@ -60,6 +64,10 @@ const useCategoryCopy = (): Record<SyncCategory, CategoryCopy> => {
     custom_translator: {
       title: _('Translators'),
       description: _('Custom translation providers, prompts, and (encrypted) API keys'),
+    },
+    custom_tts: {
+      title: _('TTS Services'),
+      description: _('Custom text-to-speech services and (encrypted) API keys'),
     },
     settings: {
       // Dictionary preferences ride this row too, but they're gated by the
