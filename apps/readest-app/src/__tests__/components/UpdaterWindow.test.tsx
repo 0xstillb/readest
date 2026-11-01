@@ -157,10 +157,22 @@ describe('UpdaterContent — auto-translated changelog', () => {
   const SPLIT_MANIFEST = {
     version: '0.11.20',
     platforms: {
-      'android-arm64': { url: 'https://example.com/Readest_0.11.20_arm64.apk' },
-      'android-armv7': { url: 'https://example.com/Readest_0.11.20_armv7.apk' },
-      'android-legacy': { url: 'https://example.com/Readest_0.11.20_legacy.apk' },
-      'android-universal': { url: 'https://example.com/Readest_0.11.20_armv7.apk' },
+      'android-arm64': {
+        url: 'https://example.com/Readest_0.11.20_arm64.apk',
+        signature: 'test-signature',
+      },
+      'android-armv7': {
+        url: 'https://example.com/Readest_0.11.20_armv7.apk',
+        signature: 'test-signature',
+      },
+      'android-legacy': {
+        url: 'https://example.com/Readest_0.11.20_legacy.apk',
+        signature: 'test-signature',
+      },
+      'android-universal': {
+        url: 'https://example.com/Readest_0.11.20_armv7.apk',
+        signature: 'test-signature',
+      },
     },
   };
 
