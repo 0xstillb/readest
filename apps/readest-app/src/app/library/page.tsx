@@ -135,6 +135,7 @@ import { useCustomFonts } from '@/hooks/useCustomFonts';
 import DropIndicator from '@/components/DropIndicator';
 import SettingsDialog from '@/components/settings/SettingsDialog';
 import ModalPortal from '@/components/ModalPortal';
+import SimpleUILibraryShell from '@/components/simpleui/SimpleUILibraryShell';
 import TransferQueuePanel from './components/TransferQueuePanel';
 
 /** Skip tiny non-book artifacts during folder auto-scan (matches the manual import dialog default). */
@@ -2300,9 +2301,11 @@ const LibraryPageContent = ({ searchParams }: { searchParams: ReadonlyURLSearchP
 
 const LibraryPage = () => {
   return (
-    <Suspense fallback={<div className='full-height' />}>
-      <LibraryPageWithSearchParams />
-    </Suspense>
+    <SimpleUILibraryShell>
+      <Suspense fallback={<div className='full-height' />}>
+        <LibraryPageWithSearchParams />
+      </Suspense>
+    </SimpleUILibraryShell>
   );
 };
 

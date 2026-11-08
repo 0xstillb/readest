@@ -48,6 +48,7 @@ import Quota from '@/components/Quota';
 import Menu from '@/components/Menu';
 import { type AppLockDialogMode, useAppLockStore } from '@/store/appLockStore';
 import GrimmLinkShelfSyncStatus from '@/components/settings/integrations/GrimmLinkShelfSyncStatus';
+import useSimpleUIMode from '@/components/simpleui/useSimpleUIMode';
 
 interface SettingsMenuProps {
   onPullLibrary: (fullRefresh?: boolean, verbose?: boolean) => void;
@@ -81,6 +82,7 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometryLabelKey, setBiometryLabelKey] = useState('');
   const showBiometricToggle = !!appService?.isMobileApp && isPinEnabled && biometricAvailable;
+  const { enabled: simpleUIEnabled, setEnabled: setSimpleUIEnabled } = useSimpleUIMode();
 
   useEffect(() => {
     if (!isBiometricSupported(appService) || !isPinEnabled) return;
@@ -406,6 +408,12 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
         status={shelfSyncStatus}
         onCancel={cancelShelfSync}
         compact
+      />
+
+      <MenuItem
+        label={_('Simple UI Mode')}
+        toggled={simpleUIEnabled}
+        onClick={() => setSimpleUIEnabled(!simpleUIEnabled)}
       />
 
       {isTauriAppPlatform() && (

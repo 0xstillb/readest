@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Readest SimpleUI mockup</title>
+    <style>
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-Thin.ttf") format("truetype"); font-weight: 100; font-display: swap; }
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-ExtraLight.ttf") format("truetype"); font-weight: 200; font-display: swap; }
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-Light.ttf") format("truetype"); font-weight: 300; font-display: swap; }
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-Medium.ttf") format("truetype"); font-weight: 500; font-display: swap; }
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-SemiBold.ttf") format("truetype"); font-weight: 600; font-display: swap; }
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-Bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-ExtraBold.ttf") format("truetype"); font-weight: 800; font-display: swap; }
+      @font-face { font-family: "Noto Sans Thai"; src: url("./fonts/NotoSansThai-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+      @font-face {
+        font-family: "Sunday Market";
+        src: url("./fonts/SundayMarket-Script.ttf") format("truetype");
+        font-display: swap;
+      }
+      :root {
+        color-scheme: light;
+        --ink: #17191a;
+        --muted: #666a6b;
+        --paper: #f3f3ef;
+        --line: #8c8f8d;
+        --shadow: #606363;
+        --cover-shadow: 1px 2px 2px #17191a55, 3px 8px 10px #17191a33, 7px 17px 22px #17191a17;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 22px;
+        background: #deded8;
+        color: var(--ink);
+        font: 16px/1.35 "Noto Sans Thai", sans-serif;
+      }
+      .demo { width: min(100%, 620px); }
+      .demo-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin: 0 auto 12px; max-width: 560px; }
+      .demo-heading h1 { margin: 0; font-size: 18px; letter-spacing: .01em; }
+      .demo-heading span { color: #555957; font-size: 12px; }
+      .device {
+        width: min(100%, 560px);
+        margin: 0 auto;
+        padding: 13px;
+        border: 1px solid #555;
+        border-radius: 18px;
+        background: #222;
+        box-shadow: 0 14px 32px #0003;
+      }
+      .screen {
+        position: relative;
+        width: min(100%, max(240px, calc(75.24dvh - 135px)));
+        height: auto;
+        aspect-ratio: 1264 / 1680;
+        margin: 0 auto;
+        container-type: inline-size;
+        overflow: hidden;
+        border: 1px solid #121212;
+        background: var(--paper);
+      }
+      .status {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 19px;
+        font-size: 13px;
+        font-weight: 550;
+      }
+      .status-right { display: flex; align-items: center; gap: 8px; }
+      .wifi { width: 14px; height: 11px; border: 2px solid currentColor; border-top-color: currentColor; border-left-color: transparent; border-right-color: transparent; border-bottom: 0; border-radius: 50% 50% 0 0; transform: scaleX(1.05); }
+      .battery { position: relative; width: 20px; height: 11px; border: 1.7px solid currentColor; border-radius: 2px; }
+      .battery::before { content: ""; position: absolute; inset: 2px 4px 2px 2px; background: currentColor; }
+      .battery::after { content: ""; position: absolute; width: 2px; height: 5px; right: -4px; top: 1.5px; background: currentColor; border-radius: 0 2px 2px 0; }
+      .screen-view { display: none; height: calc(100% - 34px); overflow: hidden; padding: 0 20px 104px; }
+      .screen-view.active { display: block; }
+      #library.active { display: flex; flex-direction: column; }
+      #home.active { display: flex; flex-direction: column; padding-bottom: 104px; }
+      .library-header { position: relative; display: flex; flex: 0 0 auto; align-items: center; gap: 8px; min-height: 56px; border-bottom: 1px solid #aaa; }
+      .library-search { display: flex; min-width: 0; height: 34px; flex: 1; align-items: center; gap: 9px; padding: 0 8px 0 11px; border-radius: 18px; background: #dedfda; }
+      .library-search svg { width: 18px; height: 18px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+      .search-placeholder { min-width: 0; flex: 1; overflow: hidden; color: #646866; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+      .search-divider { height: 18px; border-left: 1px solid #888b88; }
+      .search-action { display: grid; width: 24px; height: 28px; flex: 0 0 24px; place-items: center; border: 0; background: transparent; color: inherit; font-size: 18px; }
+      .header-icon { display: grid; place-items: center; width: 38px; height: 42px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+      .header-icon svg { width: 25px; height: 25px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .header-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 2px; }
+      .book-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 10px 16px; padding: 14px 0 5px; }
+      .book { display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: center; justify-content: center; }
+      .cover {
+        position: relative;
+        display: flex;
+        width: min(100%, 29cqw);
+        height: auto;
+        flex: 0 0 auto;
+        aspect-ratio: 28 / 41;
+        flex-direction: column;
+        justify-content: space-between;
+        overflow: hidden;
+        padding: 10px;
+        border: 0;
+        border-radius: 6px;
+        background: #c8c8c3;
+        box-shadow: var(--cover-shadow);
+        isolation: isolate;
+      }
+      #library.mode-below .cover { width: min(100%, 25.5cqw); }
+      .cover::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .82; background: radial-gradient(ellipse at 73% 27%, #f4f4ef 0 7%, transparent 8%), linear-gradient(155deg, #565958 0 19%, #a9aaa4 20% 41%, #d8d8d2 42% 60%, #686a68 61% 100%); }
+      .cover::after { content: ""; position: absolute; inset: 12% 14%; z-index: -1; border: 1px solid #24262690; border-radius: 50% 48% 42% 54%; transform: rotate(-15deg); box-shadow: 16px 22px 0 -12px #292b2b90, -18px 30px 0 -13px #292b2b80; }
+      .cover.alt1::before { background: radial-gradient(ellipse at 52% 38%,#deded8 0 12%,#777 13% 23%,transparent 24%), linear-gradient(140deg,#a8a9a3,#555 52%,#c8c8c2); }
+      .cover.alt2::before { background: radial-gradient(ellipse at 70% 62%,#deded8 0 17%,transparent 18%), linear-gradient(155deg,#ddd 0 23%,#777 24% 35%,#c4c4be 36% 50%,#5a5b59 51% 67%,#b0b0aa 68%); }
+      .cover.alt3::before { background: radial-gradient(circle at 25% 25%,#efefea 0 8%,transparent 9%), radial-gradient(ellipse at 65% 65%,#555 0 18%,transparent 19%), linear-gradient(45deg,#4f5150,#b9bab4 55%,#696b69); }
+      .cover.alt4::before { background: radial-gradient(ellipse at 30% 66%,#505250 0 21%,transparent 22%), linear-gradient(25deg,#505250 0 30%,#d3d3ce 30% 47%,#858784 47% 68%,#e2e2dc 68%); }
+      .cover.alt5::before { background: radial-gradient(ellipse at 38% 30%,#e5e5df 0 15%,transparent 16%), linear-gradient(0deg,#777 0 30%,#d0d0ca 31% 54%,#555 55% 72%,#aaa 73%); }
+      .cover-num { align-self: flex-start; padding: 2px 5px; background: #f4f4ef; font-size: 11px; font-weight: 700; }
+      .cover-title { padding: 4px; background: #e7e7e0d9; text-align: center; font-size: clamp(10px, 2vw, 14px); font-weight: 700; line-height: 1.25; }
+      .book-title { display: -webkit-box; width: 100%; flex: 0 0 auto; overflow: hidden; margin-top: 8px; text-align: center; font-size: 13px; font-weight: 650; line-height: 1.25; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+      #library.mode-hidden .book-title,
+      #library.mode-hidden .cover-num,
+      #library.mode-hidden .cover-title,
+      #library.mode-cover .book-title,
+      #library.mode-below .cover-num,
+      #library.mode-below .cover-title { display: none; }
+      .home { display: flex; min-height: 0; flex: 1; flex-direction: column; padding-top: 8px; text-align: center; }
+      .clock { font-family: "Sunday Market", sans-serif; font-size: clamp(48px, 16cqw, 112px); font-weight: 400; letter-spacing: .06em; line-height: 1; }
+      .date { margin: 4px 0 12px; font-size: 22px; font-weight: 700; }
+      .now-reading { display: grid; flex: 0 0 auto; grid-template-columns: max-content minmax(0,1fr); align-items: center; gap: 36px; padding: 4px 4px 4px 0; text-align: left; }
+      .home-cover { width: auto; height: min(44cqw, 20rem); aspect-ratio: 28 / 41; justify-self: start; display: grid; place-items: center; border: 0; background: radial-gradient(ellipse at 70% 30%,#e0e0da 0 10%,transparent 11%),linear-gradient(145deg,#d0d0cb,#777 48%,#c6c6c0); box-shadow: var(--cover-shadow); text-align: center; font-size: 16px; font-weight: 700; padding: 12px; }
+      .now-copy small { color: var(--muted); font-size: 13px; font-weight: 700; text-transform: uppercase; }
+      .now-copy h2 { margin: 7px 0; font-size: 22px; line-height: 1.2; }
+      .now-copy p { margin: 0; font-size: 15px; }
+      .progress-row { display: flex; align-items: center; gap: 9px; margin-top: 20px; font-size: 12px; }
+      .progress { height: 7px; flex: 1; border: 1px solid #8e918f; background: #d0d0cb; }
+      .progress i { display: block; height: 100%; width: 5%; background: #333; }
+      .resume { margin-top: 13px; font-weight: 700; }
+      .recent-heading { flex: 0 0 auto; margin: 0; text-align: left; font-size: 16px; }
+      .recent-heading-row { display: flex; flex: 0 0 auto; align-items: center; margin: 10px 0 6px; }
+      .recent-grid { display: grid; min-height: 0; flex: 1; grid-auto-rows: minmax(0,1fr); grid-template-columns: repeat(4, minmax(0,1fr)); gap: 11px; }
+      .recent-book { display: flex; min-height: 0; flex-direction: column; }
+      .recent-cover { min-height: 0; flex: 1; border: 0; background: radial-gradient(ellipse at 30% 27%,#deded8 0 11%,transparent 12%),linear-gradient(145deg,#888,#d2d2cd 48%,#5a5c5a); box-shadow: var(--cover-shadow); }
+      .recent-book:nth-child(2) .recent-cover { background: radial-gradient(ellipse at 67% 52%,#ddd 0 15%,transparent 16%),linear-gradient(35deg,#585a58,#c8c9c3 53%,#777); }
+      .recent-book:nth-child(3) .recent-cover { background: radial-gradient(circle at 52% 32%,#e4e4de 0 11%,transparent 12%),linear-gradient(160deg,#555,#bdbeb8 55%,#777); }
+      .recent-book:nth-child(4) .recent-cover { background: radial-gradient(ellipse at 37% 63%,#ddd 0 18%,transparent 19%),linear-gradient(25deg,#6a6c6a,#c7c8c2 60%,#555); }
+      .recent-book span { display: block; flex: 0 0 auto; overflow: hidden; margin-top: 5px; text-align: left; font-size: 11px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+      .dock { position: absolute; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(4,1fr); height: 82px; padding-bottom: 4px; border-top: 1px solid #777; background: var(--paper); }
+      .dock button { display: grid; place-items: center; border: 0; border-top: 2px solid transparent; background: transparent; color: var(--ink); }
+      .dock button.active { border-top-color: var(--ink); }
+      .dock svg { width: 39px; height: 39px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .settings-panel { position: absolute; top: 102px; right: 15px; z-index: 5; display: none; width: min(290px, calc(100% - 30px)); max-height: calc(100% - 195px); overflow-y: auto; border: 1px solid #777; background: var(--paper); box-shadow: 4px 5px 0 #5558; }
+      .settings-panel.open { display: block; }
+      .title-mode-panel { position: absolute; top: 48px; right: 48px; z-index: 6; display: none; width: min(235px, calc(100% - 30px)); border: 1px solid #777; background: var(--paper); box-shadow: 4px 5px 0 #5558; }
+      .title-mode-panel.open { display: block; }
+      .title-mode-option { display: flex; width: 100%; min-height: 42px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 11px; border: 0; border-bottom: 1px solid #d0d0ca; background: transparent; color: var(--ink); text-align: left; font: inherit; font-size: 12px; }
+      .title-mode-option[aria-checked='true'] { font-weight: 700; }
+      .title-mode-option[aria-checked='true']::after { content: '✓'; }
+      .settings-row { display: flex; width: 100%; align-items: center; gap: 9px; min-height: 40px; padding: 7px 10px; border: 0; background: transparent; color: var(--ink); text-align: left; font: inherit; font-size: 13px; }
+      .settings-row:hover { background: #e5e5df; }
+      .settings-icon { width: 18px; flex: 0 0 18px; text-align: center; font-size: 15px; }
+      .settings-label { min-width: 0; flex: 1; }
+      .settings-detail { display: block; margin: -4px 10px 6px 37px; color: var(--muted); font-size: 10px; }
+      .settings-check { width: 15px; text-align: right; }
+      .settings-divider { height: 1px; margin: 3px 8px; border: 0; background: #b6b8b3; }
+      .advanced-items { display: none; padding-left: 18px; }
+      .advanced-items.open { display: block; }
+      .demo-note { margin: 12px auto 0; max-width: 560px; color: #4f5351; font-size: 12px; }
+      @media (max-width: 480px) {
+        body { padding: 10px; }
+        .device { padding: 8px; border-radius: 14px; }
+        .screen-view { padding-right: 13px; padding-left: 13px; }
+        .book-grid { gap: 12px 10px; }
+        .cover { padding: 6px; border-radius: 4px; }
+        .date { margin-bottom: 20px; font-size: 17px; }
+        .now-reading { gap: 24px; }
+        .now-copy h2 { font-size: 18px; }
+      }
+      @media (max-height: 760px) {
+        .clock { font-size: clamp(48px, 8vh, 80px); }
+        .home-cover { height: min(16vh, 7rem); }
+        .date { margin-bottom: 8px; }
+        .recent-heading { margin-top: 8px; }
+        .now-copy h2 { margin: 4px 0; font-size: 18px; }
+        .now-copy p { margin: 4px 0 0; font-size: 13px; }
+        .progress-row { margin-top: 8px; }
+        .resume { margin-top: 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="demo">
+      <div class="demo-heading">
+        <h1>Readest · SimpleUI</h1>
+        <span>iReader Ocean 5 Pro · 1264 × 1680</span>
+      </div>
+      <div class="device">
+        <div class="screen">
+          <div class="status">
+            <span>21:41</span>
+            <div class="status-right"><span class="wifi" aria-label="Wi-Fi"></span><span class="battery" aria-label="Battery"></span><span>45%</span></div>
+          </div>
+
+          <section id="home" class="screen-view active">
+            <div class="home">
+              <div class="clock">21:41</div>
+              <div class="date">Sat Nov 07 2026</div>
+              <div class="now-reading">
+                <div class="home-cover">Dungeon<br />Meshi<br /><small>8</small></div>
+                <div class="now-copy">
+                  <small>Currently Reading</small>
+                  <h2>Dungeon Meshi<br />สูตรลับตำรับดันเจียน เล่ม 8</h2>
+                  <p>Ryoko Kui, 九井諒子</p>
+                  <div class="progress-row"><div class="progress"><i></i></div><span>5%</span></div>
+                  <div class="resume">Continue reading →</div>
+                </div>
+              </div>
+              <div class="recent-heading-row"><h3 class="recent-heading">Recently read</h3></div>
+              <div class="recent-grid">
+                <div class="recent-book"><div class="recent-cover"></div></div>
+                <div class="recent-book"><div class="recent-cover"></div></div>
+                <div class="recent-book"><div class="recent-cover"></div></div>
+                <div class="recent-book"><div class="recent-cover"></div></div>
+              </div>
+            </div>
+          </section>
+
+          <section id="library" class="screen-view">
+            <header class="library-header">
+              <div class="library-search">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 5 5"></path></svg>
+                <span class="search-placeholder">Search in 7 books…</span>
+                <span class="search-divider" aria-hidden="true"></span>
+                <button class="search-action" aria-label="Import books">+</button>
+              </div>
+              <div class="header-actions">
+                <button id="view-menu-toggle" class="header-icon" aria-label="View menu" title="View menu"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><circle cx="8" cy="12" r=".7" fill="currentColor"></circle><circle cx="12" cy="12" r=".7" fill="currentColor"></circle><circle cx="16" cy="12" r=".7" fill="currentColor"></circle></svg></button>
+                <button id="library-title-toggle" class="header-icon" aria-label="Book title display" title="Book title display">Aa</button>
+                <button id="settings-toggle" class="header-icon" aria-label="Readest Settings" title="Readest Settings"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+              </div>
+            </header>
+            <div class="book-grid">
+              <article class="book"><div class="cover"><span class="cover-num">#10</span><span class="cover-title">สูตรลับตำรับ<br />ดันเจียน</span></div><div class="book-title">Dungeon Meshi เล่ม 10</div></article>
+              <article class="book"><div class="cover alt1"><span class="cover-num">#11</span><span class="cover-title">สูตรลับตำรับ<br />ดันเจียน</span></div><div class="book-title">Dungeon Meshi เล่ม 11</div></article>
+              <article class="book"><div class="cover alt2"><span class="cover-num">#12</span><span class="cover-title">สูตรลับตำรับ<br />ดันเจียน</span></div><div class="book-title">Dungeon Meshi เล่ม 12</div></article>
+              <article class="book"><div class="cover alt3"><span class="cover-num">#13</span><span class="cover-title">สูตรลับตำรับ<br />ดันเจียน</span></div><div class="book-title">Dungeon Meshi เล่ม 13</div></article>
+              <article class="book"><div class="cover alt4"><span class="cover-num">#14</span><span class="cover-title">สูตรลับตำรับ<br />ดันเจียน</span></div><div class="book-title">Dungeon Meshi เล่ม 14</div></article>
+              <article class="book"><div class="cover alt5"><span class="cover-num">#1</span><span class="cover-title">天影</span></div><div class="book-title">ท่านอาจารย์ข้าคือจอมยุทธ์</div></article>
+            </div>
+          </section>
+
+          <aside id="settings-panel" class="settings-panel" aria-label="Readest settings menu">
+            <button class="settings-row"><span class="settings-icon">♙</span><span class="settings-label">Sign In</span></button>
+            <button class="settings-row"><span class="settings-icon">▤</span><span class="settings-label">Shelf Sync</span></button>
+            <div class="settings-detail">GrimmLink shelf sync status</div>
+            <button class="settings-row" aria-pressed="true"><span class="settings-icon">▦</span><span class="settings-label">Simple UI Mode</span><span class="settings-check">✓</span></button>
+            <button class="settings-row"><span class="settings-icon">✓</span><span class="settings-label">Auto Import on File Open</span><span class="settings-check">✓</span></button>
+            <button class="settings-row"><span class="settings-icon">✓</span><span class="settings-label">Open Last Book on Start</span><span class="settings-check">✓</span></button>
+            <hr class="settings-divider" />
+            <button class="settings-row"><span class="settings-icon">◉</span><span class="settings-label">Always Show Status Bar</span><span class="settings-check">✓</span></button>
+            <button class="settings-row"><span class="settings-icon">◐</span><span class="settings-label">Auto Mode</span></button>
+            <button class="settings-row"><span class="settings-icon">▥</span><span class="settings-label">Reading Statistics</span></button>
+            <button class="settings-row"><span class="settings-icon">⚙</span><span class="settings-label">Settings</span></button>
+            <hr class="settings-divider" />
+            <button id="advanced-toggle" class="settings-row" aria-expanded="false"><span class="settings-icon">⋯</span><span class="settings-label">Advanced Settings</span><span>›</span></button>
+            <div id="advanced-items" class="advanced-items">
+              <button class="settings-row"><span class="settings-icon">▣</span><span class="settings-label">Backup &amp; Restore</span></button>
+              <button class="settings-row"><span class="settings-icon">⌂</span><span class="settings-label">Change Data Location</span></button>
+              <button class="settings-row"><span class="settings-icon">⟳</span><span class="settings-label">Refresh Metadata</span></button>
+              <button class="settings-row"><span class="settings-icon">▤</span><span class="settings-label">Manage Cache</span></button>
+              <button class="settings-row"><span class="settings-icon">▣</span><span class="settings-label">Save Book Cover</span><span class="settings-check">✓</span></button>
+            </div>
+            <hr class="settings-divider" />
+            <button class="settings-row"><span class="settings-icon">ⓘ</span><span class="settings-label">About Readest</span></button>
+          </aside>
+          <aside id="title-mode-panel" class="title-mode-panel" aria-label="Book title display" role="radiogroup">
+            <button class="title-mode-option" data-mode="hidden" role="radio" aria-checked="false">ซ่อนหมด</button>
+            <button class="title-mode-option" data-mode="cover" role="radio" aria-checked="true">มีชื่อบนปก</button>
+            <button class="title-mode-option" data-mode="below" role="radio" aria-checked="false">ชื่อใต้ปก</button>
+          </aside>
+
+          <nav class="dock" aria-label="SimpleUI navigation">
+            <button id="library-tab" aria-label="Library"><svg viewBox="0 0 48 48"><path d="M8 10h8v29H8zM20 7h8v32h-8zM32 13h7l7 26h-8z"></path></svg></button>
+            <button id="home-tab" class="active" aria-label="Home"><svg viewBox="0 0 48 48"><path d="m5 23 19-16 19 16h-5v18H27V29h-7v12H10V23zM35 15v-6h5v10"></path></svg></button>
+            <button id="sync-tab" aria-label="GrimmLink Shelf Sync" title="GrimmLink Shelf Sync"><svg viewBox="0 0 48 48"><path d="M11 5h26v38H11zM15 10h18M24 17v15m-6-6 6 6 6-6M18 38h12"></path></svg></button>
+            <button id="quit-tab" aria-label="Quit app" title="Quit app"><svg viewBox="0 0 48 48"><path d="M24 5v20M12 12a18 18 0 1 0 24 0"></path></svg></button>
+          </nav>
+        </div>
+      </div>
+      <p class="demo-note">เมนู Settings เดิมของ Readest อยู่ที่ไอคอน ☰ มุมขวาบนของ Library · ลองกด Home / Library และ ☰ เพื่อดู interaction</p>
+    </main>
+    <script>
+      const home = document.querySelector('#home');
+      const library = document.querySelector('#library');
+      const homeTab = document.querySelector('#home-tab');
+      const libraryTab = document.querySelector('#library-tab');
+      const settings = document.querySelector('#settings-panel');
+      const titleModePanel = document.querySelector('#title-mode-panel');
+      function show(view) {
+        const onHome = view === 'home';
+        home.classList.toggle('active', onHome);
+        library.classList.toggle('active', !onHome);
+        homeTab.classList.toggle('active', onHome);
+        libraryTab.classList.toggle('active', !onHome);
+        settings.classList.remove('open');
+        titleModePanel.classList.remove('open');
+      }
+      homeTab.addEventListener('click', () => show('home'));
+      libraryTab.addEventListener('click', () => show('library'));
+      document.querySelector('#settings-toggle').addEventListener('click', () => {
+        titleModePanel.classList.remove('open');
+        settings.classList.toggle('open');
+      });
+      document.querySelector('#library-title-toggle').addEventListener('click', () => {
+        settings.classList.remove('open');
+        titleModePanel.classList.toggle('open');
+      });
+      document.querySelector('#advanced-toggle').addEventListener('click', (event) => {
+        const expanded = document.querySelector('#advanced-items').classList.toggle('open');
+        event.currentTarget.setAttribute('aria-expanded', String(expanded));
+      });
+      const legacyTitleStorageKey = 'readest.simpleui.showBookTitles';
+      const titleModeStorageKey = 'readest.simpleui.bookTitleMode';
+      const updateTitleMode = (mode) => {
+        localStorage.setItem(titleModeStorageKey, mode);
+        library.classList.remove('mode-hidden', 'mode-cover', 'mode-below');
+        library.classList.add(`mode-${mode}`);
+        document.querySelectorAll('.title-mode-option').forEach((option) => {
+          option.setAttribute('aria-checked', String(option.dataset.mode === mode));
+        });
+      };
+      const savedTitleMode = localStorage.getItem(titleModeStorageKey);
+      const legacyTitleChoice = localStorage.getItem(legacyTitleStorageKey);
+      updateTitleMode(
+        ['hidden', 'cover', 'below'].includes(savedTitleMode)
+          ? savedTitleMode
+          : legacyTitleChoice === 'false'
+            ? 'hidden'
+            : legacyTitleChoice === 'true'
+              ? 'below'
+              : 'cover',
+      );
+      document.querySelectorAll('.title-mode-option').forEach((option) => {
+        option.addEventListener('click', () => {
+          updateTitleMode(option.dataset.mode);
+          titleModePanel.classList.remove('open');
+        });
+      });
+      document.querySelector('#sync-tab').addEventListener('click', () => alert('GrimmLink Shelf Sync shortcut'));
+      document.querySelector('#quit-tab').addEventListener('click', () => alert('Quit app shortcut'));
+    </script>
+  </body>
+</html>
