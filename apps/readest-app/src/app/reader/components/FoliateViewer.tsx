@@ -129,6 +129,8 @@ import AutoScrollControl from './AutoScrollControl';
 import AutoScrollSpeedOverlay from './AutoScrollSpeedOverlay';
 import Spinner from '@/components/Spinner';
 import KOSyncConflictResolver from './KOSyncResolver';
+import GrimmLinkConflictResolver from './GrimmLinkConflictResolver';
+import { useGrimmLinkSync } from '../hooks/useGrimmLinkSync';
 import ImageViewer from './ImageViewer';
 import ImageContextMenu from './ImageContextMenu';
 import TableViewer from './TableViewer';
@@ -240,6 +242,7 @@ const FoliateViewer: React.FC<{
   const { syncState, conflictDetails, resolveWithLocal, resolveWithRemote } = useKOSync(bookKey);
   const bookOrbitSync = useKOSync(bookKey, bookOrbitProgressProvider);
   const grimmorySync = useKOSync(bookKey, grimmoryProgressProvider);
+  const grimmlinkSync = useGrimmLinkSync(bookKey);
   useFileSync(bookKey);
   useTextTranslation(bookKey, viewRef.current);
 
@@ -1559,6 +1562,14 @@ const FoliateViewer: React.FC<{
           onResolveWithLocal={grimmorySync.resolveWithLocal}
           onResolveWithRemote={grimmorySync.resolveWithRemote}
           onClose={grimmorySync.resolveWithLocal}
+        />
+      )}
+      {grimmlinkSync.syncState === 'conflict' && grimmlinkSync.conflictDetails && (
+        <GrimmLinkConflictResolver
+          details={grimmlinkSync.conflictDetails}
+          onResolveWithLocal={grimmlinkSync.resolveWithLocal}
+          onResolveWithRemote={grimmlinkSync.resolveWithRemote}
+          onClose={grimmlinkSync.dismissConflict}
         />
       )}
     </>

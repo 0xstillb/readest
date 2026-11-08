@@ -715,9 +715,23 @@ export async function setReadingWidgetCatalog(catalog: ReadingWidgetCatalog): Pr
 export async function verifyUpdateSignature(
   path: string,
   signature: string,
-  pubKey: string,
+  signingChannel: 'nightly' | 'stable',
 ): Promise<boolean> {
-  return invoke<boolean>('verify_update_signature', { path, signature, pubKey });
+  return invoke<boolean>('verify_update_signature', { path, signature, signingChannel });
+}
+
+export async function installPortableUpdate(
+  sourcePath: string,
+  version: string,
+  signature: string,
+  signingChannel: 'nightly' | 'stable',
+): Promise<string> {
+  return invoke<string>('install_portable_update', {
+    sourcePath,
+    version,
+    signature,
+    signingChannel,
+  });
 }
 
 export interface NightlyProgress {

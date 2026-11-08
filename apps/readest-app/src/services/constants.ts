@@ -22,6 +22,7 @@ import {
   PageboundSettings,
   BookOrbitSettings,
   GrimmorySettings,
+  GrimmLinkSettings,
   KOSyncSettings,
   LibraryGroupByType,
   LibrarySortByType,
@@ -103,6 +104,7 @@ export const DEFAULT_KOSYNC_SETTINGS = {
 export const DEFAULT_BOOKORBIT_SETTINGS = {
   enabled: false,
   serverUrl: '',
+  allowSelfSignedCertificate: false,
   username: '',
   userkey: '',
   deviceId: '',
@@ -126,6 +128,19 @@ export const DEFAULT_GRIMMORY_SETTINGS: GrimmorySettings = {
   syncStats: true,
   syncBookStates: true,
 };
+export const DEFAULT_GRIMMLINK_SETTINGS = {
+  enabled: false,
+  serverUrl: '',
+  username: '',
+  userkey: '',
+  deviceId: '',
+  deviceName: '',
+  strategy: 'prompt',
+  syncProgress: false,
+  syncMetadata: false,
+  syncSessions: false,
+  syncReadStatus: false,
+} as GrimmLinkSettings;
 
 export const READWISE_API_BASE_URL = 'https://readwise.io/api/v2';
 
@@ -255,6 +270,7 @@ export const DEFAULT_SYSTEM_SETTINGS: Partial<SystemSettings> = {
   openLastBooks: false,
   lastOpenBooks: [],
   autoImportBooksOnOpen: false,
+  einkOptimization: 'auto',
   telemetryEnabled: true,
   discordRichPresenceEnabled: false,
   libraryViewMode: 'grid',
@@ -289,6 +305,7 @@ export const DEFAULT_SYSTEM_SETTINGS: Partial<SystemSettings> = {
   kosync: DEFAULT_KOSYNC_SETTINGS,
   bookorbit: DEFAULT_BOOKORBIT_SETTINGS,
   grimmory: DEFAULT_GRIMMORY_SETTINGS,
+  grimmlink: DEFAULT_GRIMMLINK_SETTINGS,
   readwise: DEFAULT_READWISE_SETTINGS,
   hardcover: DEFAULT_HARDCOVER_SETTINGS,
   pagebound: DEFAULT_PAGEBOUND_SETTINGS,
@@ -1013,7 +1030,7 @@ export const SHARE_TOKEN_LENGTH = 22;
 export const SHARE_PRESIGN_TTL_SECONDS = 300;
 export const SHARE_CFI_MAX_LENGTH = 512;
 
-const LATEST_DOWNLOAD_BASE_URL = 'https://download.readest.com/releases';
+const LATEST_DOWNLOAD_BASE_URL = 'https://github.com/0xstillb/readest/releases/latest/download';
 
 export const READEST_UPDATER_FILE = `${LATEST_DOWNLOAD_BASE_URL}/latest.json`;
 
@@ -1021,7 +1038,8 @@ export const READEST_CHANGELOG_FILE = `${LATEST_DOWNLOAD_BASE_URL}/release-notes
 
 export const READEST_NIGHTLY_UPDATER_FILE = 'https://download.readest.com/nightly/latest.json';
 
-// Public (verification) key, identical to src-tauri/tauri.conf.json `updater.pubkey`.
+// Public key for the shared upstream nightly feed. The stable Tauri updater
+// uses the fork-specific key embedded in src-tauri/tauri.conf.json instead.
 // Used to verify nightly artifacts in the custom install flows (portable /
 // AppImage / Android). Safe to embed — it is a public key.
 export const READEST_UPDATER_PUBKEY =

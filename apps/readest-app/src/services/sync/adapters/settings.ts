@@ -73,6 +73,11 @@ export const SETTINGS_WHITELIST = [
   'bookorbit.userkey',
   'bookorbit.password',
   'bookorbit.customHeaders',
+  'grimmlink.serverUrl',
+  'grimmlink.fallbackUrl',
+  'grimmlink.username',
+  'grimmlink.userkey',
+  'grimmlink.customHeaders',
   'bookorbit.allowSelfSignedCert',
   'grimmory.serverUrl',
   'grimmory.username',
@@ -166,6 +171,9 @@ export const SETTINGS_ENCRYPTED_FIELDS = [
   'grimmory.username',
   'grimmory.password',
   'grimmory.customHeaders',
+  'grimmlink.username',
+  'grimmlink.userkey',
+  'grimmlink.customHeaders',
   'readwise.accessToken',
   'hardcover.accessToken',
   'notion.accessToken',
@@ -189,6 +197,7 @@ const OBJECT_VALUED_ENCRYPTED_PATHS = [
   'kosync.customHeaders',
   'bookorbit.customHeaders',
   'grimmory.customHeaders',
+  'grimmlink.customHeaders',
 ] as const;
 
 // In practice every path comes from the compile-time SETTINGS_WHITELIST so

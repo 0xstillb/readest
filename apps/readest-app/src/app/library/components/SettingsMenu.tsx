@@ -3,7 +3,13 @@ import React, { useEffect, useState } from 'react';
 import { PiUserCircle, PiUserCircleCheck, PiGear, PiChartBar, PiCardsThree } from 'react-icons/pi';
 import { PiSun, PiMoon } from 'react-icons/pi';
 import { TbSunMoon } from 'react-icons/tb';
-import { MdCloudSync, MdSync, MdSyncProblem, MdOutlineSensors } from 'react-icons/md';
+import {
+  MdCloudSync,
+  MdSync,
+  MdSyncProblem,
+  MdOutlineSensors,
+  MdOutlineCollectionsBookmark,
+} from 'react-icons/md';
 
 import { useAppRouter } from '@/hooks/useAppRouter';
 import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
@@ -19,6 +25,7 @@ import { useQuotaStats } from '@/hooks/useQuotaStats';
 import { isReadestCloudEnabled } from '@/services/sync/cloudSyncProvider';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import { useGrimmLinkShelfSync } from '@/hooks/useGrimmLinkShelfSync';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useCloudSyncStatus } from '@/hooks/useCloudSyncStatus';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
@@ -41,6 +48,8 @@ import MenuItem from '@/components/MenuItem';
 import Quota from '@/components/Quota';
 import Menu from '@/components/Menu';
 import { type AppLockDialogMode, useAppLockStore } from '@/store/appLockStore';
+import GrimmLinkShelfSyncStatus from '@/components/settings/integrations/GrimmLinkShelfSyncStatus';
+import useSimpleUIMode from '@/components/simpleui/useSimpleUIMode';
 
 interface SettingsMenuProps {
   onPullLibrary: (fullRefresh?: boolean, verbose?: boolean) => void;
@@ -54,7 +63,8 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   const { user } = useAuth();
   const { userProfilePlan, quotas } = useQuotaStats(true);
   const { themeMode, setThemeMode } = useThemeStore();
-  const { settings, setSettingsDialogOpen } = useSettingsStore();
+  const { settings, setSettingsDialogOpen, setRequestedPanel, setRequestedSubPage } =
+    useSettingsStore();
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(settings.alwaysOnTop);
   const [isOpenLastBooks, setIsOpenLastBooks] = useState(settings.openLastBooks);
   const [isAutoImportBooksOnOpen, setIsAutoImportBooksOnOpen] = useState(
@@ -72,6 +82,7 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometryLabelKey, setBiometryLabelKey] = useState('');
   const showBiometricToggle = !!appService?.isMobileApp && isPinEnabled && biometricAvailable;
+  const { enabled: simpleUIEnabled, setEnabled: setSimpleUIEnabled } = useSimpleUIMode();
 
   useEffect(() => {
     if (!isBiometricSupported(appService) || !isPinEnabled) return;
@@ -251,6 +262,18 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
     setIsDropdownOpen?.(false);
   };
 
+  const { handleShelfSync, cancelShelfSync, shelfSyncing, shelfSyncStatus } = useGrimmLinkShelfSync(
+    {
+      settings: settings.grimmlink,
+      closeMenu: () => setIsDropdownOpen?.(false),
+      onConfigure: () => {
+        setRequestedPanel('Integrations');
+        setRequestedSubPage('grimmlink');
+        setSettingsDialogOpen(true);
+      },
+    },
+  );
+
   const avatarUrl = user?.user_metadata?.['picture'] || user?.user_metadata?.['avatar_url'];
   const userFullName = user?.user_metadata?.['full_name'];
   const userDisplayName = userFullName ? userFullName.split(' ')[0] : null;
@@ -372,6 +395,26 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
         }
         onClick={openTransferQueue}
       />
+      <MenuItem
+        label={shelfSyncing ? _('Syncing shelf…') : _('Shelf Sync')}
+        Icon={MdOutlineCollectionsBookmark}
+        onClick={handleShelfSync}
+        disabled={shelfSyncing}
+        iconClassName={shelfSyncing ? 'animate-reverse-spin' : ''}
+      />
+      <GrimmLinkShelfSyncStatus
+        syncing={shelfSyncing}
+        status={shelfSyncStatus}
+        onCancel={cancelShelfSync}
+        compact
+      />
+
+      <MenuItem
+        label={_('Simple UI Mode')}
+        toggled={simpleUIEnabled}
+        onClick={() => setSimpleUIEnabled(!simpleUIEnabled)}
+      />
+
       {isTauriAppPlatform() && (
         <MenuItem
           label={_('Auto Import on File Open')}

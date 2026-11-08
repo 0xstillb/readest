@@ -88,6 +88,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 // ── Helper to create a dummy TranslationFunc ─────────────────────
@@ -114,6 +115,16 @@ describe('updater', () => {
 
   // ── checkForAppUpdates ─────────────────────────────────────────
   describe('checkForAppUpdates', () => {
+    test('does not contact upstream when updates are disabled for a fork build', async () => {
+      vi.stubEnv('NEXT_PUBLIC_DISABLE_UPDATER', 'true');
+
+      const result = await checkForAppUpdates(dummyTranslate, false);
+
+      expect(result).toBe(false);
+      expect(mockCheck).not.toHaveBeenCalled();
+      expect(mockTauriFetch).not.toHaveBeenCalled();
+    });
+
     test('skips check when auto-check and interval has not elapsed', async () => {
       const now = Date.now();
       localStorage.setItem('lastAppUpdateCheck', now.toString());
@@ -202,7 +213,7 @@ describe('updater', () => {
         json: () =>
           Promise.resolve({
             version: '2.0.0',
-            platforms: { 'android-arm64': {} },
+            platforms: { 'android-arm64': { url: 'https://x/app.apk', signature: 'sig' } },
           }),
       });
 
@@ -221,7 +232,7 @@ describe('updater', () => {
         json: () =>
           Promise.resolve({
             version: '2.0.0',
-            platforms: { 'android-armv7': {} },
+            platforms: { 'android-armv7': { url: 'https://x/app.apk', signature: 'sig' } },
           }),
       });
 
@@ -241,10 +252,10 @@ describe('updater', () => {
           Promise.resolve({
             version: '2.0.0',
             platforms: {
-              'android-arm64': {},
-              'android-armv7': {},
-              'android-legacy': {},
-              'android-universal': {},
+              'android-arm64': { url: 'https://x/app-arm64.apk', signature: 'arm64-sig' },
+              'android-armv7': { url: 'https://x/app-armv7.apk', signature: 'armv7-sig' },
+              'android-legacy': { url: 'https://x/app-legacy.apk', signature: 'legacy-sig' },
+              'android-universal': { url: 'https://x/app-armv7.apk', signature: 'armv7-sig' },
             },
           }),
       });
@@ -253,6 +264,25 @@ describe('updater', () => {
 
       expect(result).toBe(true);
       expect(mockSetUpdaterWindowVisible).toHaveBeenCalledWith(true, '2.0.0', '1.0.0');
+    });
+
+    test('does not offer an unsigned Android update', async () => {
+      mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('aarch64');
+      mockAppVersion = '1.0.0';
+
+      mockTauriFetch.mockResolvedValue({
+        json: () =>
+          Promise.resolve({
+            version: '2.0.0',
+            platforms: { 'android-arm64': { url: 'https://x/app.apk' } },
+          }),
+      });
+
+      const result = await checkForAppUpdates(dummyTranslate, false);
+
+      expect(result).toBe(false);
+      expect(mockSetUpdaterWindowVisible).not.toHaveBeenCalled();
     });
 
     test('Android shows no update when the manifest lacks this ABI', async () => {
@@ -264,7 +294,10 @@ describe('updater', () => {
         json: () =>
           Promise.resolve({
             version: '2.0.0',
-            platforms: { 'android-arm64': {}, 'android-armv7': {} },
+            platforms: {
+              'android-arm64': { url: 'https://x/app-arm64.apk', signature: 'arm64-sig' },
+              'android-armv7': { url: 'https://x/app-armv7.apk', signature: 'armv7-sig' },
+            },
           }),
       });
 
@@ -375,6 +408,16 @@ describe('updater', () => {
 
   // ── checkAppReleaseNotes ───────────────────────────────────────
   describe('checkAppReleaseNotes', () => {
+    test('does not fetch upstream release notes when updates are disabled for a fork build', async () => {
+      vi.stubEnv('NEXT_PUBLIC_DISABLE_UPDATER', 'true');
+      const mockFetchFn = vi.fn();
+      vi.stubGlobal('fetch', mockFetchFn);
+
+      await expect(checkAppReleaseNotes(false)).resolves.toBe(false);
+      expect(mockFetchFn).not.toHaveBeenCalled();
+      expect(mockTauriFetch).not.toHaveBeenCalled();
+    });
+
     test('shows release notes when current version is newer than last shown', async () => {
       mockAppVersion = '2.0.0';
       setLastShownReleaseNotesVersion('1.0.0');
@@ -519,6 +562,7 @@ describe('resolveNightlyUpdate', () => {
     const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
     expect(r?.version).toBe('0.11.4-2026061406');
     expect(r?.endpoint).toContain('nightly');
+    expect(r?.signingChannel).toBe('nightly');
   });
 
   test('picks higher-base stable over older nightly', async () => {
@@ -530,6 +574,7 @@ describe('resolveNightlyUpdate', () => {
     const r = await resolveNightlyUpdate('0.11.4-2026061406', platformKey, fetchFn as never);
     expect(r?.version).toBe('0.11.5');
     expect(r?.endpoint).not.toContain('nightly');
+    expect(r?.signingChannel).toBe('stable');
   });
 
   test('resolves the arm64 APK for an arm64 Android nightly', async () => {
@@ -565,6 +610,17 @@ describe('resolveNightlyUpdate', () => {
     );
     const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
     expect(r?.version).toBe('0.11.4-2026061406');
+  });
+
+  test('ignores an unsigned update entry', async () => {
+    const fetchFn = vi.fn(async () =>
+      mkRes({
+        version: '0.11.5',
+        platforms: { [platformKey]: { url: 'https://x/app.tar.gz' } },
+      }),
+    );
+    const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
+    expect(r).toBeNull();
   });
 
   test('returns null when nothing is newer than installed', async () => {

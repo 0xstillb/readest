@@ -132,6 +132,16 @@ fn is_within_app_storage(file_path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| file_path.starts_with(root))
 }
 
+fn is_under_executable_directory(file_path: &Path, executable_path: &Path) -> bool {
+    let Ok(executable) = resolve_path(executable_path) else {
+        return false;
+    };
+    let Some(executable_dir) = executable.parent() else {
+        return false;
+    };
+    resolve_path(file_path).is_ok_and(|resolved| resolved.starts_with(executable_dir))
+}
+
 /// A custom data location keeps every file beneath a folder named `Readest`,
 /// which the `**/Readest/**/*` fs capability already grants to the fs plugin.
 /// Match a whole path component so `Readest-agent.plist` stays foreign.
@@ -294,6 +304,13 @@ pub async fn download_file<R: tauri::Runtime>(
     use tokio::io::AsyncSeekExt;
 
     let allowed_path = ensure_path_allowed(&app, file_path)?;
+    // Older builds recursively added the install directory to persisted fs
+    // scopes. Keep the generic downloader from inheriting that stale grant;
+    // signed updater installs use install_portable_update's fixed destination.
+    let executable = std::env::current_exe().map_err(Error::Io)?;
+    if is_under_executable_directory(&allowed_path, &executable) {
+        return Err(Error::Forbidden(file_path.to_string()));
+    }
     let file_path = allowed_path.as_path();
 
     const PART_SIZE: u64 = 1024 * 1024;
@@ -529,8 +546,8 @@ fn file_to_body(channel: Channel<ProgressPayload>, file: File, file_len: u64) ->
 #[cfg(test)]
 mod tests {
     use super::{
-        has_disallowed_components, is_within_app_storage, is_within_data_dir, resolve_path,
-        resolve_request, send,
+        has_disallowed_components, is_under_executable_directory, is_within_app_storage,
+        is_within_data_dir, resolve_path, resolve_request, send,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -596,6 +613,37 @@ mod tests {
             Path::new("/Users/victim/Library/Application Support/com.bilingify.readest/Readest/Books/book.epub"),
             &roots,
         ));
+    }
+
+    #[test]
+    fn generic_download_target_rejects_executable_directory_and_siblings() {
+        let temp =
+            std::env::temp_dir().join(format!("readest-executable-scope-{}", std::process::id()));
+        let install_dir = temp.join("Downloads");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let executable = install_dir.join("Readest.exe");
+        std::fs::write(&executable, b"app").unwrap();
+
+        assert!(is_under_executable_directory(
+            &install_dir.join("Readest_1.2.3_x64-portable.exe"),
+            &executable,
+        ));
+        assert!(is_under_executable_directory(&executable, &executable));
+        assert!(!is_under_executable_directory(
+            &temp.join("Cache/update.exe"),
+            &executable,
+        ));
+        #[cfg(unix)]
+        {
+            let cache = temp.join("Cache");
+            std::fs::create_dir_all(&cache).unwrap();
+            std::os::unix::fs::symlink(&install_dir, cache.join("install-link")).unwrap();
+            assert!(is_under_executable_directory(
+                &cache.join("install-link/Readest_1.2.3_x64-portable.exe"),
+                &executable,
+            ));
+        }
+        std::fs::remove_dir_all(temp).unwrap();
     }
 
     #[cfg(unix)]

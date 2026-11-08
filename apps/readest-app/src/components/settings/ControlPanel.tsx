@@ -80,6 +80,7 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   const [pageTurnStyle, setPageTurnStyle] = useState(viewSettings.pageTurnStyle || 'push');
   const [isEink, setIsEink] = useState(viewSettings.isEink);
   const [isColorEink, setIsColorEink] = useState(viewSettings.isColorEink);
+  const [einkOptimization, setEinkOptimization] = useState(settings.einkOptimization ?? 'auto');
   const [einkAutoRefreshInterval, setEinkAutoRefreshInterval] = useState(
     viewSettings.einkAutoRefreshInterval,
   );
@@ -379,6 +380,14 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isColorEink]);
 
+  useEffect(() => {
+    if (einkOptimization === settings.einkOptimization) return;
+    saveSysSettings(envConfig, 'einkOptimization', einkOptimization);
+    // The root attribute is owned by Providers; reloading the setting here
+    // still gives the current reader an immediate response.
+    applyEinkMode(einkOptimization === 'on' || (einkOptimization === 'auto' && isEink));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [einkOptimization]);
   useEffect(() => {
     if (einkAutoRefreshInterval === viewSettings.einkAutoRefreshInterval) return;
     saveViewSettings(
@@ -731,6 +740,21 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           onChange={() => setIsEink(!isEink)}
           data-setting-id='settings.control.einkMode'
         />
+        <SettingsRow
+          label={_('E-Ink Optimization')}
+          data-setting-id='settings.control.einkOptimization'
+        >
+          <SettingsSelect
+            value={einkOptimization}
+            onChange={(event) => setEinkOptimization(event.target.value as 'auto' | 'on' | 'off')}
+            ariaLabel={_('E-Ink Optimization')}
+            options={[
+              { value: 'auto', label: _('Auto') },
+              { value: 'on', label: _('On') },
+              { value: 'off', label: _('Off') },
+            ]}
+          />
+        </SettingsRow>
         {appService?.isAndroidApp && einkRefreshSupported && (
           <SettingsRow
             label={_('Auto Full Refresh')}

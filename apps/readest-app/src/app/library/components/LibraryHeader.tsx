@@ -7,6 +7,8 @@ import { PiSelectionAll, PiSelectionAllFill } from 'react-icons/pi';
 import { PiDotsThreeCircle } from 'react-icons/pi';
 import { MdOutlineMenu } from 'react-icons/md';
 import { IoMdCloseCircle } from 'react-icons/io';
+import SimpleUITitleModeMenu from '@/components/simpleui/SimpleUITitleModeMenu';
+import useSimpleUIMode from '@/components/simpleui/useSimpleUIMode';
 
 import { useEnv } from '@/context/EnvContext';
 import { useThemeStore } from '@/store/themeStore';
@@ -78,6 +80,7 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
 }) => {
   const _ = useTranslation();
   const { appService } = useEnv();
+  const { enabled: simpleUIEnabled } = useSimpleUIMode();
   const { systemUIVisible, statusBarHeight } = useThemeStore();
   const { currentBookshelf } = useLibraryStore();
 
@@ -424,6 +427,16 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
             >
               <ViewMenu />
             </Dropdown>
+            {simpleUIEnabled && (
+              <Dropdown
+                label={_('Book title display')}
+                className='exclude-title-bar-mousedown dropdown-bottom dropdown-end'
+                buttonClassName='btn btn-ghost h-8 min-h-8 w-8 p-0 text-xs font-semibold'
+                toggleButton={<span aria-hidden='true'>Aa</span>}
+              >
+                <SimpleUITitleModeMenu />
+              </Dropdown>
+            )}
             <Dropdown
               label={_('Settings Menu')}
               className='exclude-title-bar-mousedown dropdown-bottom dropdown-end'

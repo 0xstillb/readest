@@ -1,7 +1,7 @@
 ---
 name: android-apk-size-strip-lto-6368
 description: "Why the arm64 APK was 90MB and the four things that cut it to 57MB; AGP's strip leaves .symtab, and android.ndkDirectory throws in this module."
-metadata: 
+metadata:
   node_type: memory
   type: project
   originSessionId: 2a57df55-e0fc-4741-bb9a-07aa2af236df

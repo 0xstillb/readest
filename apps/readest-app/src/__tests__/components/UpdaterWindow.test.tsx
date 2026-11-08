@@ -88,6 +88,7 @@ vi.mock('@tauri-apps/api/path', () => ({ desktopDir: vi.fn(), join: vi.fn() }));
 vi.mock('@/utils/transfer', () => ({ tauriDownload: vi.fn() }));
 vi.mock('@/utils/bridge', () => ({
   installPackage: vi.fn(),
+  installPortableUpdate: vi.fn(),
   verifyUpdateSignature: vi.fn(),
   installNightlyUpdate: mockInstallNightlyUpdate,
 }));
@@ -135,7 +136,12 @@ describe('UpdaterContent — auto-translated changelog', () => {
       ok: true,
       json: async () => ({
         version: '0.11.20',
-        platforms: { 'android-arm64': { url: 'https://example.com/update.apk' } },
+        platforms: {
+          'android-arm64': {
+            url: 'https://example.com/update.apk',
+            signature: 'test-signature',
+          },
+        },
       }),
     } as Response);
 
@@ -152,10 +158,22 @@ describe('UpdaterContent — auto-translated changelog', () => {
   const SPLIT_MANIFEST = {
     version: '0.11.20',
     platforms: {
-      'android-arm64': { url: 'https://example.com/Readest_0.11.20_arm64.apk' },
-      'android-armv7': { url: 'https://example.com/Readest_0.11.20_armv7.apk' },
-      'android-legacy': { url: 'https://example.com/Readest_0.11.20_legacy.apk' },
-      'android-universal': { url: 'https://example.com/Readest_0.11.20_armv7.apk' },
+      'android-arm64': {
+        url: 'https://example.com/Readest_0.11.20_arm64.apk',
+        signature: 'test-signature',
+      },
+      'android-armv7': {
+        url: 'https://example.com/Readest_0.11.20_armv7.apk',
+        signature: 'test-signature',
+      },
+      'android-legacy': {
+        url: 'https://example.com/Readest_0.11.20_legacy.apk',
+        signature: 'test-signature',
+      },
+      'android-universal': {
+        url: 'https://example.com/Readest_0.11.20_armv7.apk',
+        signature: 'test-signature',
+      },
     },
   };
 
@@ -194,6 +212,7 @@ describe('UpdaterContent — auto-translated changelog', () => {
         latestVersion='0.11.20'
         nightlyUpdate={{
           endpoint: 'https://example.com/nightly.json',
+          signingChannel: 'nightly',
           version: '0.11.20',
           platformKey: 'windows-x86_64',
           url: 'https://example.com/readest.exe',

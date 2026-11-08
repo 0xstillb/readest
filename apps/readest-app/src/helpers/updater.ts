@@ -16,6 +16,7 @@ import {
 } from '@/services/constants';
 
 const LAST_CHECK_KEY = 'lastAppUpdateCheck';
+const isUpdaterDisabled = () => Boolean(process.env['NEXT_PUBLIC_DISABLE_UPDATER']);
 
 const showUpdateWindow = (latestVersion: string, scrollBarStyle: ScrollBarStyle) => {
   const win = new WebviewWindow('updater', {
@@ -49,6 +50,7 @@ export interface UpdateManifest {
 }
 export interface ResolvedNightlyUpdate {
   endpoint: string; // manifest URL (for the Tauri UpdaterBuilder path)
+  signingChannel: 'nightly' | 'stable';
   version: string;
   notes?: string;
   pubDate?: string;
@@ -127,6 +129,7 @@ export const resolveNightlyUpdate = async (
     if (!isUpdateNewer(manifest.version, currentVersion)) continue;
     candidates.push({
       endpoint,
+      signingChannel: endpoint === READEST_NIGHTLY_UPDATER_FILE ? 'nightly' : 'stable',
       version: manifest.version,
       notes: manifest.notes,
       pubDate: manifest.pub_date,
@@ -147,6 +150,8 @@ export const checkForAppUpdates = async (
   isAutoCheck = true,
   updateChannel: 'stable' | 'nightly' = 'stable',
 ): Promise<boolean> => {
+  if (isUpdaterDisabled()) return false;
+
   const lastCheck = localStorage.getItem(LAST_CHECK_KEY);
   const now = Date.now();
   if (isAutoCheck && lastCheck && now - parseInt(lastCheck, 10) < CHECK_UPDATE_INTERVAL_SEC * 1000)
@@ -188,10 +193,13 @@ export const checkForAppUpdates = async (
         const response = await fetch(READEST_UPDATER_FILE, { connectTimeout: 5000 });
         const data = await response.json();
         const isNewer = semver.gt(data.version, getAppVersion());
-        if (isNewer && getAndroidPlatformKey(osArch()) in data.platforms) {
+        const platformKey = getAndroidPlatformKey(osArch());
+        const entry = data.platforms?.[platformKey];
+        if (isNewer && entry?.url && entry?.signature) {
           setUpdaterWindowVisible(true, data.version!, getAppVersion());
+          return true;
         }
-        return isNewer;
+        return false;
       } catch (err) {
         console.warn('Failed to fetch Android update info', err);
         throw new Error('Failed to fetch Android update info');
@@ -222,6 +230,8 @@ export const getLastShownReleaseNotesVersion = () => {
 };
 
 export const checkAppReleaseNotes = async (isAutoCheck = true) => {
+  if (isUpdaterDisabled()) return false;
+
   const currentVersion = getAppVersion();
   const lastShownVersion = getLastShownReleaseNotesVersion();
   if ((lastShownVersion && semver.gt(currentVersion, lastShownVersion)) || !isAutoCheck) {

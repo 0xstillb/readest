@@ -7,7 +7,7 @@ import { PiGear, PiChartBar, PiCardsThree } from 'react-icons/pi';
 import { TbSunMoon } from 'react-icons/tb';
 import { MdZoomOut, MdZoomIn, MdCheck, MdInfoOutline, MdOutlineSensors } from 'react-icons/md';
 import { MdRemove, MdAdd, MdContrast } from 'react-icons/md';
-import { MdSync, MdSyncProblem } from 'react-icons/md';
+import { MdOutlineCollectionsBookmark, MdSync, MdSyncProblem } from 'react-icons/md';
 import { IoMdExpand } from 'react-icons/io';
 import { IoShareOutline } from 'react-icons/io5';
 import { setReadingStatsDialogVisible } from '@/components/stats/ReadingStatsDialog';
@@ -41,9 +41,11 @@ import { getCurrentRendererLayout, useDuoPose } from '@/hooks/useDuoPose';
 import { nextThemeMode } from '@/utils/ambientLight';
 import { saveViewSettings } from '@/helpers/settings';
 import { canToggleFullScreen, toggleFullScreen } from '@/utils/window';
+import { useGrimmLinkShelfSync } from '@/hooks/useGrimmLinkShelfSync';
 import { setCoverSpread } from '@/utils/spread';
 import MenuItem from '@/components/MenuItem';
 import Menu from '@/components/Menu';
+import GrimmLinkShelfSyncStatus from '@/components/settings/integrations/GrimmLinkShelfSyncStatus';
 
 interface ViewMenuProps {
   bookKey: string;
@@ -60,7 +62,13 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
   const router = useRouter();
   const { user } = useAuth();
   const { envConfig, appService } = useEnv();
-  const { setSettingsDialogOpen, setSettingsDialogBookKey } = useSettingsStore();
+  const {
+    settings,
+    setSettingsDialogOpen,
+    setSettingsDialogBookKey,
+    setRequestedPanel,
+    setRequestedSubPage,
+  } = useSettingsStore();
   const { getView, getViewSettings, getViewState, getProgress, setViewSettings, recreateViewer } =
     useReaderStore();
   const config = useBookConfig(bookKey)!;
@@ -183,6 +191,19 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
     // and the flush above does nothing, so ask it for a real push.
     eventDispatcher.dispatch('push-kosync', { bookKey, provider: 'bookorbit' });
   };
+
+  const { handleShelfSync, cancelShelfSync, shelfSyncing, shelfSyncStatus } = useGrimmLinkShelfSync(
+    {
+      settings: settings?.grimmlink,
+      closeMenu: () => setIsDropdownOpen?.(false),
+      onConfigure: () => {
+        setSettingsDialogBookKey(bookKey);
+        setRequestedPanel('Integrations');
+        setRequestedSubPage('grimmlink');
+        setSettingsDialogOpen(true);
+      },
+    },
+  );
 
   const handleStartRSVP = () => {
     setIsDropdownOpen?.(false);
@@ -591,6 +612,19 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
             <MdInfoOutline size={16} />
           </button>
         }
+      />
+
+      <MenuItem
+        label={shelfSyncing ? _('Syncing shelf…') : _('Shelf Sync')}
+        Icon={MdOutlineCollectionsBookmark}
+        onClick={handleShelfSync}
+        disabled={shelfSyncing}
+      />
+      <GrimmLinkShelfSyncStatus
+        syncing={shelfSyncing}
+        status={shelfSyncStatus}
+        onCancel={cancelShelfSync}
+        compact
       />
 
       <hr aria-hidden='true' className='border-base-300 my-1' />

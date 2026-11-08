@@ -86,10 +86,14 @@ vi.mock('@/store/bookDataStore', () => ({
   })),
 }));
 vi.mock('@/store/settingsStore', () => {
-  const useSettingsStore = () => ({
+  const state = {
+    settings: { grimmlink: {}, alwaysShowStatusBar: false },
     setSettingsDialogOpen: vi.fn(),
     setSettingsDialogBookKey: vi.fn(),
-  });
+    setRequestedPanel: vi.fn(),
+    setRequestedSubPage: vi.fn(),
+  };
+  const useSettingsStore = () => state;
   useSettingsStore.getState = () => ({ settings: { alwaysShowStatusBar: false } });
   return { useSettingsStore };
 });

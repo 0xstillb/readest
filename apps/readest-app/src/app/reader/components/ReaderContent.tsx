@@ -266,6 +266,10 @@ const ReaderContent: React.FC<{ ids?: string; settings: SystemSettings }> = ({ i
     const { isPrimary } = getViewState(bookKey) || {};
     if (isPrimary && book && config) {
       const settings = useSettingsStore.getState().settings;
+      // GrimmLink needs the live renderer to translate its CFI into the
+      // server position. Queue the durable write before this book's view is
+      // closed; other providers retain their existing asynchronous flush.
+      await eventDispatcher.dispatch('flush-grimmlink', { bookKey });
       eventDispatcher.dispatch('sync-book-progress', { bookKey });
       eventDispatcher.dispatch('flush-kosync', { bookKey });
       eventDispatcher.dispatch('flush-hardcover-sync', { bookKey });
@@ -296,6 +300,10 @@ const ReaderContent: React.FC<{ ids?: string; settings: SystemSettings }> = ({ i
       await clearDiscordPresence(appService);
     }
 
+    // Persist and queue sync while the renderer is still available. GrimmLink
+    // derives an XPointer from it, so doing this after view.close() loses the
+    // final reading position.
+    await saveBookConfig(bookKey);
     // Read before close() tears the pages down: a pan made since the last
     // page turn hasn't reached the config yet. Primary only, like the location.
     const panX = getLockedPanX(getView(bookKey), getViewSettings(bookKey));
@@ -313,7 +321,6 @@ const ReaderContent: React.FC<{ ids?: string; settings: SystemSettings }> = ({ i
     eventDispatcher.dispatch(keepTTSAlive ? 'tts-close-book' : 'tts-stop', {
       bookKey,
     });
-    await saveBookConfig(bookKey);
     clearViewState(bookKey);
   };
 

@@ -53,6 +53,7 @@ import { eventDispatcher } from '@/utils/event';
 import ABSForm from './integrations/ABSForm';
 import BookOrbitForm from './integrations/BookOrbitForm';
 import GrimmoryForm from './integrations/GrimmoryForm';
+import GrimmLinkForm from './integrations/GrimmLinkForm';
 import KOSyncForm from './integrations/KOSyncForm';
 import ReadwiseForm from './integrations/ReadwiseForm';
 import HardcoverForm from './integrations/HardcoverForm';
@@ -92,6 +93,7 @@ type SubPage =
   | 'kosync'
   | 'bookorbit'
   | 'grimmory'
+  | 'grimmlink'
   | 'webdav'
   | 'gdrive'
   | 's3'
@@ -244,6 +246,7 @@ const IntegrationsPanel: React.FC = () => {
       requestedSubPage === 'kosync' ||
       requestedSubPage === 'bookorbit' ||
       requestedSubPage === 'grimmory' ||
+      requestedSubPage === 'grimmlink' ||
       requestedSubPage === 'webdav' ||
       requestedSubPage === 'gdrive' ||
       requestedSubPage === 's3' ||
@@ -292,6 +295,12 @@ const IntegrationsPanel: React.FC = () => {
     return (
       <div className='my-4 w-full'>
         <GrimmoryForm onBack={() => setSubPage(null)} />
+      </div>
+    );
+  if (subPage === 'grimmlink')
+    return (
+      <div className='my-4 w-full'>
+        <GrimmLinkForm onBack={() => setSubPage(null)} />
       </div>
     );
   if (subPage === 'webdav')
@@ -553,6 +562,11 @@ const IntegrationsPanel: React.FC = () => {
       ? _('Connected as {{user}}', { user: settings.bookorbit.username })
       : _('Connected')
     : _('Not connected');
+  const grimmlinkStatus = settings.grimmlink?.enabled
+    ? settings.grimmlink.username
+      ? _('Connected as {{user}}', { user: settings.grimmlink.username })
+      : _('Connected')
+    : _('Not connected');
 
   const grimmoryStatus = settings.grimmory?.enabled
     ? _('Connected as {{user}}', { user: settings.grimmory.username })
@@ -737,6 +751,12 @@ const IntegrationsPanel: React.FC = () => {
               title={_('Grimmory')}
               status={grimmoryStatus}
               onClick={() => setSubPage('grimmory')}
+            />
+            <IntegrationRow
+              icon={RiPlanetLine}
+              title={_('GrimmLink')}
+              status={grimmlinkStatus}
+              onClick={() => setSubPage('grimmlink')}
             />
             <IntegrationRow
               icon={RiBookReadLine}

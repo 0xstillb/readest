@@ -168,6 +168,30 @@ export interface GrimmorySettings {
   allowSelfSignedCert?: boolean;
 }
 
+export interface GrimmLinkSettings {
+  enabled: boolean;
+  /** Base server origin, e.g. https://books.example.com (no API path). */
+  serverUrl: string;
+  /** Optional transport-only fallback origin. */
+  fallbackUrl?: string;
+  username: string;
+  /** MD5(password), supplied by the user or derived only while connecting. */
+  userkey: string;
+  /**
+   * Permit self-signed certificates only for an explicitly configured LAN
+   * endpoint. The client ignores this flag for public/Tunnel URLs.
+   */
+  allowSelfSignedCertificate?: boolean;
+  deviceId: string;
+  deviceName: string;
+  strategy: KOSyncStrategy;
+  syncProgress: boolean;
+  syncMetadata: boolean;
+  syncSessions: boolean;
+  syncReadStatus: boolean;
+  customHeaders?: Record<string, string>;
+}
+
 export interface ReadwiseSettings {
   enabled: boolean;
   accessToken: string;
@@ -538,6 +562,8 @@ export interface SystemSettings {
   openLastBooks: boolean;
   lastOpenBooks: string[];
   autoImportBooksOnOpen: boolean;
+  /** Generic e-ink rendering policy. `auto` preserves the platform/legacy view detection. */
+  einkOptimization: 'auto' | 'on' | 'off';
   savedBookCoverForLockScreen: string;
   savedBookCoverForLockScreenPath: string;
   telemetryEnabled: boolean;
@@ -627,6 +653,7 @@ export interface SystemSettings {
   kosync: KOSyncSettings;
   bookorbit: BookOrbitSettings;
   grimmory: GrimmorySettings;
+  grimmlink: GrimmLinkSettings;
   readwise: ReadwiseSettings;
   hardcover: HardcoverSettings;
   pagebound: PageboundSettings;
