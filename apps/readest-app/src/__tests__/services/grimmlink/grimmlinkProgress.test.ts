@@ -117,36 +117,33 @@ describe('GrimmLink progress', () => {
       ),
     ).toMatchObject({
       bookHash: 'grimory-hash',
-      document: 'grimory-hash',
-      bookId: 77,
+      source: 'readest',
+      fraction: 0.5,
+      position: { format: 'epub', cfi: '/body/DocFragment[2]' },
     });
   });
 
-  it('serializes reflowable locations as XPointer-compatible progress', () => {
+  it('serializes the reader-native CFI as an Adapter v2 position', () => {
     expect(
       toGrimmLinkProgressPayload(
         epub,
         link,
         {
-          location: '/body/DocFragment[4]/body/p/text().12',
+          location: 'epubcfi(/6/4!/4/2/4)',
           fraction: 0.25,
         },
         { deviceId: 'device-1', deviceName: 'Readest Test' },
       ),
     ).toMatchObject({
       bookHash: 'epub-hash',
-      bookId: 42,
-      bookFileId: 9,
-      fileFormat: 'EPUB',
-      progress: '/body/DocFragment[4]/body/p/text().12',
-      location: '/body/DocFragment[4]/body/p/text().12',
-      percentage: 25,
-      device: 'Readest Test',
-      device_id: 'device-1',
+      source: 'readest',
+      fraction: 0.25,
+      device: { id: 'device-1', name: 'Readest Test' },
+      position: { format: 'epub', cfi: 'epubcfi(/6/4!/4/2/4)' },
     });
   });
 
-  it('serializes fixed-page payloads with page, total, and server percentage', () => {
+  it('serializes fixed-page payloads with a 1-indexed page and its ratio', () => {
     expect(
       toGrimmLinkProgressPayload(
         pdf,
@@ -158,11 +155,9 @@ describe('GrimmLink progress', () => {
         { deviceId: 'device-1', deviceName: 'Readest Test' },
       ),
     ).toMatchObject({
-      fileFormat: 'PDF',
-      progress: '9',
-      currentPage: 9,
-      totalPages: 100,
-      percentage: 10,
+      source: 'readest',
+      fraction: 0.1,
+      position: { format: 'pdf', page: 10, totalPages: 100 },
     });
   });
 

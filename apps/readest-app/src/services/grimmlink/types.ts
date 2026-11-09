@@ -24,11 +24,45 @@ export interface GrimmLinkBookLink {
   format?: string;
 }
 
+/** Adapter v2 session state returned by `POST /auth/session`. */
+export interface GrimmLinkSession {
+  authenticated: boolean;
+  username?: string;
+  userId?: number;
+  expiresAt?: string;
+}
+
+/**
+ * Adapter v2 progress write.  The adapter derives every native locator from
+ * the reader's own position: a CFI for EPUB and a 1-indexed page for
+ * fixed-layout formats.
+ */
+export type GrimmLinkProgressUpdate = {
+  bookHash: string;
+  operationId: string;
+  source: 'readest';
+  device: { id?: string; name?: string };
+  updatedAt: string;
+  fraction: number;
+  position: {
+    format: string;
+    cfi?: string;
+    href?: string;
+    page?: number;
+    totalPages?: number;
+  };
+};
+
 export interface GrimmLinkProgress {
   bookId?: number;
   bookFileId?: number;
+  bookHash?: string;
   progress?: string;
   location?: string;
+  /** Reader-native locators as reported by Adapter v2. */
+  cfi?: string;
+  xpointer?: string;
+  href?: string;
   /** Optional display labels supported by newer Grimmory responses. */
   chapter?: string;
   chapterTitle?: string;

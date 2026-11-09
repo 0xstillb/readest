@@ -4,7 +4,10 @@ import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
 import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
-import { syncSubscribedGrimmLinkShelves } from '@/services/grimmlink/shelfSync';
+import {
+  GRIMMLINK_REGULAR_SHELF_TYPE,
+  syncSubscribedGrimmLinkShelves,
+} from '@/services/grimmlink/shelfSync';
 import { eventDispatcher } from '@/utils/event';
 import { useLibraryStore } from '@/store/libraryStore';
 import type { Book } from '@/types/book';
@@ -62,7 +65,13 @@ export const useGrimmLinkShelfSync = ({
         appService,
         `${settings.serverUrl}\u0000${settings.username}`,
       );
-      if ((await store.getShelfSubscriptions()).length === 0) {
+      const subscriptions = await store.getShelfSubscriptions();
+      // Adapter v2 only exposes regular shelves; legacy magic subscriptions
+      // are ignored instead of triggering an empty sync.
+      const regularSubscriptions = subscriptions.filter(
+        (subscription) => subscription.shelfType === GRIMMLINK_REGULAR_SHELF_TYPE,
+      );
+      if (regularSubscriptions.length === 0) {
         const message = _('Select at least one Grimmory shelf first.');
         setShelfSyncStatus({ stage: 'info', message });
         eventDispatcher.dispatch('toast', { message, type: 'info' });

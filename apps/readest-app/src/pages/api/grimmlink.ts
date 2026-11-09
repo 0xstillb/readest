@@ -5,22 +5,27 @@ import { isLanAddress } from '@/utils/network';
 import type { GrimmLinkProxyPayload } from '@/services/grimmlink/types';
 
 const allowedRequests: ReadonlyArray<readonly [string, RegExp]> = [
-  ['GET', /^\/auth$/],
+  ['POST', /^\/auth\/session$/],
+  ['DELETE', /^\/auth\/session$/],
   ['GET', /^\/capabilities$/],
-  ['GET', /^\/books\/by-hash\/[^/]+$/],
-  ['GET', /^\/syncs\/progress\/[^/]+$/],
-  ['PUT', /^\/syncs\/progress$/],
+  ['GET', /^\/books\/resolve\?hash=[^#]+$/],
+  ['GET', /^\/books\/[^/]+\/content(?:\?[^#]*)?$/],
+  ['GET', /^\/books\/[^/]+\/hash$/],
+  ['GET', /^\/books\/read-statuses$/],
+  ['PUT', /^\/books\/[^/]+\/status$/],
+  ['GET', /^\/books\/[^/]+\/metadata$/],
+  ['PUT', /^\/books\/[^/]+\/metadata$/],
+  ['GET', /^\/shelves$/],
+  ['GET', /^\/shelves\/[^/]+\/items(?:\?[^#]*)?$/],
+  ['PUT', /^\/shelves\/[^/]+\/items\/[^/]+$/],
+  ['DELETE', /^\/shelves\/[^/]+\/items\/[^/]+$/],
+  ['GET', /^\/progress\/[^/]+(?:\?[^#]*)?$/],
+  ['PUT', /^\/progress\/[^/]+$/],
   ['POST', /^\/reading-sessions$/],
   ['POST', /^\/reading-sessions\/batch$/],
   ['GET', /^\/syncs\/metadata(?:\?[^#]*)?$/],
   ['POST', /^\/syncs\/metadata$/],
   ['POST', /^\/syncs\/metadata\/batch$/],
-  ['GET', /^\/shelves$/],
-  ['GET', /^\/shelves\/[^/]+\/books$/],
-  ['GET', /^\/shelves\/(?:regular|magic)\/[^/]+\/books$/],
-  ['GET', /^\/books\/[^/]+\/download$/],
-  ['GET', /^\/books\/read-statuses$/],
-  ['PUT', /^\/books\/[^/]+\/status$/],
 ];
 
 const PROXY_TIMEOUT_MS = 15_000;
@@ -32,9 +37,14 @@ export const isValidGrimmLinkRequest = (endpoint: string, method: string): boole
   );
 
 const allowedHeader = (name: string): boolean =>
-  ['x-auth-user', 'x-auth-key', 'cf-access-client-id', 'cf-access-client-secret'].includes(
-    name.toLowerCase(),
-  );
+  [
+    'x-auth-user',
+    'x-auth-key',
+    'authorization',
+    'idempotency-key',
+    'cf-access-client-id',
+    'cf-access-client-secret',
+  ].includes(name.toLowerCase());
 
 const safeHeaders = (headers?: Record<string, string>): Record<string, string> =>
   Object.fromEntries(Object.entries(headers ?? {}).filter(([name]) => allowedHeader(name)));
@@ -66,13 +76,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let streamActive = false;
   try {
     const controller = new AbortController();
-    const timeoutMs = endpoint.endsWith('/download') ? PROXY_DOWNLOAD_TIMEOUT_MS : PROXY_TIMEOUT_MS;
+    const isDownload = endpoint.includes('/content') || endpoint.endsWith('/download');
+    const timeoutMs = isDownload ? PROXY_DOWNLOAD_TIMEOUT_MS : PROXY_TIMEOUT_MS;
     timeout = setTimeout(() => controller.abort(), timeoutMs);
-    const response = await fetch(`${parsed.origin}/api/grimmlink/v1${endpoint}`, {
+    const response = await fetch(`${parsed.origin}/api/grimmlink/v2${endpoint}`, {
       method,
       headers: {
         ...safeHeaders(headers),
-        Accept: endpoint.endsWith('/download') ? 'application/octet-stream' : 'application/json',
+        Accept: isDownload ? 'application/octet-stream' : 'application/json',
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,

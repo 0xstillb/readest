@@ -358,6 +358,11 @@ const GrimmLinkDiagnosticsPanel = () => {
               }
             />
             <DiagnosticRow
+              label={_('Magic shelves')}
+              description={_('Magic shelves do not exist in Adapter v2')}
+              value={health.magicShelves === 'available' ? _('Available') : _('Unsupported')}
+            />
+            <DiagnosticRow
               label={_('Download')}
               value={health.download === 'available' ? _('Available') : _('Unsupported')}
             />

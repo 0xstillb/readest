@@ -6,6 +6,7 @@ import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
 import {
+  GRIMMLINK_REGULAR_SHELF_TYPE,
   reconcileShelfSnapshot,
   summarizeShelfReconciliation,
   syncSubscribedGrimmLinkShelves,
@@ -61,20 +62,27 @@ const GrimmLinkShelfPanel = () => {
     if (!client || !store) return;
     setLoading(true);
     try {
-      const [regular, magic, subscriptions] = await Promise.all([
-        client.getShelves('regular'),
-        client.getShelves('magic'),
+      // Adapter v2 exposes regular shelves only.  Magic shelves are unsupported
+      // upstream, so they are never requested and legacy magic subscriptions
+      // are simply ignored.
+      const [remoteShelves, subscriptions] = await Promise.all([
+        client.getShelves(),
         store.getShelfSubscriptions(),
       ]);
-      setShelves([...regular, ...magic]);
+      const regularSubscriptions = subscriptions.filter(
+        (subscription) => subscription.shelfType === GRIMMLINK_REGULAR_SHELF_TYPE,
+      );
+      setShelves(remoteShelves);
       setEnabled(
         new Set(
-          subscriptions.map((subscription) => `${subscription.shelfType}:${subscription.shelfId}`),
+          regularSubscriptions.map(
+            (subscription) => `${subscription.shelfType}:${subscription.shelfId}`,
+          ),
         ),
       );
       setCleanupPolicies(
         new Map(
-          subscriptions.map((subscription) => [
+          regularSubscriptions.map((subscription) => [
             `${subscription.shelfType}:${subscription.shelfId}`,
             subscription.cleanupPolicy === 'remove_managed_copy'
               ? 'remove_managed_copy'
@@ -84,7 +92,7 @@ const GrimmLinkShelfPanel = () => {
       );
       setDownloadPolicies(
         new Map(
-          subscriptions.map((subscription) => [
+          regularSubscriptions.map((subscription) => [
             `${subscription.shelfType}:${subscription.shelfId}`,
             subscription.downloadPolicy === 'off' || subscription.downloadPolicy === 'wifi_only'
               ? subscription.downloadPolicy
@@ -96,10 +104,9 @@ const GrimmLinkShelfPanel = () => {
       const localHashes = new Set(library.map((book) => book.hash));
       const localPaths = new Set(library.map(getLocalBookFilename));
       const previews = await Promise.all(
-        subscriptions.map(async (subscription) => {
-          const type = subscription.shelfType as 'regular' | 'magic';
+        regularSubscriptions.map(async (subscription) => {
           const [remote, existing] = await Promise.all([
-            client.getShelfBooks(type, subscription.shelfId),
+            client.getShelfBooks(subscription.shelfId),
             store.getShelfEntries(subscription.shelfType, subscription.shelfId),
           ]);
           return summarizeShelfReconciliation(
@@ -201,7 +208,10 @@ const GrimmLinkShelfPanel = () => {
     abortController.current = new AbortController();
     try {
       const subscriptions = await store.getShelfSubscriptions();
-      if (subscriptions.length === 0) {
+      const regularSubscriptions = subscriptions.filter(
+        (subscription) => subscription.shelfType === GRIMMLINK_REGULAR_SHELF_TYPE,
+      );
+      if (regularSubscriptions.length === 0) {
         setSyncStatus({ stage: 'info', message: _('Select at least one Grimmory shelf first.') });
         eventDispatcher.dispatch('toast', {
           message: _('Select at least one Grimmory shelf first.'),
@@ -346,9 +356,7 @@ const GrimmLinkShelfPanel = () => {
                     <span className='min-w-0 flex-1 truncate text-sm font-medium'>
                       {shelf.name}
                     </span>
-                    <span className='badge badge-ghost badge-sm shrink-0'>
-                      {shelf.type === 'magic' ? _('Magic Shelf') : _('Shelf')}
-                    </span>
+                    <span className='badge badge-ghost badge-sm shrink-0'>{_('Shelf')}</span>
                   </label>
                   {selected && (
                     <div className='border-base-200 bg-base-200/30 grid gap-2 border-t px-4 py-3 sm:grid-cols-2'>

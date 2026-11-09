@@ -8,7 +8,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { DEFAULT_GRIMMLINK_SETTINGS } from '@/services/constants';
 import { debounce } from '@/utils/debounce';
 import { eventDispatcher } from '@/utils/event';
-import { getCFIFromXPointer, getXPointerFromCFI, XCFI } from '@/utils/xcfi';
+import { getCFIFromXPointer, XCFI } from '@/utils/xcfi';
 import { getIndexFromCfi } from '@/utils/cfi';
 import { getLocalProgressPreview } from './kosyncPreview';
 import type { BookDoc, TOCItem } from '@/libs/document';
@@ -55,16 +55,19 @@ const chapterForIndex = (toc: TOCItem[], index: number | null): string | undefin
 /**
  * Resolve the remote position to the same TOC label used by This device.
  *
- * Grimmory stores EPUB progress as a CREngine XPointer. We only need its
- * `DocFragment[N]` spine index to find the chapter, so do not round-trip the
- * pointer through a document/DOM here. Apart from being cheaper, this keeps
- * the conflict dialog useful when a remote XPointer points into a malformed
- * or not-yet-loaded section that cannot be converted to a full CFI.
+ * Adapter v2 reports the reader-native locators explicitly: a CFI for EPUB
+ * and a CREngine XPointer when it could not project the position into a CFI.
+ * Both name a spine index, so do not round-trip the pointer through a
+ * document/DOM here. Apart from being cheaper, this keeps the conflict dialog
+ * useful when a remote XPointer points into a malformed or not-yet-loaded
+ * section that cannot be converted to a full CFI.
  */
 export const getRemoteChapterLabel = (
   remote: {
     progress?: string;
     location?: string;
+    cfi?: string;
+    xpointer?: string;
     chapter?: string;
     chapterTitle?: string;
     sectionLabel?: string;
@@ -76,22 +79,96 @@ export const getRemoteChapterLabel = (
     .find((label): label is string => Boolean(label));
   if (explicitLabel) return explicitLabel;
 
-  const position = (remote.location ?? remote.progress)?.trim();
-  if (!position) return undefined;
-
-  try {
-    const index = position.startsWith('epubcfi(')
-      ? getIndexFromCfi(position)
-      : position.startsWith('/body/DocFragment')
-        ? XCFI.extractSpineIndex(position)
-        : null;
-    return chapterForIndex(bookDoc.toc ?? [], index);
-  } catch {
-    return undefined;
+  // `location`/`progress` carry whichever locator the server had, so try the
+  // explicit fields first and fall back to the generic ones.
+  for (const candidate of [remote.cfi, remote.xpointer, remote.location, remote.progress]) {
+    const position = candidate?.trim();
+    if (!position) continue;
+    try {
+      const index = position.startsWith('epubcfi(')
+        ? getIndexFromCfi(position)
+        : position.startsWith('/body/DocFragment')
+          ? XCFI.extractSpineIndex(position)
+          : null;
+      const chapter = chapterForIndex(bookDoc.toc ?? [], index);
+      if (chapter) return chapter;
+    } catch {
+      // Try the next locator.
+    }
   }
+  return undefined;
 };
 
-/** Reader-only GrimmLink v1 progress, session, rating, annotation, and bookmark integration. */
+/** The reader-side operations a remote position can ask for. */
+export interface RemotePositionView {
+  goTo: (target: string) => void;
+  goToFraction: (fraction: number) => void;
+  select: (target: number) => void;
+}
+
+/** The locators Adapter v2 can report for a remote position. */
+export interface RemotePosition {
+  cfi?: string;
+  xpointer?: string;
+  progress?: string;
+  percentage?: number;
+  currentPage?: number;
+}
+
+/**
+ * Apply a remote position in Adapter v2 order and never invent one:
+ * 1. the reader's own CFI, which the adapter converted for us;
+ * 2. a KOReader XPointer, which this reader converts locally;
+ * 3. a fixed-layout page (the adapter reports it 1-indexed);
+ * 4. the reported fraction, as the last resort.
+ */
+export const applyRemotePosition = async (
+  view: RemotePositionView,
+  remote: RemotePosition,
+  options: { fixedLayout: boolean; bookDoc?: BookDoc },
+): Promise<void> => {
+  const cfi = remote.cfi?.trim();
+  // A legacy reply can still carry the XPointer in `progress` only.
+  const xpointer =
+    remote.xpointer?.trim() ||
+    (remote.progress?.startsWith('/body/DocFragment[') ? remote.progress : undefined);
+  const fraction =
+    typeof remote.percentage === 'number' && Number.isFinite(remote.percentage)
+      ? remote.percentage
+      : undefined;
+  // The adapter reports a fixed-layout page 1-indexed; a legacy reply can
+  // carry it as the page number in `progress` only.
+  const legacyPage = (() => {
+    const raw = remote.progress?.trim();
+    if (!raw) return Number.NaN;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  })();
+  const page =
+    typeof remote.currentPage === 'number' && Number.isFinite(remote.currentPage)
+      ? remote.currentPage
+      : legacyPage;
+
+  if (cfi) {
+    view.goTo(cfi);
+    return;
+  }
+  if (xpointer) {
+    try {
+      view.goTo(await getCFIFromXPointer(xpointer, undefined, undefined, options.bookDoc));
+    } catch {
+      if (fraction !== undefined) view.goToFraction(fraction);
+    }
+    return;
+  }
+  if (options.fixedLayout && Number.isFinite(page)) {
+    view.select(Math.max(0, page - 1));
+    return;
+  }
+  if (fraction !== undefined) view.goToFraction(fraction);
+};
+
+/** Reader-only GrimmLink Adapter v2 progress, session, rating, annotation, and bookmark integration. */
 export const useGrimmLinkSync = (bookKey: string) => {
   const _ = useTranslation();
   const { appService } = useEnv();
@@ -165,52 +242,25 @@ export const useGrimmLinkSync = (bookKey: string) => {
       return { currentPage: local.section?.current ?? 0, totalPages: local.section?.total ?? 0 };
     }
     if (!local.location) return null;
-    try {
-      const view = getView(bookKey);
-      const content = view?.renderer
-        .getContents()
-        .find((item) => item.index === view.renderer.primaryIndex);
-      const result = await getXPointerFromCFI(
-        local.location,
-        content?.doc,
-        content?.index,
-        data.bookDoc ?? undefined,
-      );
-      return {
-        location: result.xpointer,
-        fraction: local.pageinfo?.total
-          ? ((local.pageinfo.current ?? 0) + 1) / local.pageinfo.total
-          : 0,
-      };
-    } catch {
-      return null;
-    }
-  }, [bookKey, getBookData, getProgress, getView]);
+    // Adapter v2 keeps every reader's native locator: Readest pushes its own
+    // CFI and the adapter converts it to a KOReader XPointer server-side.
+    return {
+      location: local.location,
+      fraction: local.pageinfo?.total
+        ? ((local.pageinfo.current ?? 0) + 1) / local.pageinfo.total
+        : 0,
+    };
+  }, [bookKey, getBookData, getProgress]);
 
   const applyRemote = useCallback(
     async (remote: NonNullable<SyncDetails['remote']>) => {
       const data = getBookData(bookKey);
       const view = getView(bookKey);
       if (!data?.book || !view) return;
-      if (FIXED_LAYOUT_FORMATS.has(data.book.format)) {
-        const page = Number(remote.progress);
-        if (Number.isFinite(page)) view.select(Math.max(0, page - 1));
-      } else if (remote.progress?.startsWith('/body/DocFragment[')) {
-        try {
-          view.goTo(
-            await getCFIFromXPointer(
-              remote.progress,
-              undefined,
-              undefined,
-              data.bookDoc ?? undefined,
-            ),
-          );
-        } catch {
-          if (typeof remote.percentage === 'number') view.goToFraction(remote.percentage);
-        }
-      } else if (typeof remote.percentage === 'number') {
-        view.goToFraction(remote.percentage);
-      }
+      await applyRemotePosition(view, remote, {
+        fixedLayout: FIXED_LAYOUT_FORMATS.has(data.book.format),
+        bookDoc: data.bookDoc ?? undefined,
+      });
       eventDispatcher.dispatch('hint', { bookKey, message: _('Reading Progress Synced') });
     },
     [_, bookKey, getBookData, getView],
@@ -336,6 +386,9 @@ export const useGrimmLinkSync = (bookKey: string) => {
           },
           remote: {
             progress: remote.location ?? remote.progress ?? String(remote.currentPage ?? ''),
+            location: remote.location,
+            cfi: remote.cfi,
+            xpointer: remote.xpointer,
             percentage: remoteFraction,
             chapter: remoteChapter,
             device: remote.device,
