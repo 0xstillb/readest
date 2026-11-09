@@ -2,8 +2,6 @@
 
 import clsx from 'clsx';
 import { useRouter } from 'next/navigation';
-import { PiArrowsClockwise, PiBooks, PiHouse, PiPower } from 'react-icons/pi';
-
 import { useEnv } from '@/context/EnvContext';
 import { useGrimmLinkShelfSync } from '@/hooks/useGrimmLinkShelfSync';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -11,6 +9,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useThemeStore } from '@/store/themeStore';
 import { isTauriAppPlatform } from '@/services/environment';
 import { tauriQuitApp } from '@/utils/window';
+import useSimpleUIBottomBarIconSize from './useSimpleUIBottomBarIconSize';
 
 export default function SimpleUIBottomBar({ active }: { active: 'home' | 'library' }) {
   const _ = useTranslation();
@@ -18,6 +17,7 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
   const { settings, setSettingsDialogOpen, setRequestedPanel } = useSettingsStore();
   const { appService } = useEnv();
   const { safeAreaInsets } = useThemeStore();
+  const { iconSize } = useSimpleUIBottomBarIconSize();
   const { handleShelfSync, cancelShelfSync, shelfSyncing, shelfSyncStatus } = useGrimmLinkShelfSync(
     {
       settings: settings.grimmlink,
@@ -64,7 +64,18 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           aria-label={_('Library')}
           onClick={() => router.push('/library')}
         >
-          <PiBooks aria-hidden className='h-8 w-8' />
+          <svg
+            aria-hidden
+            viewBox='0 0 48 48'
+            style={{ width: iconSize, height: iconSize }}
+            fill='none'
+            stroke='currentColor'
+            strokeWidth='2.4'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+          >
+            <path d='M6 10h9v29H6zM19 6h9v33h-9zM32 13h7l7 26h-9z' />
+          </svg>
           <span className='sr-only'>{_('Library')}</span>
         </button>
         <button
@@ -74,7 +85,18 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           aria-label={_('Home')}
           onClick={() => router.push('/simpleui')}
         >
-          <PiHouse aria-hidden className='h-8 w-8' />
+          <svg
+            aria-hidden
+            viewBox='0 0 48 48'
+            style={{ width: iconSize, height: iconSize }}
+            fill='none'
+            stroke='currentColor'
+            strokeWidth='2.4'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+          >
+            <path d='m5 23 19-17 19 17h-6v18H27V29h-7v12H11V23z' />
+          </svg>
           <span className='sr-only'>{_('Home')}</span>
         </button>
         <button
@@ -86,10 +108,19 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           onClick={runSync}
           disabled={!appService}
         >
-          <PiArrowsClockwise
+          <svg
             aria-hidden
-            className={clsx('h-8 w-8', shelfSyncing && 'not-eink:animate-spin')}
-          />
+            viewBox='0 0 48 48'
+            className={clsx(shelfSyncing && 'not-eink:animate-spin')}
+            style={{ width: iconSize, height: iconSize }}
+            fill='none'
+            stroke='currentColor'
+            strokeWidth='2.4'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+          >
+            <path d='M8 7h27l5 5v28H8zM35 7v6h5M24 16v13m-6-6 6 6 6-6M17 35h14' />
+          </svg>
           <span className='sr-only'>{_('Shelf Sync')}</span>
         </button>
         <button
@@ -99,7 +130,18 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           onClick={() => void quit()}
           disabled={!isTauriAppPlatform()}
         >
-          <PiPower aria-hidden className='h-8 w-8' />
+          <svg
+            aria-hidden
+            viewBox='0 0 48 48'
+            style={{ width: iconSize, height: iconSize }}
+            fill='none'
+            stroke='currentColor'
+            strokeWidth='2.4'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+          >
+            <path d='M24 5v20M12 12a18 18 0 1 0 24 0' />
+          </svg>
           <span className='sr-only'>{_('Quit App')}</span>
         </button>
       </nav>

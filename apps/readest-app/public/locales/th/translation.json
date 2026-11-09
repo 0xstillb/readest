@@ -2409,6 +2409,8 @@
   "Shelf Sync": "ซิงค์ชั้นหนังสือ",
   "Cancel shelf sync": "ยกเลิกการซิงค์ชั้นหนังสือ",
   "SimpleUI Navigation": "แถบนำทาง SimpleUI",
+  "Bottom Bar Icon Size": "ขนาดไอคอนแถบด้านล่าง",
+  "Icon size": "ขนาดไอคอน",
   "Nothing being read right now": "ตอนนี้ไม่มีหนังสือที่กำลังอ่าน",
   "{{time}} and {{count}} pages left in book_other": "เหลือ {{time}} และ {{count}} หน้า ในหนังสือ",
   "{{time}} and {{count}} pages left_other": "เหลือ {{time}} และ {{count}} หน้า",
