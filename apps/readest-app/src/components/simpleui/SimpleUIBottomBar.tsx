@@ -31,7 +31,7 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
   const buttonClass = (selected: boolean) =>
     clsx(
       'flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-none border-x-0 border-b-0 border-t-2',
-      'min-h-16 touch-manipulation px-2 py-2 text-sm font-medium',
+      'min-h-[4.5rem] touch-manipulation px-2 py-2 text-sm font-medium',
       'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-3px] focus-visible:outline-current',
       selected
         ? 'border-base-content text-base-content'
@@ -52,7 +52,7 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
     <>
       <nav
         aria-label={_('SimpleUI Navigation')}
-        className='simpleui-dock fixed inset-x-0 bottom-0 z-[60] flex border-t border-base-content/40 bg-base-100'
+        className='simpleui-dock fixed inset-x-0 bottom-0 z-[30] flex border-t border-base-content/40 bg-base-100'
         style={{
           paddingBottom: `max(env(safe-area-inset-bottom), ${safeAreaInsets?.bottom ?? 0}px)`,
         }}
@@ -212,6 +212,13 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           line-height: 1;
           letter-spacing: 0.06em;
         }
+        /* The home page scrolls its own content, so it has to clear the dock
+           and the bottom inset the same way the library does. */
+        .simpleui-home .simpleui-home-content {
+          padding-bottom: calc(
+            4.5rem + max(env(safe-area-inset-bottom), var(--simpleui-safe-bottom, 0px))
+          );
+        }
         .simpleui-home :not(.simpleui-clock),
         #simpleui-library :not(.simpleui-clock) {
           font-family: 'Noto Sans Thai', sans-serif;
@@ -276,12 +283,12 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           border: 0 !important;
           box-shadow: none !important;
         }
+        /* An e-ink panel has no shadows.  A crisp 1px border delineates the
+           cover instead of the layered shadow the colour theme uses. */
         html[data-eink='true'] .simpleui-cover-frame,
         html[data-eink='true'] #simpleui-library .bookitem-main {
-          box-shadow:
-            1px 2px 2px color-mix(in srgb, var(--color-base-content) 52%, transparent),
-            3px 8px 10px color-mix(in srgb, var(--color-base-content) 34%, transparent),
-            7px 17px 22px color-mix(in srgb, var(--color-base-content) 20%, transparent) !important;
+          border: 1px solid var(--color-base-content) !important;
+          box-shadow: none !important;
         }
       `}</style>
     </>

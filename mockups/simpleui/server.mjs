@@ -5,17 +5,27 @@ import { dirname, join } from 'node:path';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const page = join(root, 'index.html');
+// The mockup reuses the fonts the app ships instead of keeping a second copy
+// of them in the repository.
+const fontRoots = [
+  join(root, '..', '..', 'apps', 'readest-app', 'public', 'fonts'),
+  join(root, '..', '..', 'apps', 'readest-app', 'public', 'fonts', 'simpleui'),
+];
 
 createServer(async (request, response) => {
   const fontPath = request.url?.match(/^\/fonts\/([A-Za-z0-9-]+\.ttf)$/)?.[1];
   if (fontPath) {
-    try {
-      const font = await readFile(join(root, 'fonts', fontPath));
-      response.writeHead(200, { 'content-type': 'font/ttf', 'cache-control': 'no-store' });
-      response.end(font);
-    } catch {
-      response.writeHead(404).end('Font not found');
+    for (const fontRoot of fontRoots) {
+      try {
+        const font = await readFile(join(fontRoot, fontPath));
+        response.writeHead(200, { 'content-type': 'font/ttf', 'cache-control': 'no-store' });
+        response.end(font);
+        return;
+      } catch {
+        // Try the next font root.
+      }
     }
+    response.writeHead(404).end('Font not found');
     return;
   }
   if (request.url !== '/' && request.url !== '/index.html') {

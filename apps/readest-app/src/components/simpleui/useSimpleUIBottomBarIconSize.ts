@@ -10,16 +10,18 @@ const MAX_SIZE = 48;
 /** The settings slider steps by 2px, so stored sizes snap to the same grid. */
 const STEP = 2;
 
-const readSize = () => {
-  const value = Number(window.localStorage.getItem(STORAGE_KEY));
-  return Number.isFinite(value) && value >= MIN_SIZE && value <= MAX_SIZE ? value : DEFAULT_SIZE;
-};
-
 const normalizeSize = (size: number) => {
   if (!Number.isFinite(size)) return DEFAULT_SIZE;
   const clamped = Math.min(MAX_SIZE, Math.max(MIN_SIZE, size));
   const snapped = Math.round(clamped / STEP) * STEP;
   return Math.min(MAX_SIZE, Math.max(MIN_SIZE, snapped));
+};
+
+const readSize = () => {
+  const value = Number(window.localStorage.getItem(STORAGE_KEY));
+  return Number.isFinite(value) && value >= MIN_SIZE && value <= MAX_SIZE
+    ? normalizeSize(value)
+    : DEFAULT_SIZE;
 };
 
 export default function useSimpleUIBottomBarIconSize() {

@@ -128,7 +128,9 @@ export function useLibraryPagination(scroller: HTMLElement | null, enabled: bool
     const onWheel = (event: WheelEvent) => {
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
       event.preventDefault();
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+      // Firefox reports a mouse notch as three lines, so a line is worth more
+      // than a pixel here: one notch has to turn exactly one page.
+      const unit = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? window.innerHeight : 1;
       wheelDelta += event.deltaY * unit;
       if (Math.abs(wheelDelta) < WHEEL_PAGE_THRESHOLD) return;
       const direction = wheelDelta > 0 ? 1 : -1;
@@ -142,6 +144,13 @@ export function useLibraryPagination(scroller: HTMLElement | null, enabled: bool
       turned = false;
     };
     const onTouchMove = (event: TouchEvent) => {
+      if (!event.touches) return;
+      // A second finger turns the gesture into a pinch, which is not a page
+      // turn.
+      if (event.touches.length > 1) {
+        turned = true;
+        return;
+      }
       const touch = event.touches[0];
       if (!touch) return;
       const dx = touch.clientX - startX;

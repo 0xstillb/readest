@@ -236,12 +236,10 @@ export class GrimmLinkClient {
       ...custom,
       Accept: 'application/json',
     };
+    // The raw KOSync key is never sent here: only POST /auth/session accepts
+    // it, and that request passes it as an explicit header.
     if (this.accessToken && this.expiresAtMs > Date.now()) {
       headers['Authorization'] = `Bearer ${this.accessToken}`;
-    } else {
-      // Only the session endpoint accepts the raw KOSync credentials.
-      headers['X-Auth-User'] = this.config.username;
-      headers['X-Auth-Key'] = this.config.userkey;
     }
     return headers;
   }
@@ -329,8 +327,9 @@ export class GrimmLinkClient {
     additionalHeaders?: Record<string, string>,
   ): Promise<Response> {
     recordGrimmLinkPerformance('networkRequests');
-    const headers = this.headers();
-    Object.assign(headers, additionalHeaders);
+    // The Adapter credentials are applied last, so a caller-supplied header
+    // can never shadow the session token.
+    const headers: Record<string, string> = { ...additionalHeaders, ...this.headers() };
     if (body) headers['Content-Type'] = 'application/json';
     if (isLanAddress(serverUrl) || isTauriAppPlatform()) {
       const request = isTauriAppPlatform() ? tauriFetch : window.fetch;
@@ -608,6 +607,9 @@ export class GrimmLinkClient {
       data = await read('readest');
     } catch (error) {
       if (error instanceof GrimmLinkRequestError && error.kind === 'not-found') return null;
+      // 501 means the Adapter has no verified file format for the book, so
+      // there is no position it could report for either reader.
+      if (error instanceof GrimmLinkRequestError && error.status === 501) return null;
       if (!(error instanceof GrimmLinkRequestError) || error.status !== 424) throw error;
       // The Adapter could not project the newest EPUB position into a CFI.
       // Fall back to the native KOReader locator and let the reader convert it

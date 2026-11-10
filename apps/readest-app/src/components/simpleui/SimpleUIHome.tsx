@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect } from 'react';
+import type { CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { useLibrary } from '@/hooks/useLibrary';
@@ -9,6 +10,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useUICSS } from '@/hooks/useUICSS';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import { useThemeStore } from '@/store/themeStore';
 import { navigateToReader } from '@/utils/nav';
 import type { Book } from '@/types/book';
 import SettingsDialog from '@/components/settings/SettingsDialog';
@@ -25,6 +27,7 @@ export default function SimpleUIHome() {
   const { library } = useLibraryStore();
   const { libraryLoaded } = useLibrary();
   const { isSettingsDialogOpen } = useSettingsStore();
+  const { safeAreaInsets } = useThemeStore();
   const [now, setNow] = useState(() => new Date());
 
   useTheme({ systemUIVisible: true, appThemeColor: 'base-100' });
@@ -55,8 +58,11 @@ export default function SimpleUIHome() {
   const openBook = (book: Book) => navigateToReader(router, [book.hash]);
 
   return (
-    <main className='simpleui-home full-height flex flex-col overflow-hidden bg-base-100 text-base-content'>
-      <div className='simpleui-home-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-24 pt-[max(0.5rem,env(safe-area-inset-top))] sm:px-8'>
+    <main
+      className='simpleui-home full-height flex flex-col overflow-hidden bg-base-100 text-base-content'
+      style={{ '--simpleui-safe-bottom': `${safeAreaInsets?.bottom ?? 0}px` } as CSSProperties}
+    >
+      <div className='simpleui-home-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pt-[max(0.5rem,env(safe-area-inset-top))] sm:px-8'>
         <header className='mx-auto flex max-w-3xl shrink-0 flex-col items-center py-1 text-center'>
           <time className='simpleui-clock tabular-nums'>
             {new Intl.DateTimeFormat(undefined, {

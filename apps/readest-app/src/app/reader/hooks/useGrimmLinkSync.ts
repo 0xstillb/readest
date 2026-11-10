@@ -201,6 +201,21 @@ export const useGrimmLinkSync = (bookKey: string) => {
       : null;
   }, [appService, grimmlink]);
 
+  // The ratings and the metadata both ask for the Adapter capabilities, so
+  // the answer is fetched once and shared.
+  const capabilitiesRequest = useRef<Promise<string[]> | null>(null);
+  const loadCapabilities = useCallback(() => {
+    if (!client) return Promise.resolve<string[]>([]);
+    capabilitiesRequest.current ??= client
+      .getCapabilities()
+      .then(({ capabilities }) => capabilities)
+      .catch((error) => {
+        capabilitiesRequest.current = null;
+        throw error;
+      });
+    return capabilitiesRequest.current;
+  }, [client]);
+
   const store = useMemo(() => {
     const config = grimmlink;
     return appService && config.enabled
@@ -239,7 +254,11 @@ export const useGrimmLinkSync = (bookKey: string) => {
     const data = getBookData(bookKey);
     if (!local || !data?.book) return null;
     if (FIXED_LAYOUT_FORMATS.has(data.book.format)) {
-      return { currentPage: local.section?.current ?? 0, totalPages: local.section?.total ?? 0 };
+      // A fixed-layout book only has a position once the reader has laid it
+      // out.  Without a page total there is nothing to report, and a made-up
+      // page would move the remote progress to the first page of the book.
+      if (!local.section?.total) return null;
+      return { currentPage: local.section.current ?? 0, totalPages: local.section.total };
     }
     if (!local.location) return null;
     // Adapter v2 keeps every reader's native locator: Readest pushes its own
@@ -442,9 +461,8 @@ export const useGrimmLinkSync = (bookKey: string) => {
     if (!client || !store || !grimmlink.syncMetadata) return;
     const book = getBookData(bookKey)?.book;
     if (!book) return;
-    void client
-      .getCapabilities()
-      .then(async ({ capabilities }) => {
+    void loadCapabilities()
+      .then(async (capabilities) => {
         const ratings = new GrimmLinkRatingProvider(client, store, {
           capabilities,
           device: grimmlink.deviceName,
@@ -453,7 +471,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         await ratings.pull(book.hash, await store.getRating(book.hash));
       })
       .catch(() => {});
-  }, [bookKey, client, getBookData, grimmlink, store]);
+  }, [bookKey, client, getBookData, grimmlink, loadCapabilities, store]);
 
   useEffect(() => {
     if (!client || !store || !replayScheduler || !grimmlink.syncMetadata || metadataPulled.current)
@@ -462,9 +480,8 @@ export const useGrimmLinkSync = (bookKey: string) => {
     const book = data?.book;
     if (!book) return;
     metadataPulled.current = true;
-    void client
-      .getCapabilities()
-      .then(async ({ capabilities }) => {
+    void loadCapabilities()
+      .then(async (capabilities) => {
         const metadata = new GrimmLinkMetadataProvider(client, store, {
           capabilities,
           device: grimmlink.deviceName,
@@ -498,7 +515,17 @@ export const useGrimmLinkSync = (bookKey: string) => {
       .catch(() => {
         metadataPulled.current = false;
       });
-  }, [bookKey, client, getBookData, replayScheduler, provider, grimmlink, store, updateBooknotes]);
+  }, [
+    bookKey,
+    client,
+    getBookData,
+    grimmlink,
+    loadCapabilities,
+    replayScheduler,
+    provider,
+    store,
+    updateBooknotes,
+  ]);
 
   const startSession = useCallback(async () => {
     if (

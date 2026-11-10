@@ -421,29 +421,31 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
         toggled={simpleUIEnabled}
         onClick={() => setSimpleUIEnabled(!simpleUIEnabled)}
       />
-      <MenuItem label={_('Bottom Bar Icon Size')}>
-        <div className='px-3 pb-3 pt-1'>
-          <div className='mb-2 flex items-center justify-between text-xs'>
-            <label htmlFor='simpleui-bottom-bar-icon-size'>{_('Icon size')}</label>
-            <output htmlFor='simpleui-bottom-bar-icon-size'>{simpleUIIconSize}px</output>
+      {simpleUIEnabled && (
+        <MenuItem label={_('Bottom Bar Icon Size')}>
+          <div className='px-3 pb-3 pt-1'>
+            <div className='mb-2 flex items-center justify-between text-xs'>
+              <label htmlFor='simpleui-bottom-bar-icon-size'>{_('Icon size')}</label>
+              <output htmlFor='simpleui-bottom-bar-icon-size'>{simpleUIIconSize}px</output>
+            </div>
+            <input
+              id='simpleui-bottom-bar-icon-size'
+              aria-label={_('Bottom Bar Icon Size')}
+              type='range'
+              min={minIconSize}
+              max={maxIconSize}
+              step={2}
+              value={simpleUIIconSize}
+              onChange={(event) => setIconSize(Number(event.currentTarget.value))}
+              className='range range-xs w-full'
+            />
+            <div className='mt-1 flex justify-between text-[10px] text-base-content/60'>
+              <span>{minIconSize}px</span>
+              <span>{maxIconSize}px</span>
+            </div>
           </div>
-          <input
-            id='simpleui-bottom-bar-icon-size'
-            aria-label={_('Bottom Bar Icon Size')}
-            type='range'
-            min={minIconSize}
-            max={maxIconSize}
-            step={2}
-            value={simpleUIIconSize}
-            onChange={(event) => setIconSize(Number(event.currentTarget.value))}
-            className='range range-xs w-full'
-          />
-          <div className='mt-1 flex justify-between text-[10px] text-base-content/60'>
-            <span>{minIconSize}px</span>
-            <span>{maxIconSize}px</span>
-          </div>
-        </div>
-      </MenuItem>
+        </MenuItem>
+      )}
 
       {isTauriAppPlatform() && (
         <MenuItem

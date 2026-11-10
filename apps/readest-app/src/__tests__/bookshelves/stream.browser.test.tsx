@@ -179,6 +179,26 @@ describe('mixed bookshelf stream in Chromium', () => {
     fireEvent.keyDown(window, { key: 'PageDown', code: 'PageDown' });
     await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
   });
+  it('keeps the library bottom bars above the SimpleUI dock', () => {
+    // The select-mode actions and the read-aloud pill live at the bottom of
+    // the library. The SimpleUI dock owns that edge, so they have to move
+    // above it or the select-mode actions cannot be tapped.
+    const { container } = render(
+      <div id='simpleui-library' style={{ '--simpleui-safe-bottom': '0px' } as React.CSSProperties}>
+        <div className='fixed bottom-0 left-0 right-0 z-40' data-testid='select-actions' />
+        <div className='fixed bottom-0 start-1/2 z-40' data-testid='now-playing' />
+        <div className='absolute bottom-0 left-0 right-0 z-40' data-testid='header-progress' />
+      </div>,
+    );
+    const offset = (testId: string) =>
+      parseFloat(
+        getComputedStyle(container.querySelector<HTMLElement>(`[data-testid='${testId}']`)!).bottom,
+      ) || 0;
+    expect(offset('select-actions')).toBeGreaterThan(0);
+    expect(offset('now-playing')).toBeGreaterThan(0);
+    // The header progress bar is positioned, not fixed, so it keeps its spot.
+    expect(offset('header-progress')).toBe(0);
+  });
   it('hides the library scrollbar on e-ink, where the list only moves a page at a time', async () => {
     document.documentElement.setAttribute('data-eink', 'true');
     const { container } = render(
@@ -225,11 +245,14 @@ describe('mixed bookshelf stream in Chromium', () => {
     );
     const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller]')!;
     await waitFor(() => expect(container.querySelector('[data-book]')).toBeTruthy());
-    // The wheel is claimed, so the panel never scrolls pixel by pixel.
+    // The wheel is claimed, so the panel never scrolls pixel by pixel: it
+    // jumps a whole page to the next row instead of a wheel notch.
     const wheel = new WheelEvent('wheel', { deltaY: 120, cancelable: true, bubbles: true });
     scroller.dispatchEvent(wheel);
     expect(wheel.defaultPrevented).toBe(true);
-    await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
+    await waitFor(() =>
+      expect(scroller.scrollTop).toBeGreaterThanOrEqual(scroller.clientHeight / 2),
+    );
     // A drag turns exactly one page, no matter how long the finger travels.
     const touch = (type: string, clientY: number) => {
       const event = new Event(type, { bubbles: true, cancelable: true });
@@ -241,7 +264,9 @@ describe('mixed bookshelf stream in Chromium', () => {
     const drag = touch('touchmove', 200);
     scroller.dispatchEvent(drag);
     expect(drag.defaultPrevented).toBe(true);
-    await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(beforeDrag));
+    await waitFor(() =>
+      expect(scroller.scrollTop - beforeDrag).toBeGreaterThanOrEqual(scroller.clientHeight / 2),
+    );
     const afterDrag = scroller.scrollTop;
     scroller.dispatchEvent(touch('touchmove', 50));
     expect(scroller.scrollTop).toBe(afterDrag);

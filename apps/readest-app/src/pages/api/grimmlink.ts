@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { Readable } from 'node:stream';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
 import { isLanAddress } from '@/utils/network';
+import { publicFetch } from '@/utils/publicFetch';
 import type { GrimmLinkProxyPayload } from '@/services/grimmlink/types';
 
 const allowedRequests: ReadonlyArray<readonly [string, RegExp]> = [
@@ -79,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const isDownload = endpoint.includes('/content') || endpoint.endsWith('/download');
     const timeoutMs = isDownload ? PROXY_DOWNLOAD_TIMEOUT_MS : PROXY_TIMEOUT_MS;
     timeout = setTimeout(() => controller.abort(), timeoutMs);
-    const response = await fetch(`${parsed.origin}/api/grimmlink/v2${endpoint}`, {
+    const response = await publicFetch(`${parsed.origin}/api/grimmlink/v2${endpoint}`, {
       method,
       headers: {
         ...safeHeaders(headers),
@@ -87,9 +88,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
-      redirect: 'error',
       signal: controller.signal,
     });
+    // The proxy forwards the Adapter credentials, so it must never follow a
+    // redirect to another host.
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw new Error('GrimmLink proxy refused a redirect');
+    }
     res.setHeader('Cache-Control', 'no-store');
     res.status(response.status);
     const contentType = response.headers.get('content-type');

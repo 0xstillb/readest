@@ -184,6 +184,28 @@ describe('GrimmLinkClient', () => {
     );
   });
 
+  it('never sends the raw KOSync key outside the session endpoint', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: ['progress'] }));
+    const client = new GrimmLinkClient(makeConfig());
+
+    await client.getCapabilities();
+    await client.getProgress('a/b');
+
+    for (const [url, init] of calls(fetchMock)) {
+      if (String(url).endsWith('/auth/session')) continue;
+      expect(init.headers).not.toHaveProperty('X-Auth-User');
+      expect(init.headers).not.toHaveProperty('X-Auth-Key');
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer adapter-token' });
+    }
+  });
+
+  it('treats a missing file format as no progress at all', async () => {
+    setFetch(async () => jsonResponse(501, { detail: 'A verified file format is required.' }));
+    const client = new GrimmLinkClient(makeConfig());
+
+    await expect(client.getProgress('a/b')).resolves.toBeNull();
+  });
+
   it('writes progress with the v2 body and keeps the book hash in the URL', async () => {
     const fetchMock = setFetch(async () => jsonResponse(200, { status: 'ok' }));
     const client = new GrimmLinkClient(makeConfig());

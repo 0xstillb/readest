@@ -29,6 +29,18 @@ const createOperationId = (): string => {
 
 const FIXED_LAYOUT_FORMATS = new Set(['PDF', 'CBZ']);
 
+/**
+ * The 1-indexed page of a fixed-layout position.  Adapter v2 reads `page` as
+ * the location and rejects a page total below 1, so an unknown position has
+ * to stay unknown: a made-up page 1 would move the remote progress to the
+ * first page of the book.
+ */
+const fixedLayoutPosition = (currentPage?: number, totalPages?: number) => {
+  if (currentPage === undefined || currentPage < 0) return {};
+  if (totalPages === undefined || totalPages < 1) return {};
+  return { page: currentPage + 1, totalPages };
+};
+
 export const toGrimmLinkProgressPayload = (
   book: Book,
   link: GrimmLinkBookLink,
@@ -36,9 +48,12 @@ export const toGrimmLinkProgressPayload = (
   config: Pick<GrimmLinkProgressConfig, 'deviceId' | 'deviceName'>,
 ): GrimmLinkProgressUpdate => {
   const fixed = FIXED_LAYOUT_FORMATS.has(book.format);
+  const { page, totalPages } = fixed
+    ? fixedLayoutPosition(position.currentPage, position.totalPages)
+    : {};
   const fraction = fixed
-    ? position.totalPages && position.totalPages > 0
-      ? Math.min(1, ((position.currentPage ?? 0) + 1) / position.totalPages)
+    ? page !== undefined && totalPages
+      ? Math.min(1, page / totalPages)
       : 0
     : Math.max(0, Math.min(1, position.fraction ?? 0));
   return {
@@ -58,8 +73,8 @@ export const toGrimmLinkProgressPayload = (
       // Adapter v2 keeps the reader's native locator: a CFI for EPUB and a
       // 1-indexed page for fixed-layout formats.
       cfi: fixed ? undefined : position.location,
-      page: fixed ? (position.currentPage ?? 0) + 1 : undefined,
-      totalPages: fixed ? position.totalPages : undefined,
+      page,
+      totalPages,
     },
   };
 };
@@ -88,8 +103,9 @@ export const normalizeGrimmLinkProgressPayload = (
   const percentage = typeof payload['percentage'] === 'number' ? payload['percentage'] : 0;
   const currentPage =
     typeof payload['currentPage'] === 'number' ? payload['currentPage'] : undefined;
-  const totalPages = typeof payload['totalPages'] === 'number' ? payload['totalPages'] : undefined;
+  const pageTotal = typeof payload['totalPages'] === 'number' ? payload['totalPages'] : undefined;
   const location = typeof payload['location'] === 'string' ? payload['location'] : undefined;
+  const { page, totalPages } = fixed ? fixedLayoutPosition(currentPage, pageTotal) : {};
   return {
     bookHash,
     operationId: createOperationId(),
@@ -104,8 +120,8 @@ export const normalizeGrimmLinkProgressPayload = (
     position: {
       format: fileFormat.toLowerCase(),
       cfi: fixed ? undefined : location,
-      page: fixed && currentPage !== undefined ? currentPage + 1 : undefined,
-      totalPages: fixed ? totalPages : undefined,
+      page,
+      totalPages,
     },
   };
 };

@@ -1062,6 +1062,15 @@
     display: none !important;
   }
 
+  /* The SimpleUI dock owns the bottom edge of the library. The library's own
+     bottom bars - the select-mode actions and the read-aloud pill - have to
+     sit above it, or the select-mode actions cannot be tapped at all. */
+  #simpleui-library
+    [class~='fixed'][class~='z-40'][class~='bottom-0'][class~='left-0'][class~='right-0'],
+  #simpleui-library [class~='fixed'][class~='z-40'][class~='bottom-0'][class~='start-1/2'] {
+    bottom: calc(4.5rem + max(env(safe-area-inset-bottom), var(--simpleui-safe-bottom, 0px)));
+  }
+
   /* Virtuoso owns the scroller inside every OverlayScrollbars root we set up
      (bookshelf, TOC, book notes) and gives it `overflow-y: auto` inline, so the
      platform scrollbar paints for as long as OverlayScrollbars' deferred init

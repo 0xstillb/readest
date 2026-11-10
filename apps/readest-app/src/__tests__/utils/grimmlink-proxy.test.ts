@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import handler, { isValidGrimmLinkRequest } from '@/pages/api/grimmlink';
 
 describe('GrimmLink proxy request allow-list', () => {
@@ -54,6 +54,9 @@ describe('GrimmLink proxy request allow-list', () => {
   });
 });
 
+const publicFetchMock = vi.hoisted(() => vi.fn());
+vi.mock('@/utils/publicFetch', () => ({ publicFetch: publicFetchMock }));
+
 const makeResponse = () => {
   const response = {
     statusCode: 0,
@@ -76,9 +79,11 @@ const makeResponse = () => {
 };
 
 describe('GrimmLink proxy handler', () => {
+  beforeEach(() => {
+    publicFetchMock.mockReset();
+  });
+
   it('rejects private targets before fetching', async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
     const response = makeResponse();
     await handler(
       {
@@ -89,17 +94,11 @@ describe('GrimmLink proxy handler', () => {
       response as never,
     );
     expect(response.statusCode).toBe(400);
-    expect(fetchMock).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
+    expect(publicFetchMock).not.toHaveBeenCalled();
   });
 
   it('forwards to the v2 base path with only approved credential headers', async () => {
-    const fetchMock = vi.fn(async () => ({
-      status: 204,
-      headers: new Headers(),
-      body: null,
-    }));
-    vi.stubGlobal('fetch', fetchMock);
+    publicFetchMock.mockResolvedValue({ status: 204, headers: new Headers(), body: null });
     const response = makeResponse();
     await handler(
       {
@@ -120,9 +119,11 @@ describe('GrimmLink proxy handler', () => {
       } as never,
       response as never,
     );
-    const [url, init] = fetchMock.mock.calls[0]! as unknown as [string, RequestInit];
+    const [url, init] = publicFetchMock.mock.calls[0]! as unknown as [
+      string,
+      { headers: Record<string, string> },
+    ];
     expect(url).toBe('https://books.example.com/api/grimmlink/v2/auth/session');
-    expect(init.redirect).toBe('error');
     expect(init.headers).toMatchObject({
       'X-Auth-User': 'reader',
       'X-Auth-Key': 'secret',
@@ -130,16 +131,36 @@ describe('GrimmLink proxy handler', () => {
       'Idempotency-Key': 'idem-1',
     });
     expect(init.headers).not.toHaveProperty('Cookie');
-    vi.unstubAllGlobals();
+  });
+
+  it('refuses a redirect instead of relaying it', async () => {
+    publicFetchMock.mockResolvedValue({
+      status: 302,
+      headers: new Headers({ location: 'https://elsewhere.example.com' }),
+      body: null,
+    });
+    const response = makeResponse();
+    await handler(
+      {
+        method: 'POST',
+        headers: {},
+        body: {
+          serverUrl: 'https://books.example.com',
+          endpoint: '/capabilities',
+          method: 'GET',
+        },
+      } as never,
+      response as never,
+    );
+    expect(response.statusCode).toBe(502);
   });
 
   it('forwards the v2 bearer token and requests binary for content downloads', async () => {
-    const fetchMock = vi.fn(async () => ({
+    publicFetchMock.mockResolvedValue({
       status: 200,
       headers: new Headers({ 'content-type': 'application/octet-stream' }),
       body: null,
-    }));
-    vi.stubGlobal('fetch', fetchMock);
+    });
     const response = makeResponse();
     await handler(
       {
@@ -154,12 +175,14 @@ describe('GrimmLink proxy handler', () => {
       } as never,
       response as never,
     );
-    const [url, init] = fetchMock.mock.calls[0]! as unknown as [string, RequestInit];
+    const [url, init] = publicFetchMock.mock.calls[0]! as unknown as [
+      string,
+      { headers: Record<string, string> },
+    ];
     expect(url).toBe('https://books.example.com/api/grimmlink/v2/books/1/content');
     expect(init.headers).toMatchObject({
       Authorization: 'Bearer token-123',
       Accept: 'application/octet-stream',
     });
-    vi.unstubAllGlobals();
   });
 });

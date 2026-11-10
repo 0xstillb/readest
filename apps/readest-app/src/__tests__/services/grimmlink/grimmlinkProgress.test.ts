@@ -161,6 +161,34 @@ describe('GrimmLink progress', () => {
     });
   });
 
+  it('never invents a page for a fixed-layout book that has no position yet', () => {
+    // Adapter v2 rejects `totalPages` below 1 and reads `page` as the
+    // 1-indexed location, so a made-up page 1 would move the remote
+    // progress to the first page instead of leaving it alone.
+    const payload = toGrimmLinkProgressPayload(
+      pdf,
+      { ...link, bookHash: pdf.hash, format: 'PDF' },
+      { currentPage: undefined, totalPages: undefined },
+      { deviceId: 'device-1', deviceName: 'Readest Test' },
+    );
+
+    expect(payload.position.page).toBeUndefined();
+    expect(payload.position.totalPages).toBeUndefined();
+    expect(payload.fraction).toBe(0);
+  });
+
+  it('omits a page total the Adapter would reject', () => {
+    const payload = toGrimmLinkProgressPayload(
+      pdf,
+      { ...link, bookHash: pdf.hash, format: 'PDF' },
+      { currentPage: 0, totalPages: 0 },
+      { deviceId: 'device-1', deviceName: 'Readest Test' },
+    );
+
+    expect(payload.position.totalPages).toBeUndefined();
+    expect(payload.fraction).toBe(0);
+  });
+
   it.each([
     ['prompt', 'prompt'],
     ['silent', 'apply'],

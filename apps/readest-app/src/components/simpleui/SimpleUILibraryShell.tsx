@@ -3,17 +3,20 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useThemeStore } from '@/store/themeStore';
 import SimpleUIBottomBar from './SimpleUIBottomBar';
+import useSimpleUIBookTitles from './useSimpleUIBookTitles';
 import useSimpleUIMode from './useSimpleUIMode';
 
 export default function SimpleUILibraryShell({ children }: { children: ReactNode }) {
   const { safeAreaInsets } = useThemeStore();
   const { enabled } = useSimpleUIMode();
+  const { titleMode } = useSimpleUIBookTitles();
 
   if (!enabled) return children;
 
   return (
     <div
       id='simpleui-library'
+      data-book-title-mode={titleMode}
       className='full-height'
       style={{ '--simpleui-safe-bottom': `${safeAreaInsets?.bottom ?? 0}px` } as CSSProperties}
     >
@@ -24,9 +27,6 @@ export default function SimpleUILibraryShell({ children }: { children: ReactNode
           padding-bottom: calc(
             4.5rem + max(env(safe-area-inset-bottom), var(--simpleui-safe-bottom, 0px))
           );
-        }
-        #simpleui-library .simpleui-dock button {
-          min-height: 4.5rem;
         }
       `}</style>
     </div>
