@@ -179,6 +179,73 @@ describe('mixed bookshelf stream in Chromium', () => {
     fireEvent.keyDown(window, { key: 'PageDown', code: 'PageDown' });
     await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
   });
+  it('hides the library scrollbar on e-ink, where the list only moves a page at a time', async () => {
+    document.documentElement.setAttribute('data-eink', 'true');
+    const { container } = render(
+      <div className='bookshelf' style={{ width: 900, height: 600 }}>
+        <BookshelfStream
+          sections={[section('books', 'grid', 120)]}
+          autoColumns={false}
+          fixedColumns={3}
+          renderItem={renderItem}
+        />
+      </div>,
+    );
+    const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller]')!;
+    await waitFor(() => expect(container.querySelector('[data-book]')).toBeTruthy());
+    const instance = OverlayScrollbars(
+      {
+        target: scroller.parentElement!,
+        elements: { viewport: scroller },
+      },
+      {},
+    );
+    try {
+      const scrollbar = container.querySelector<HTMLElement>('.os-scrollbar');
+      expect(scrollbar).toBeTruthy();
+      expect(getComputedStyle(scrollbar!).display).toBe('none');
+      document.documentElement.removeAttribute('data-eink');
+      expect(getComputedStyle(scrollbar!).display).not.toBe('none');
+    } finally {
+      instance.destroy();
+    }
+  });
+  it('turns a page instead of scrolling when the pointer moves over the library', async () => {
+    document.documentElement.setAttribute('data-eink', 'true');
+    const { container } = render(
+      <div style={{ width: 900, height: 600 }}>
+        <BookshelfStream
+          pageNavigation
+          sections={[section('books', 'grid', 60)]}
+          autoColumns={false}
+          fixedColumns={3}
+          renderItem={renderItem}
+        />
+      </div>,
+    );
+    const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller]')!;
+    await waitFor(() => expect(container.querySelector('[data-book]')).toBeTruthy());
+    // The wheel is claimed, so the panel never scrolls pixel by pixel.
+    const wheel = new WheelEvent('wheel', { deltaY: 120, cancelable: true, bubbles: true });
+    scroller.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+    await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
+    // A drag turns exactly one page, no matter how long the finger travels.
+    const touch = (type: string, clientY: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'touches', { value: [{ clientX: 100, clientY }] });
+      return event;
+    };
+    scroller.dispatchEvent(touch('touchstart', 400));
+    const beforeDrag = scroller.scrollTop;
+    const drag = touch('touchmove', 200);
+    scroller.dispatchEvent(drag);
+    expect(drag.defaultPrevented).toBe(true);
+    await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(beforeDrag));
+    const afterDrag = scroller.scrollTop;
+    scroller.dispatchEvent(touch('touchmove', 50));
+    expect(scroller.scrollTop).toBe(afterDrag);
+  });
   it('keeps a heading with its first grid row across mixed shelves and reaches the last page', async () => {
     document.documentElement.setAttribute('data-eink', 'true');
     const { container, getByRole } = render(

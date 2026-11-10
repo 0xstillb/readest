@@ -5,6 +5,9 @@ import { useDeviceControlStore } from '@/store/deviceStore';
 import { eventDispatcher } from '@/utils/event';
 import { isPencilNativeKey, normalizeDomKeyEvent, resolvePageTurn } from '@/utils/keybinding';
 
+/** Wheel pixels that make one page turn; a trackpad flick adds up to this. */
+const WHEEL_PAGE_THRESHOLD = 50;
+
 export function useLibraryPagination(scroller: HTMLElement | null, enabled: boolean) {
   const { appService } = useEnv();
   const hardware = useSettingsStore((s) => s.settings.hardwarePageTurner);
@@ -111,6 +114,57 @@ export function useLibraryPagination(scroller: HTMLElement | null, enabled: bool
       if (interceptVolume) device.releaseVolumeKeyInterception();
     };
   }, [enabled, scroller, hardware, volumeKeys, appService, turnPage]);
+
+  useEffect(() => {
+    if (!enabled || !scroller) return;
+    // An e-ink panel redraws every pixel of movement, so a free scroll would
+    // flash the library instead of turning a page. The pointer joins the keys:
+    // a wheel tick or a vertical drag turns one page and the list never
+    // scrolls under the finger.
+    let wheelDelta = 0;
+    let startX = 0;
+    let startY = 0;
+    let turned = false;
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+      wheelDelta += event.deltaY * unit;
+      if (Math.abs(wheelDelta) < WHEEL_PAGE_THRESHOLD) return;
+      const direction = wheelDelta > 0 ? 1 : -1;
+      wheelDelta = 0;
+      turnPage(direction);
+    };
+    const onTouchStart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      startX = touch?.clientX ?? 0;
+      startY = touch?.clientY ?? 0;
+      turned = false;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+      // A horizontal drag belongs to the carousel that took it.
+      if (Math.abs(dx) > Math.abs(dy)) return;
+      // At the very top a downward drag is the pull-to-refresh gesture, and
+      // there is no page above the first one to turn to.
+      if (dy > 0 && scroller.scrollTop <= 0) return;
+      event.preventDefault();
+      if (turned) return;
+      turned = true;
+      turnPage(dy < 0 ? 1 : -1);
+    };
+    scroller.addEventListener('wheel', onWheel, { passive: false });
+    scroller.addEventListener('touchstart', onTouchStart, { passive: true });
+    scroller.addEventListener('touchmove', onTouchMove, { passive: false });
+    return () => {
+      scroller.removeEventListener('wheel', onWheel);
+      scroller.removeEventListener('touchstart', onTouchStart);
+      scroller.removeEventListener('touchmove', onTouchMove);
+    };
+  }, [enabled, scroller, turnPage]);
 
   return turnPage;
 }

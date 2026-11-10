@@ -1054,6 +1054,14 @@
     display: none;
   }
 
+  /* The e-ink library pages instead of scrolling, so the overlay scrollbar
+     would only flash on every page turn and then offer a handle that drags
+     the list anywhere. Hiding it also keeps the drag handle out of the hit
+     test, so the list can only be moved a page at a time. */
+  [data-eink='true'] .bookshelf .os-scrollbar {
+    display: none !important;
+  }
+
   /* Virtuoso owns the scroller inside every OverlayScrollbars root we set up
      (bookshelf, TOC, book notes) and gives it `overflow-y: auto` inline, so the
      platform scrollbar paints for as long as OverlayScrollbars' deferred init
