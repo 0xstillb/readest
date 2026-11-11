@@ -110,7 +110,7 @@ export class GrimmLinkMetadataProvider {
           const local = next.get(localId);
           const remote = fromGrimmLinkMetadataNote(item, local, localId);
           if (remote) {
-            if (!remote.cfi) {
+            if (!remote.cfi && remote.type !== 'bookmark') {
               await this.store.recordUnresolvedMetadata(
                 bookHash,
                 dedupeKey,

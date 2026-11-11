@@ -73,17 +73,30 @@ export const fromGrimmLinkMetadataNote = (
   const type = payload['type'] ?? record['type'];
   if (type !== 'annotation' && type !== 'bookmark')
     throw new Error('Invalid GrimmLink metadata note');
-  const updatedAt = timestamp(payload['updatedAt'] ?? record['updatedAt']);
-  if (updatedAt === null) throw new Error('Invalid GrimmLink metadata note');
+  const remoteUpdatedAt = timestamp(
+    payload['updatedAt'] ??
+      record['updatedAt'] ??
+      record['syncedAt'] ??
+      record['clientUpdatedAt'] ??
+      payload['createdAt'] ??
+      record['createdAt'],
+  );
+  const isDeleted = payload['deleted'] === true || !!payload['deletedAt'];
+  const updatedAt = remoteUpdatedAt ?? (local && !isDeleted ? local.updatedAt : Date.now());
+  // Grimmory Web bookmarks can omit timestamps. Keep the mapped local copy stable
+  // when the server has no authoritative timestamp instead of rejecting it or
+  // rewriting it on every pull.
+  if (local && remoteUpdatedAt === null && !isDeleted) return local;
   if (local && local.updatedAt >= updatedAt) return local;
-  if (payload['deleted'] === true || payload['deletedAt']) {
+  if (isDeleted) {
     return local ? { ...local, updatedAt, deletedAt: updatedAt } : null;
   }
   const location =
     payload['location'] && typeof payload['location'] === 'object'
       ? (payload['location'] as Record<string, unknown>)
       : {};
-  const cfi = typeof location['cfi'] === 'string' ? location['cfi'] : '';
+  const rawCfi = location['cfi'] ?? payload['cfi'];
+  const cfi = typeof rawCfi === 'string' ? rawCfi : '';
   const page =
     typeof location['pageno'] === 'number'
       ? location['pageno']

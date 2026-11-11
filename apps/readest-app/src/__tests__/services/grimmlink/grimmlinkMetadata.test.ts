@@ -232,6 +232,54 @@ describe('GrimmLink metadata mapping', () => {
     ]);
   });
 
+  it('imports a page-only Grimmory bookmark when the server omits its timestamp', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      getMetadataCursor: vi.fn().mockResolvedValue(null),
+      getNoteMapping: vi.fn().mockResolvedValue(null),
+      applyMetadataPage: vi.fn(),
+    };
+    const getMetadata = vi.fn(async (query: Record<string, string | number>) =>
+      query['type'] === 'bookmark'
+        ? {
+            items: [
+              {
+                type: 'bookmark',
+                dedupeKey: 'web-bookmark-without-cfi-or-time',
+                updatedAt: null,
+                payload: {
+                  type: 'bookmark',
+                  title: 'Page only bookmark',
+                  page: 12,
+                  cfi: null,
+                  location: null,
+                },
+              },
+            ],
+            nextCursor: 'bookmark-checkpoint-no-time',
+            hasMore: false,
+          }
+        : { items: [], nextCursor: 'annotation-checkpoint-no-time', hasMore: false },
+    );
+    const provider = new GrimmLinkMetadataProvider({ getMetadata }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+    const onUnresolved = vi.fn();
+
+    await expect(provider.pull('book-a', [], vi.fn(), onUnresolved)).resolves.toMatchObject([
+      {
+        id: 'grimmlink:bookmark:web-bookmark-without-cfi-or-time',
+        type: 'bookmark',
+        cfi: '',
+        text: 'Page only bookmark',
+        page: 12,
+      },
+    ]);
+    expect(onUnresolved).not.toHaveBeenCalled();
+  });
+
   it('stops rating pagination when the server returns a final checkpoint cursor', async () => {
     const store = {
       connectionId: 'connection-a',
