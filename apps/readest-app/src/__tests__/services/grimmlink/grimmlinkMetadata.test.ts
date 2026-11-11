@@ -129,6 +129,7 @@ describe('GrimmLink metadata mapping', () => {
     const store = {
       connectionId: 'connection-a',
       enqueueMetadata: vi.fn(),
+      getNoteDedupeKey: vi.fn().mockResolvedValue(null),
       applyMetadataPage: vi.fn(),
     };
     const provider = new GrimmLinkMetadataProvider({ getMetadata: vi.fn() }, store as never, {
@@ -151,10 +152,32 @@ describe('GrimmLink metadata mapping', () => {
     );
   });
 
+  it('reuses the mapped bookmark key after an edit or deletion', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      enqueueMetadata: vi.fn(),
+      getNoteDedupeKey: vi.fn().mockResolvedValue('existing-remote-key'),
+      applyMetadataPage: vi.fn(),
+    };
+    const provider = new GrimmLinkMetadataProvider({ getMetadata: vi.fn() }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+    await provider.queuePush('book-a', 4, [{ ...bookmark, updatedAt: 300, deletedAt: 300 }]);
+    expect(store.enqueueMetadata).toHaveBeenCalledWith(
+      'book-a',
+      expect.objectContaining({
+        bookmarks: [expect.objectContaining({ dedupeKey: 'existing-remote-key', deleted: true })],
+      }),
+    );
+  });
+
   it('queues a locally added bookmark with its CFI for Grimmory', async () => {
     const store = {
       connectionId: 'connection-a',
       enqueueMetadata: vi.fn(),
+      getNoteDedupeKey: vi.fn().mockResolvedValue(null),
       applyMetadataPage: vi.fn(),
     };
     const provider = new GrimmLinkMetadataProvider({ getMetadata: vi.fn() }, store as never, {
@@ -272,12 +295,26 @@ describe('GrimmLink metadata mapping', () => {
       {
         id: 'grimmlink:bookmark:web-bookmark-without-cfi-or-time',
         type: 'bookmark',
-        cfi: '',
+        cfi: 'epubcfi(/6/24)',
         text: 'Page only bookmark',
         page: 12,
       },
     ]);
     expect(onUnresolved).not.toHaveBeenCalled();
+    expect(getMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'bookmark', cursor: '1970-01-01T00:00:00Z' }),
+    );
+  });
+
+  it('sends PDF bookmarks as page numbers and preserves EPUB CFIs', () => {
+    const pdf = { ...bookmark, cfi: 'epubcfi(/6/24)', page: 12 };
+    expect(toGrimmLinkMetadataNote(pdf, 'connection-a', 'book-a', 'PDF')).toMatchObject({
+      page: 12,
+      location: { pageno: 12, cfi: undefined },
+    });
+    expect(toGrimmLinkMetadataNote(bookmark, 'connection-a', 'book-a', 'EPUB').location.cfi).toBe(
+      bookmark.cfi,
+    );
   });
 
   it('keeps an EPUB bookmark unresolved when Grimmory provides no CFI', async () => {

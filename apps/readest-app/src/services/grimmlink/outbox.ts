@@ -122,7 +122,26 @@ export class GrimmLinkOutbox {
       }
       if (row.category === 'metadata') {
         if (!this.client.syncMetadata) return false;
-        await this.client.syncMetadata(row.payload);
+        const response = await this.client.syncMetadata(row.payload);
+        if (response && typeof response === 'object') {
+          const result = response as Record<string, unknown>;
+          const groups = result['results'];
+          const entries = Array.isArray(groups)
+            ? groups
+            : groups && typeof groups === 'object'
+              ? Object.values(groups).flatMap((value) => (Array.isArray(value) ? value : [value]))
+              : [];
+          const failed = entries.some((entry) => {
+            if (!entry || typeof entry !== 'object') return false;
+            const status = (entry as Record<string, unknown>)['status'];
+            return typeof status === 'string' && ['failed', 'error'].includes(status.toLowerCase());
+          });
+          if (result['ok'] === false || failed)
+            throw new GrimmLinkRequestError(
+              'server',
+              'Some metadata items could not be synchronized.',
+            );
+        }
       }
       successfulIds.push(row.id);
       return false;

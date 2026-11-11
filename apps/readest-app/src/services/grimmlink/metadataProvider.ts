@@ -1,4 +1,5 @@
 import type { BookNote } from '@/types/book';
+import * as CFI from 'foliate-js/epubcfi.js';
 import { hasGrimmLinkCapability } from './capabilities';
 import { GrimmLinkSyncStore } from './GrimmLinkSyncStore';
 import { fromGrimmLinkMetadataNote, toGrimmLinkMetadataNote } from './metadata';
@@ -36,18 +37,23 @@ export class GrimmLinkMetadataProvider {
     fileFormat?: string,
   ): Promise<boolean> {
     if (!hasGrimmLinkCapability(this.config.capabilities, 'metadata')) return false;
-    const annotationPairs = notes
-      .filter((note) => note.type === 'annotation')
-      .map((note) => ({
-        note,
-        payload: toGrimmLinkMetadataNote(note, this.store.connectionId, bookHash),
-      }));
-    const bookmarkPairs = notes
-      .filter((note) => note.type === 'bookmark')
-      .map((note) => ({
-        note,
-        payload: toGrimmLinkMetadataNote(note, this.store.connectionId, bookHash),
-      }));
+    const pairs = await Promise.all(
+      notes
+        .filter((note) => note.type === 'annotation' || note.type === 'bookmark')
+        .map(async (note) => {
+          const payload = toGrimmLinkMetadataNote(
+            note,
+            this.store.connectionId,
+            bookHash,
+            fileFormat,
+          );
+          const existingKey = await this.store.getNoteDedupeKey(bookHash, note.id, note.type);
+          if (existingKey) payload.dedupeKey = existingKey;
+          return { note, payload };
+        }),
+    );
+    const annotationPairs = pairs.filter(({ note }) => note.type === 'annotation');
+    const bookmarkPairs = pairs.filter(({ note }) => note.type === 'bookmark');
     const annotations = annotationPairs.map(({ payload }) => payload);
     const bookmarks = bookmarkPairs.map(({ payload }) => payload);
     if (!annotations.length && !bookmarks.length) return false;
@@ -95,7 +101,11 @@ export class GrimmLinkMetadataProvider {
     if (!hasGrimmLinkCapability(this.config.capabilities, 'metadata')) return notes;
     let merged = [...notes];
     for (const type of ['annotation', 'bookmark'] as const) {
-      let cursor = await this.store.getMetadataCursor(bookHash, type);
+      // Re-read bookmarks to recover entries lost by older clients before they were saved.
+      let cursor =
+        type === 'bookmark'
+          ? '1970-01-01T00:00:00Z'
+          : await this.store.getMetadataCursor(bookHash, type);
       while (true) {
         const query: Record<string, string | number> = { bookHash, type, limit: 500 };
         if (cursor) query['cursor'] = cursor;
@@ -116,7 +126,8 @@ export class GrimmLinkMetadataProvider {
               fileFormat?.toUpperCase() === 'PDF' &&
               typeof remote.page === 'number' &&
               remote.page > 0;
-            if (!remote.cfi && !pageOnlyPdfBookmark) {
+            if (pageOnlyPdfBookmark) remote.cfi = CFI.fake.fromIndex(remote.page! - 1);
+            if (!remote.cfi) {
               await this.store.recordUnresolvedMetadata(
                 bookHash,
                 dedupeKey,

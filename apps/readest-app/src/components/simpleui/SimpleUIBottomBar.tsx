@@ -260,7 +260,7 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
         html[data-eink='true'] #simpleui-library[data-book-title-mode='cover'] .simpleui-cover-title {
           background: var(--color-base-100);
           color: var(--color-base-content);
-          border-top: 1px solid currentColor;
+          border-top: 0;
         }
         #simpleui-library[data-book-title-mode='cover'] .fallback-cover-title,
         #simpleui-library[data-book-title-mode='cover'] .fallback-cover > div:first-child span,

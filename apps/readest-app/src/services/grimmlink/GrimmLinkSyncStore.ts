@@ -895,6 +895,18 @@ export class GrimmLinkSyncStore {
     );
   }
 
+  async getNoteDedupeKey(bookHash: string, noteId: string, type: string): Promise<string | null> {
+    return this.withDb(
+      async (db) =>
+        (
+          await db.select<{ dedupe_key: string }>(
+            'SELECT dedupe_key FROM note_mappings WHERE connection_id = ? AND book_hash = ? AND note_id = ? AND type = ?',
+            [this.connectionId, bookHash, noteId, type],
+          )
+        )[0]?.dedupe_key ?? null,
+    );
+  }
+
   async getNoteMapping(bookHash: string, dedupeKey: string): Promise<string | null> {
     return this.withDb(
       async (db) =>

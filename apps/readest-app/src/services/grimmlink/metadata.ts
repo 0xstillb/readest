@@ -37,6 +37,7 @@ export const toGrimmLinkMetadataNote = (
   note: BookNote,
   connectionId: string,
   bookHash: string,
+  fileFormat?: string,
 ): GrimmLinkMetadataNote => ({
   dedupeKey: stableMetadataDedupeKey(connectionId, bookHash, note),
   type: note.type === 'bookmark' ? 'bookmark' : 'annotation',
@@ -50,7 +51,10 @@ export const toGrimmLinkMetadataNote = (
   updatedAt: new Date(note.updatedAt).toISOString(),
   deleted: !!note.deletedAt,
   location: {
-    cfi: note.cfi || undefined,
+    cfi:
+      fileFormat?.toUpperCase() === 'PDF' && note.type === 'bookmark'
+        ? undefined
+        : note.cfi || undefined,
     pos0: note.xpointer0 ?? undefined,
     pos1: note.xpointer1 ?? undefined,
     pageno: note.page,

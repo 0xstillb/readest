@@ -14,6 +14,7 @@ import { useThemeStore } from '@/store/themeStore';
 import { navigateToReader } from '@/utils/nav';
 import type { Book } from '@/types/book';
 import SettingsDialog from '@/components/settings/SettingsDialog';
+import BookCover from '@/components/BookCover';
 import SimpleUIBottomBar from './SimpleUIBottomBar';
 
 const progressPercent = (book: Book) => {
@@ -26,7 +27,7 @@ export default function SimpleUIHome() {
   const router = useRouter();
   const { library } = useLibraryStore();
   const { libraryLoaded } = useLibrary();
-  const { isSettingsDialogOpen } = useSettingsStore();
+  const { isSettingsDialogOpen, settings } = useSettingsStore();
   const { safeAreaInsets } = useThemeStore();
   const [now, setNow] = useState(() => new Date());
 
@@ -88,15 +89,11 @@ export default function SimpleUIHome() {
             className='simpleui-current-reading mx-auto mt-3 grid w-full max-w-3xl shrink-0 grid-cols-[max-content_minmax(0,1fr)] items-center gap-4 sm:gap-9 bg-base-100 py-3 pe-3 ps-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current sm:mt-4 sm:pe-5'
           >
             <div className='simpleui-cover-frame simpleui-current-cover flex items-center justify-center overflow-hidden bg-base-200'>
-              {currentBook.coverImageUrl ? (
-                <img
-                  src={currentBook.coverImageUrl}
-                  alt=''
-                  className='h-full w-full object-contain'
-                />
-              ) : (
-                <span className='px-3 text-center text-sm font-semibold'>{currentBook.title}</span>
-              )}
+              <BookCover
+                book={currentBook}
+                coverFit={settings.libraryCoverFit}
+                showSpine={settings.librarySkeuomorphicCovers}
+              />
             </div>
             <div className='simpleui-current-copy min-w-0'>
               <div className='mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70'>
@@ -143,17 +140,11 @@ export default function SimpleUIHome() {
                   className='min-w-0 bg-transparent p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
                 >
                   <div className='simpleui-cover-frame flex aspect-[2/3] w-full items-center justify-center overflow-hidden bg-base-200'>
-                    {book.coverImageUrl ? (
-                      <img
-                        src={book.coverImageUrl}
-                        alt=''
-                        className='h-full w-full object-contain'
-                      />
-                    ) : (
-                      <span className='line-clamp-3 px-2 text-center text-sm font-medium'>
-                        {book.title}
-                      </span>
-                    )}
+                    <BookCover
+                      book={book}
+                      coverFit={settings.libraryCoverFit}
+                      showSpine={settings.librarySkeuomorphicCovers}
+                    />
                   </div>
                 </button>
               ))}

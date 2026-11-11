@@ -180,6 +180,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
   const getView = useReaderStore((s) => s.getView);
   const getBookData = useBookDataStore((s) => s.getBookData);
   const updateBooknotes = useBookDataStore((s) => s.updateBooknotes);
+  const saveConfig = useBookDataStore((s) => s.saveConfig);
   const getLibraryBook = useLibraryStore((s) => s.getBookByHash);
   const updateLibraryBook = useLibraryStore((s) => s.updateBook);
   const progress = useBookProgress(bookKey);
@@ -688,7 +689,8 @@ export const useGrimmLinkSync = (bookKey: string) => {
           link.bookHash,
           notes,
           async (merged) => {
-            updateBooknotes(bookKey, merged, 'remote');
+            const updated = updateBooknotes(bookKey, merged, 'remote');
+            if (updated) await saveConfig(envConfig, bookKey, updated, settings);
           },
           (note) => {
             console.warn('[GrimmLink] retained unresolved remote note', note.id);
@@ -703,12 +705,15 @@ export const useGrimmLinkSync = (bookKey: string) => {
   }, [
     bookKey,
     client,
+    envConfig,
     getBookData,
     grimmlink,
     loadCapabilities,
     linkResolver,
     queueMetadata,
     replayScheduler,
+    saveConfig,
+    settings,
     store,
     updateBooknotes,
   ]);

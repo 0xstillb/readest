@@ -467,6 +467,19 @@ describe('GrimmLink durable outbox', () => {
     );
   });
 
+  it('keeps metadata queued when a bookmark fails inside an HTTP success response', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueMetadata('book-a', { bookId: 4, bookmarks: [{ dedupeKey: 'bm-a' }] });
+    const client = {
+      syncMetadata: vi.fn().mockResolvedValue({
+        ok: true,
+        results: { bookmarks: [{ status: 'FAILED', reason: 'No mapping' }], annotations: [] },
+      }),
+    };
+    await new GrimmLinkOutbox(store, client).replay();
+    expect(await store.all('metadata')).toHaveLength(1);
+  });
+
   it('retains metadata when no replay handler is available', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueRating('book-a', { rating: { value: 8, scale: 10 } });
