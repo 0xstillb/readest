@@ -133,7 +133,7 @@ export const useGrimmLinkShelfSync = ({
         setShelfSyncStatus({ stage: 'info', message });
         return;
       }
-      const message = error instanceof Error ? error.message : _('Connection error');
+      const message = getShelfSyncErrorMessage(error, _('Connection error'));
       setShelfSyncStatus({ stage: 'error', message });
       eventDispatcher.dispatch('toast', {
         message: `${_('Shelf sync failed')}: ${message}`,
@@ -159,4 +159,22 @@ export const useGrimmLinkShelfSync = ({
   }, [closeMenu, onConfigure, runShelfSync, settings]);
 
   return { handleShelfSync, cancelShelfSync, shelfSyncing, shelfSyncStatus };
+};
+
+const getShelfSyncErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  if (error && typeof error === 'object') {
+    const detail = error as { message?: unknown; code?: unknown; error?: unknown };
+    if (typeof detail.message === 'string' && detail.message.trim()) return detail.message;
+    if (typeof detail.error === 'string' && detail.error.trim()) return detail.error;
+    if (typeof detail.code === 'string' && detail.code.trim()) return detail.code;
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== '{}') return serialized;
+    } catch {
+      // Keep the user-facing fallback for uninspectable platform errors.
+    }
+  }
+  return fallback;
 };

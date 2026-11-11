@@ -122,10 +122,20 @@ const schema = [
   'CREATE INDEX IF NOT EXISTS shelf_entries_local_path ON shelf_entries(connection_id, local_path)',
 ];
 
-const outboxId = (connectionId: string, category: GrimmLinkOutboxCategory, bookHash?: string) =>
-  category === 'progress'
-    ? `progress:${connectionId}:${bookHash}`
-    : `${category}:${crypto.randomUUID()}`;
+const outboxId = (
+  connectionId: string,
+  category: GrimmLinkOutboxCategory,
+  bookHash: string | undefined,
+  payload: object,
+) => {
+  if (category === 'progress' && bookHash) return `progress:${connectionId}:${bookHash}`;
+  if (category === 'metadata' && bookHash) {
+    const metadata = payload as Record<string, unknown>;
+    const kind = metadata['rating'] ? 'rating' : 'notes';
+    return `metadata:${connectionId}:${bookHash}:${kind}`;
+  }
+  return `${category}:${crypto.randomUUID()}`;
+};
 
 /** Provider-private SQLite state. It intentionally opens per operation so writes survive abrupt reader teardown. */
 export class GrimmLinkSyncStore {
@@ -239,7 +249,7 @@ export class GrimmLinkSyncStore {
     bookHash?: string,
   ): Promise<void> {
     const now = Date.now();
-    const id = outboxId(this.connectionId, category, bookHash);
+    const id = outboxId(this.connectionId, category, bookHash, payload);
     const idempotencyKey = `${this.connectionId}:${id}`;
     await this.withDb((db) =>
       db.execute(

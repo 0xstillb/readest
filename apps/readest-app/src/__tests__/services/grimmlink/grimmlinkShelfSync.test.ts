@@ -209,14 +209,19 @@ describe('GrimmLink shelf sync safety', () => {
       removeShelfEntry: async () => {},
     };
     const appService = {
-      exists: async (_path: string, folder?: string) => (folder === 'Temp' ? tempExists : false),
-      createDir: async () => {},
-      writeFile: async () => {
+      exists: async (_path: string, folder?: string) => (folder === 'Cache' ? tempExists : false),
+      createDir: async (_path: string, folder?: string) => expect(folder).toBe('Cache'),
+      writeFile: async (_path: string, folder?: string) => {
+        expect(folder).toBe('Cache');
         events.push('write');
         expect(tempExists).toBe(false);
       },
-      resolveFilePath: async () => '/tmp/book.pdf',
-      deleteFile: async () => {
+      resolveFilePath: async (_path: string, folder?: string) => {
+        expect(folder).toBe('Cache');
+        return '/app/cache/book.pdf';
+      },
+      deleteFile: async (_path: string, folder?: string) => {
+        expect(folder).toBe('Cache');
         events.push('delete');
         tempExists = false;
       },

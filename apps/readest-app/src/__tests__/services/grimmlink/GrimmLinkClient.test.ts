@@ -140,6 +140,8 @@ describe('GrimmLinkClient', () => {
         bookHash: 'a/b',
         fraction: 0.5,
         updatedAt: '2026-11-09T00:00:00Z',
+        device: 'Readest Desktop',
+        deviceId: 'readest-device-1',
         position: {
           format: 'EPUB',
           cfi: 'epubcfi(/6/4!/4/2/2)',
@@ -157,6 +159,8 @@ describe('GrimmLinkClient', () => {
       cfi: 'epubcfi(/6/4!/4/2/2)',
       href: 'OEBPS/chapter-1.xhtml',
       percentage: 50,
+      device: 'Readest Desktop',
+      device_id: 'readest-device-1',
     });
     expect(urls(fetchMock)).toContain(
       'http://192.168.1.50:3000/api/grimmlink/v2/progress/a%2Fb?reader=readest',

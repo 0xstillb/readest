@@ -139,7 +139,11 @@ export const progressPullDisposition = (
   if (strategy === 'receive') return 'apply';
   if (strategy === 'send') return 'ignore';
   if (strategy === 'silent') return remoteIsNewer ? 'apply' : 'ignore';
-  return 'prompt';
+  // Prompt mode only represents a conflict when Grimmory has a newer position.
+  // Older/equal remote snapshots are stale acknowledgements after a successful
+  // local push; prompting on every pull makes the same resolved state reappear
+  // whenever the reader regains focus or the book is reopened.
+  return remoteIsNewer ? 'prompt' : 'ignore';
 };
 
 type Client = {

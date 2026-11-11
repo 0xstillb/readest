@@ -130,8 +130,12 @@ export class GrimmLinkMetadataProvider {
           typeof response['nextCursor'] === 'string' && response['nextCursor']
             ? response['nextCursor']
             : null;
+        const hasMore =
+          typeof response['hasMore'] === 'boolean'
+            ? response['hasMore']
+            : response['items'].length >= 500;
         await this.store.applyMetadataPage(bookHash, type, mappings, nextCursor);
-        if (!nextCursor || nextCursor === cursor) break;
+        if (!hasMore || !nextCursor || nextCursor === cursor) break;
         cursor = nextCursor;
       }
     }

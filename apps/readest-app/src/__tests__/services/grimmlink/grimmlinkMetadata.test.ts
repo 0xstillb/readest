@@ -6,6 +6,7 @@ import {
   toGrimmLinkMetadataNote,
 } from '@/services/grimmlink/metadata';
 import { GrimmLinkMetadataProvider } from '@/services/grimmlink/metadataProvider';
+import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
 
 const annotation: BookNote = {
   id: 'note-1',
@@ -18,6 +19,17 @@ const annotation: BookNote = {
   color: 'yellow',
   style: 'highlight',
   page: 3,
+  createdAt: 100,
+  updatedAt: 200,
+};
+
+const bookmark: BookNote = {
+  id: 'bookmark-1',
+  type: 'bookmark',
+  cfi: 'epubcfi(/6/4!/4/2)',
+  text: 'Chapter 2',
+  note: '',
+  page: 4,
   createdAt: 100,
   updatedAt: 200,
 };
@@ -137,5 +149,110 @@ describe('GrimmLink metadata mapping', () => {
       ],
       null,
     );
+  });
+
+  it('queues a locally added bookmark with its CFI for Grimmory', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      enqueueMetadata: vi.fn(),
+      applyMetadataPage: vi.fn(),
+    };
+    const provider = new GrimmLinkMetadataProvider({ getMetadata: vi.fn() }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+
+    await expect(provider.queuePush('book-a', 4, [bookmark])).resolves.toBe(true);
+    expect(store.enqueueMetadata).toHaveBeenCalledWith(
+      'book-a',
+      expect.objectContaining({
+        bookmarks: [
+          expect.objectContaining({
+            type: 'bookmark',
+            title: 'Chapter 2',
+            location: expect.objectContaining({ cfi: bookmark.cfi, pageno: 4 }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('pulls a Grimmory bookmark into Readest with its CFI anchor', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      getMetadataCursor: vi.fn().mockResolvedValue(null),
+      getNoteMapping: vi.fn().mockResolvedValue(null),
+      applyMetadataPage: vi.fn(),
+    };
+    const getMetadata = vi.fn(async (query: Record<string, string | number>) =>
+      query['type'] === 'bookmark'
+        ? {
+            items: [
+              {
+                type: 'bookmark',
+                dedupeKey: 'grimmory-bookmark-21',
+                payload: {
+                  type: 'bookmark',
+                  title: 'From Grimmory',
+                  notes: '',
+                  createdAt: '2026-11-10T12:00:00Z',
+                  updatedAt: '2026-11-10T12:00:01Z',
+                  location: { cfi: 'epubcfi(/6/8!/4/2)', pageno: 8 },
+                },
+              },
+            ],
+            nextCursor: 'bookmark-checkpoint-2',
+            hasMore: false,
+          }
+        : { items: [], nextCursor: 'annotation-checkpoint-1', hasMore: false },
+    );
+    const provider = new GrimmLinkMetadataProvider(
+      {
+        getMetadata,
+      },
+      store as never,
+      { capabilities: ['metadata'], device: 'Readest Test', deviceId: 'device-1' },
+    );
+
+    const apply = vi.fn();
+    await expect(provider.pull('book-a', [], apply)).resolves.toMatchObject([
+      {
+        id: 'grimmlink:bookmark:grimmory-bookmark-21',
+        type: 'bookmark',
+        cfi: 'epubcfi(/6/8!/4/2)',
+        text: 'From Grimmory',
+        page: 8,
+      },
+    ]);
+    expect(apply).toHaveBeenCalledTimes(2);
+    expect(getMetadata.mock.calls.map(([query]) => query['type'])).toEqual([
+      'annotation',
+      'bookmark',
+    ]);
+  });
+
+  it('stops rating pagination when the server returns a final checkpoint cursor', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      getRating: vi.fn().mockResolvedValue(null),
+      getMetadataCursor: vi.fn().mockResolvedValue(null),
+      applyRatingPage: vi.fn(),
+    };
+    const getMetadata = vi.fn().mockResolvedValue({
+      items: [],
+      nextCursor: 'new-final-checkpoint',
+      hasMore: false,
+    });
+    const provider = new GrimmLinkRatingProvider({ getMetadata }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+
+    await provider.pull('book-a', null);
+
+    expect(getMetadata).toHaveBeenCalledOnce();
+    expect(store.applyRatingPage).toHaveBeenCalledWith('book-a', null, 'new-final-checkpoint');
   });
 });

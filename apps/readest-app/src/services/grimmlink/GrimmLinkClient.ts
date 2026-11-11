@@ -110,6 +110,9 @@ type GrimmoryProgressDTO = {
   bookHash?: string | null;
   fraction?: number | null;
   updatedAt?: string | null;
+  device?: string | null;
+  deviceId?: string | null;
+  device_id?: string | null;
   reader?: string;
   source?: string;
   position?: {
@@ -654,7 +657,8 @@ export class GrimmLinkClient {
       currentPage: page,
       totalPages,
       updatedAt: nonEmptyString(data.updatedAt),
-      device: nonEmptyString(data.source),
+      device: nonEmptyString(data.device) ?? nonEmptyString(data.source),
+      device_id: nonEmptyString(data.deviceId) ?? nonEmptyString(data.device_id),
     };
     const hasPosition =
       !!location || percentage !== undefined || page !== undefined || !!progress.updatedAt;

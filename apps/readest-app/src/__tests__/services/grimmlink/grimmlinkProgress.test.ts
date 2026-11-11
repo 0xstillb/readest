@@ -203,6 +203,10 @@ describe('GrimmLink progress', () => {
     expect(progressPullDisposition('silent', false)).toBe('ignore');
   });
 
+  it('does not reopen a prompt for an older or equal remote acknowledgement', () => {
+    expect(progressPullDisposition('prompt', false)).toBe('ignore');
+  });
+
   it('does not reopen a conflict for the originating device acknowledgement', () => {
     expect(progressPullDisposition('prompt', true, 'device-a', 'device-a')).toBe('ignore');
     expect(progressPullDisposition('prompt', true, 'device-b', 'device-a')).toBe('prompt');

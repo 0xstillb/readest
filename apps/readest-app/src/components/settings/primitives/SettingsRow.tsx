@@ -58,7 +58,7 @@ const SettingsRow: React.FC<SettingsRowProps> = ({
     <Wrapper
       data-setting-id={dataSettingId}
       className={clsx(
-        'flex min-h-14 justify-between gap-3 pe-4',
+        'flex min-h-14 justify-between gap-3 px-4',
         align === 'start' ? 'items-start py-3.5' : 'items-center',
         disabled && 'cursor-not-allowed opacity-50',
         asLabel && !disabled && 'cursor-pointer',

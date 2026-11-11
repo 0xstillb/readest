@@ -476,6 +476,36 @@ describe('GrimmLink durable outbox', () => {
     await expect(store.all('metadata')).resolves.toHaveLength(1);
   });
 
+  it('coalesces pending note snapshots per book without replacing a rating', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      annotations: [],
+      bookmarks: [{ dedupeKey: 'bookmark-a', title: 'Old title' }],
+    });
+    await store.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      annotations: [],
+      bookmarks: [{ dedupeKey: 'bookmark-a', title: 'New title' }],
+    });
+    await store.enqueueRating('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      rating: { value: 8, scale: 10 },
+    });
+
+    const pending = await store.all('metadata');
+    expect(pending).toHaveLength(2);
+    expect(pending.find((row) => Array.isArray(row.payload['bookmarks']))?.payload).toMatchObject({
+      bookmarks: [{ title: 'New title' }],
+    });
+    expect(pending.find((row) => row.payload['rating'])?.payload).toMatchObject({
+      rating: { value: 8, scale: 10 },
+    });
+  });
+
   it('persists diagnostics without leaking server URLs and clears invalid rows only', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueProgress('book-a', { percentage: 10 });
@@ -732,6 +762,7 @@ describe('GrimmLink status and rating contract', () => {
             },
           ],
           nextCursor: 'page-2',
+          hasMore: true,
         })
         .mockResolvedValueOnce({
           items: [
@@ -741,8 +772,8 @@ describe('GrimmLink status and rating contract', () => {
             },
           ],
           nextCursor: 'done',
-        })
-        .mockResolvedValueOnce({ items: [], nextCursor: null });
+          hasMore: false,
+        });
       const ratings = new GrimmLinkRatingProvider({ getMetadata }, store, {
         capabilities: ['metadata'],
         device: 'Readest Test',
@@ -754,7 +785,6 @@ describe('GrimmLink status and rating contract', () => {
       expect(getMetadata.mock.calls.map(([query]) => query)).toEqual([
         { bookHash: 'book-a', type: 'rating', limit: 500 },
         { bookHash: 'book-a', type: 'rating', limit: 500, cursor: 'page-2' },
-        { bookHash: 'book-a', type: 'rating', limit: 500, cursor: 'done' },
       ]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

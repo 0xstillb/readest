@@ -359,7 +359,7 @@ const GrimmLinkShelfPanel = () => {
                     <span className='badge badge-ghost badge-sm shrink-0'>{_('Shelf')}</span>
                   </label>
                   {selected && (
-                    <div className='border-base-200 bg-base-200/30 grid gap-2 border-t px-4 py-3 sm:grid-cols-2'>
+                    <div className='border-base-200 bg-base-200/30 grid gap-2 border-t px-4 py-3'>
                       <div className='flex min-h-9 items-center justify-between gap-3'>
                         <span className='text-base-content/70 text-xs'>{_('Download')}</span>
                         <SettingsSelect

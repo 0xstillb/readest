@@ -229,18 +229,9 @@ export const useGrimmLinkSync = (bookKey: string) => {
     [client, store],
   );
 
-  const provider = useMemo(() => {
+  const linkResolver = useMemo(() => {
     const config = grimmlink;
-    if (
-      !appService ||
-      !client ||
-      !store ||
-      !config.enabled ||
-      !config.syncProgress ||
-      !config.serverUrl ||
-      !config.userkey
-    )
-      return null;
+    if (!appService || !client || !store || !config.enabled) return null;
     return new GrimmLinkProgressProvider(
       client,
       new GrimmLinkBookLinkStore(appService, `${config.serverUrl}\u0000${config.username}`),
@@ -248,6 +239,62 @@ export const useGrimmLinkSync = (bookKey: string) => {
       store,
     );
   }, [appService, client, grimmlink, store]);
+  const provider = useMemo(
+    () => (grimmlink.syncProgress ? linkResolver : null),
+    [grimmlink.syncProgress, linkResolver],
+  );
+
+  const queueMetadata = useCallback(async () => {
+    if (
+      !client ||
+      !store ||
+      !replayScheduler ||
+      !linkResolver ||
+      !grimmlink.syncMetadata ||
+      grimmlink.strategy === 'receive'
+    )
+      return;
+    const data = getBookData(bookKey);
+    const book = data?.book;
+    if (!book) return;
+    try {
+      const capabilities = await loadCapabilities();
+      const metadata = new GrimmLinkMetadataProvider(client, store, {
+        capabilities,
+        device: grimmlink.deviceName,
+        deviceId: grimmlink.deviceId,
+      });
+      const link = await linkResolver.resolveLink(book);
+      if (!link) return;
+      const queued = await metadata.queuePush(
+        link.bookHash,
+        link.bookId,
+        data?.config?.booknotes ?? [],
+        link.bookFileId,
+        book.format,
+      );
+      if (queued) void replayScheduler.requestReplay(500);
+    } catch (error) {
+      console.warn('[GrimmLink] metadata push could not be queued', error);
+    }
+  }, [
+    bookKey,
+    client,
+    getBookData,
+    grimmlink,
+    linkResolver,
+    loadCapabilities,
+    replayScheduler,
+    store,
+  ]);
+
+  const pushMetadata = useMemo(
+    () =>
+      debounce(() => {
+        void queueMetadata();
+      }, 750),
+    [queueMetadata],
+  );
 
   const makePosition = useCallback(async () => {
     const local = getProgress(bookKey);
@@ -321,6 +368,15 @@ export const useGrimmLinkSync = (bookKey: string) => {
       }, 5000),
     [queueProgress],
   );
+
+  useEffect(() => {
+    if (!replayScheduler) return;
+    // Resume durable writes left queued by an app shutdown or a short network
+    // outage as soon as a reader is opened again.
+    void replayScheduler.requestReplay().catch((error) => {
+      console.warn('[GrimmLink] startup outbox replay failed', error);
+    });
+  }, [replayScheduler]);
 
   const pullProgress = useCallback(
     async (retryUnmatched = false) => {
@@ -434,21 +490,64 @@ export const useGrimmLinkSync = (bookKey: string) => {
 
   useEffect(() => {
     const push = async (event: CustomEvent) => {
-      if (event.detail.bookKey === bookKey) await queueProgress();
+      if (event.detail.bookKey === bookKey) {
+        await queueProgress();
+        await queueMetadata();
+      }
+    };
+    const flush = async (event: CustomEvent) => {
+      if (event.detail.bookKey !== bookKey) return;
+      pushProgress.cancel();
+      pushMetadata.cancel();
+      await queueProgress();
+      await queueMetadata();
+      // ReaderContent awaits this event before closing the live renderer. Send
+      // now rather than leaving the final position on the 12-second debounce,
+      // which can be lost if the app closes immediately after the book.
+      const replay = replayScheduler?.flushNow().catch((error) => {
+        console.warn('[GrimmLink] close-time progress replay failed', error);
+      });
+      if (replay) {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            replay,
+            new Promise<void>((resolve) => {
+              timeout = setTimeout(resolve, 3000);
+            }),
+          ]);
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
+      }
     };
     const pull = (event: CustomEvent) => {
       if (event.detail.bookKey === bookKey) void pullProgress(true);
     };
+    const pushMetadataEvent = async (event: CustomEvent) => {
+      if (event.detail.bookKey === bookKey) pushMetadata();
+    };
     eventDispatcher.on('push-grimmlink', push);
-    eventDispatcher.on('flush-grimmlink', push);
+    eventDispatcher.on('push-grimmlink-metadata', pushMetadataEvent);
+    eventDispatcher.on('flush-grimmlink', flush);
     eventDispatcher.on('pull-grimmlink', pull);
     return () => {
       eventDispatcher.off('push-grimmlink', push);
-      eventDispatcher.off('flush-grimmlink', push);
+      eventDispatcher.off('push-grimmlink-metadata', pushMetadataEvent);
+      eventDispatcher.off('flush-grimmlink', flush);
       eventDispatcher.off('pull-grimmlink', pull);
       pushProgress.flush();
+      pushMetadata.flush();
     };
-  }, [bookKey, pullProgress, pushProgress, queueProgress]);
+  }, [
+    bookKey,
+    pullProgress,
+    pushMetadata,
+    pushProgress,
+    queueMetadata,
+    queueProgress,
+    replayScheduler,
+  ]);
 
   useEffect(() => {
     if (provider && progress && !pulled.current) void pullProgress();
@@ -458,7 +557,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
   }, [progress, pushProgress, grimmlink.strategy, syncState]);
 
   useEffect(() => {
-    if (!client || !store || !grimmlink.syncMetadata) return;
+    if (!client || !store || !grimmlink.syncMetadata || !linkResolver) return;
     const book = getBookData(bookKey)?.book;
     if (!book) return;
     void loadCapabilities()
@@ -468,13 +567,24 @@ export const useGrimmLinkSync = (bookKey: string) => {
           device: grimmlink.deviceName,
           deviceId: grimmlink.deviceId,
         });
-        await ratings.pull(book.hash, await store.getRating(book.hash));
+        const link = await linkResolver.resolveLink(book);
+        if (!link) return;
+        await ratings.pull(link.bookHash, await store.getRating(link.bookHash));
       })
-      .catch(() => {});
-  }, [bookKey, client, getBookData, grimmlink, loadCapabilities, store]);
+      .catch((error) => {
+        console.warn('[GrimmLink] rating pull failed', error);
+      });
+  }, [bookKey, client, getBookData, grimmlink, linkResolver, loadCapabilities, store]);
 
   useEffect(() => {
-    if (!client || !store || !replayScheduler || !grimmlink.syncMetadata || metadataPulled.current)
+    if (
+      !client ||
+      !store ||
+      !replayScheduler ||
+      !grimmlink.syncMetadata ||
+      !linkResolver ||
+      metadataPulled.current
+    )
       return;
     const data = getBookData(bookKey);
     const book = data?.book;
@@ -488,31 +598,27 @@ export const useGrimmLinkSync = (bookKey: string) => {
           deviceId: grimmlink.deviceId,
         });
         const notes = data?.config?.booknotes ?? [];
+        const link = await linkResolver.resolveLink(book);
+        if (!link) {
+          metadataPulled.current = false;
+          return;
+        }
+        // Push local notes first. Pulling first can immediately echo notes that
+        // were just mapped from Grimmory back as new local dedupe keys.
+        if (grimmlink.strategy !== 'receive') await queueMetadata();
         await metadata.pull(
-          book.hash,
+          link.bookHash,
           notes,
           async (merged) => {
-            updateBooknotes(bookKey, merged);
+            updateBooknotes(bookKey, merged, 'remote');
           },
           (note) => {
             console.warn('[GrimmLink] retained unresolved remote note', note.id);
           },
         );
-        if (grimmlink.strategy !== 'receive') {
-          const link = await provider?.resolveLink(book);
-          if (link) {
-            await metadata.queuePush(
-              book.hash,
-              link.bookId,
-              getBookData(bookKey)?.config?.booknotes ?? [],
-              link.bookFileId,
-              book.format,
-            );
-            void replayScheduler.requestReplay();
-          }
-        }
       })
-      .catch(() => {
+      .catch((error) => {
+        console.warn('[GrimmLink] metadata pull failed', error);
         metadataPulled.current = false;
       });
   }, [
@@ -521,8 +627,9 @@ export const useGrimmLinkSync = (bookKey: string) => {
     getBookData,
     grimmlink,
     loadCapabilities,
+    linkResolver,
+    queueMetadata,
     replayScheduler,
-    provider,
     store,
     updateBooknotes,
   ]);
@@ -652,6 +759,11 @@ export const useGrimmLinkSync = (bookKey: string) => {
     resolveWithLocal: async () => {
       await queueProgress();
       pushProgress.cancel();
+      // Choosing this device resolves the conflict by enqueueing its current
+      // position. Unlike the automatic synced-state path, this manual branch
+      // must explicitly flush the outbox or the selected position can remain
+      // queued without ever reaching Grimmory.
+      await replayScheduler?.flushNow();
       setConflictDetails(null);
       if (store) {
         const summary = await store.getOutboxSummary();

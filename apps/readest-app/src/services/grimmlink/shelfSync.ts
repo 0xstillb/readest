@@ -437,20 +437,20 @@ export class GrimmLinkShelfProvider {
     transfer?.onStage?.({ stage: 'downloading', book: remote });
     const type = GRIMMLINK_REGULAR_SHELF_TYPE;
 
-    // On native builds, keep the payload out of the WebView entirely.  The
-    // previous path accumulated all response chunks and then created another
-    // ArrayBuffer before writing Temp, which is enough to make Android kill the
-    // process while importing otherwise ordinary 15–50 MB books.
+    // On native builds, keep the payload out of the WebView entirely.  Stage
+    // it under Cache: the native downloader only accepts paths inside
+    // app-owned data/cache roots, while the generic Temp base can resolve to
+    // the system temp directory and be rejected by the filesystem scope.
     if (isTauriAppPlatform() && this.client.downloadShelfBookToFile) {
       const tempPath = `grimmlink/${safeShelfFilename(remote.filename, remote.bookId)}`;
       try {
-        await appService.createDir('grimmlink', 'Temp', true);
-        if (await appService.exists(tempPath, 'Temp')) {
-          await appService.deleteFile(tempPath, 'Temp');
+        await appService.createDir('grimmlink', 'Cache', true);
+        if (await appService.exists(tempPath, 'Cache')) {
+          await appService.deleteFile(tempPath, 'Cache');
         }
         let nativePath: string;
         try {
-          nativePath = await appService.resolveFilePath(tempPath, 'Temp');
+          nativePath = await appService.resolveFilePath(tempPath, 'Cache');
         } catch {
           nativePath = '';
         }
@@ -481,7 +481,7 @@ export class GrimmLinkShelfProvider {
           return;
         }
       } finally {
-        await appService.deleteFile(tempPath, 'Temp').catch(() => {});
+        await appService.deleteFile(tempPath, 'Cache').catch(() => {});
       }
     }
 
@@ -504,13 +504,13 @@ export class GrimmLinkShelfProvider {
         // Large files are safer through the native filesystem path. EPUBs can
         // use the Rust metadata bridge and PDFs avoid ferrying a large Blob into
         // the WebView parser over the Android bridge.
-        await appService.createDir('grimmlink', 'Temp', true);
-        if (await appService.exists(tempPath, 'Temp')) {
-          await appService.deleteFile(tempPath, 'Temp');
+        await appService.createDir('grimmlink', 'Cache', true);
+        if (await appService.exists(tempPath, 'Cache')) {
+          await appService.deleteFile(tempPath, 'Cache');
         }
-        await appService.writeFile(tempPath, 'Temp', importSource);
+        await appService.writeFile(tempPath, 'Cache', importSource);
         try {
-          importSource = await appService.resolveFilePath(tempPath, 'Temp');
+          importSource = await appService.resolveFilePath(tempPath, 'Cache');
         } catch {
           // Keep the File path as a safe fallback on platforms without path
           // resolution support (web/test doubles).
@@ -532,7 +532,7 @@ export class GrimmLinkShelfProvider {
         true,
       );
     } finally {
-      if (useNativeImport) await appService.deleteFile(tempPath, 'Temp').catch(() => {});
+      if (useNativeImport) await appService.deleteFile(tempPath, 'Cache').catch(() => {});
     }
   }
 }

@@ -96,8 +96,18 @@ export const fromGrimmLinkMetadataNote = (
     cfi,
     xpointer0: typeof location['pos0'] === 'string' ? location['pos0'] : undefined,
     xpointer1: typeof location['pos1'] === 'string' ? location['pos1'] : undefined,
-    text: typeof payload['text'] === 'string' ? payload['text'] : undefined,
-    note: typeof payload['note'] === 'string' ? payload['note'] : '',
+    text:
+      typeof payload['text'] === 'string'
+        ? payload['text']
+        : type === 'bookmark' && typeof payload['title'] === 'string'
+          ? payload['title']
+          : undefined,
+    note:
+      typeof payload['note'] === 'string'
+        ? payload['note']
+        : typeof payload['notes'] === 'string'
+          ? payload['notes']
+          : '',
     style:
       payload['style'] === 'highlight' ||
       payload['style'] === 'underline' ||
