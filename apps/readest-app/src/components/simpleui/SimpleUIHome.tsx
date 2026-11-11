@@ -85,7 +85,7 @@ export default function SimpleUIHome() {
           <button
             type='button'
             onClick={() => openBook(currentBook)}
-            className='simpleui-current-reading mx-auto mt-3 grid w-full max-w-3xl shrink-0 grid-cols-[max-content_minmax(0,1fr)] items-center gap-9 bg-base-100 py-3 pe-3 ps-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current sm:mt-4 sm:pe-5'
+            className='simpleui-current-reading mx-auto mt-3 grid w-full max-w-3xl shrink-0 grid-cols-[max-content_minmax(0,1fr)] items-center gap-4 sm:gap-9 bg-base-100 py-3 pe-3 ps-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current sm:mt-4 sm:pe-5'
           >
             <div className='simpleui-cover-frame simpleui-current-cover flex items-center justify-center overflow-hidden bg-base-200'>
               {currentBook.coverImageUrl ? (
@@ -102,7 +102,9 @@ export default function SimpleUIHome() {
               <div className='mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70'>
                 {_('Currently Reading')}
               </div>
-              <h1 className='line-clamp-3 text-xl font-bold sm:text-2xl'>{currentBook.title}</h1>
+              <h1 className='line-clamp-3 text-xl font-bold [overflow-wrap:anywhere] sm:text-2xl'>
+                {currentBook.title}
+              </h1>
               <p className='mt-2 line-clamp-2 text-base text-base-content/75'>
                 {currentBook.author}
               </p>
@@ -128,19 +130,19 @@ export default function SimpleUIHome() {
         )}
 
         {recentBooks.length > 0 && (
-          <section className='mx-auto mt-2 flex min-h-0 w-full max-w-3xl flex-1 flex-col pb-5'>
+          <section className='mx-auto mt-2 w-full max-w-3xl shrink-0 pb-5'>
             <div className='mb-2 flex shrink-0 items-center'>
               <h2 className='text-base font-bold'>{_('Recently read')}</h2>
             </div>
-            <div className='auto-rows-fr grid min-h-0 flex-1 grid-cols-2 gap-3 sm:grid-cols-4'>
+            <div className='simpleui-recent-grid grid items-start gap-3'>
               {recentBooks.map((book) => (
                 <button
                   type='button'
                   key={book.hash}
                   onClick={() => openBook(book)}
-                  className='flex h-full min-h-0 min-w-0 flex-col bg-transparent p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
+                  className='min-w-0 bg-transparent p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
                 >
-                  <div className='simpleui-cover-frame flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-base-200'>
+                  <div className='simpleui-cover-frame flex aspect-[2/3] w-full items-center justify-center overflow-hidden bg-base-200'>
                     {book.coverImageUrl ? (
                       <img
                         src={book.coverImageUrl}

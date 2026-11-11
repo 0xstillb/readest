@@ -111,7 +111,6 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           <svg
             aria-hidden
             viewBox='0 0 48 48'
-            className={clsx(shelfSyncing && 'not-eink:animate-spin')}
             style={{ width: iconSize, height: iconSize }}
             fill='none'
             stroke='currentColor'
@@ -119,7 +118,11 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
             strokeLinecap='round'
             strokeLinejoin='round'
           >
-            <path d='M8 7h27l5 5v28H8zM35 7v6h5M24 16v13m-6-6 6 6 6-6M17 35h14' />
+            <path d='M8 7h27l5 5v28H8zM35 7v6h5M17 35h14' />
+            <path
+              d='M24 16v13m-6-6 6 6 6-6'
+              className={clsx(shelfSyncing && 'simpleui-download-arrow-active')}
+            />
           </svg>
           <span className='sr-only'>{_('Shelf Sync')}</span>
         </button>
@@ -205,6 +208,15 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           src: url('/fonts/SundayMarket-Script.ttf') format('truetype');
           font-display: swap;
         }
+        @keyframes simpleui-download-arrow {
+          0%, 100% { transform: translateY(0); opacity: 1; }
+          65% { transform: translateY(3px); opacity: 0.65; }
+        }
+        @media (prefers-reduced-motion: no-preference) {
+          html:not([data-eink='true']) .simpleui-download-arrow-active {
+            animation: simpleui-download-arrow 1s ease-in-out infinite;
+          }
+        }
         .simpleui-clock {
           font-family: 'Sunday Market', sans-serif;
           font-weight: 400;
@@ -229,31 +241,53 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           .library-list-item h4[title] {
           display: none;
         }
-        #simpleui-library[data-book-title-mode='hidden']
-          .bookitem-main > span,
-        #simpleui-library[data-book-title-mode='hidden']
-          .fallback-cover > div:first-child span,
-        #simpleui-library[data-book-title-mode='below']
-          .bookitem-main > span,
-        #simpleui-library[data-book-title-mode='below']
-          .fallback-cover > div:first-child span {
+        #simpleui-library[data-book-title-mode='cover'] .simpleui-cover-title {
+          display: -webkit-box;
+          position: absolute;
+          inset: auto 0 0;
+          z-index: 1;
+          overflow: hidden;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 3;
+          overflow-wrap: anywhere;
+          padding: 0.35rem 0.45rem;
+          background: rgba(0, 0, 0, 0.8);
+          color: white;
+          font-size: 0.75rem;
+          font-weight: 600;
+          line-height: 1.25;
+        }
+        html[data-eink='true'] #simpleui-library[data-book-title-mode='cover'] .simpleui-cover-title {
+          background: var(--color-base-100);
+          color: var(--color-base-content);
+          border-top: 1px solid currentColor;
+        }
+        #simpleui-library[data-book-title-mode='cover'] .fallback-cover-title,
+        #simpleui-library[data-book-title-mode='cover'] .fallback-cover > div:first-child span,
+        #simpleui-library[data-book-title-mode='hidden'] .fallback-cover-title,
+        #simpleui-library[data-book-title-mode='hidden'] .fallback-cover > div:first-child span,
+        #simpleui-library[data-book-title-mode='below'] .fallback-cover-title,
+        #simpleui-library[data-book-title-mode='below'] .fallback-cover > div:first-child span {
           display: none;
         }
         #simpleui-library .bookshelf [class~='not-eink:hidden'] {
           display: none;
         }
+        .simpleui-home {
+          --simpleui-current-cover-width: min(28vw, 18.67dvh, 13.33rem);
+        }
+        .simpleui-recent-grid {
+          grid-template-columns: repeat(auto-fill, minmax(0, calc(var(--simpleui-current-cover-width) * 0.8)));
+        }
         .simpleui-current-cover {
-          width: auto;
-          height: min(28dvh, 20rem);
+          width: var(--simpleui-current-cover-width);
+          height: auto;
           aspect-ratio: 2 / 3;
           justify-self: start;
         }
         @media (max-height: 760px) {
           .simpleui-clock {
             font-size: clamp(3rem, 10dvh, 5.25rem);
-          }
-          .simpleui-current-cover {
-            height: min(16dvh, 7rem);
           }
           .simpleui-current-copy > div:first-child {
             margin-bottom: 0.25rem !important;
@@ -274,21 +308,23 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
         #simpleui-library .bookitem-main {
           border: 0 !important;
           box-shadow:
-            1px 2px 2px color-mix(in srgb, var(--color-base-content) 32%, transparent),
-            3px 8px 10px color-mix(in srgb, var(--color-base-content) 20%, transparent),
-            7px 17px 22px color-mix(in srgb, var(--color-base-content) 9%, transparent);
+            1px 2px 2px rgba(0, 0, 0, 0.32),
+            3px 8px 10px rgba(0, 0, 0, 0.20),
+            7px 17px 22px rgba(0, 0, 0, 0.09);
         }
         #simpleui-library .bookitem-main .cover-image,
         #simpleui-library .bookitem-main .fallback-cover {
           border: 0 !important;
           box-shadow: none !important;
         }
-        /* An e-ink panel has no shadows.  A crisp 1px border delineates the
-           cover instead of the layered shadow the colour theme uses. */
+        /* Keep SimpleUI covers consistent across normal and e-ink modes. */
         html[data-eink='true'] .simpleui-cover-frame,
         html[data-eink='true'] #simpleui-library .bookitem-main {
-          border: 1px solid var(--color-base-content) !important;
-          box-shadow: none !important;
+          border: 0 !important;
+          box-shadow:
+            1px 2px 2px rgba(0, 0, 0, 0.32),
+            3px 8px 10px rgba(0, 0, 0, 0.20),
+            7px 17px 22px rgba(0, 0, 0, 0.09) !important;
         }
       `}</style>
     </>
