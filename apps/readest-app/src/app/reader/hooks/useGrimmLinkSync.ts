@@ -210,7 +210,10 @@ export const useGrimmLinkSync = (bookKey: string) => {
 
   // The ratings and the metadata both ask for the Adapter capabilities, so
   // the answer is fetched once and shared.
-  const capabilitiesRequest = useRef<Promise<string[]> | null>(null);
+  const capabilitiesRequest = useMemo(
+    () => ({ current: null as Promise<string[]> | null }),
+    [client],
+  );
   const loadCapabilities = useCallback(() => {
     if (!client) return Promise.resolve<string[]>([]);
     capabilitiesRequest.current ??= client
@@ -221,7 +224,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         throw error;
       });
     return capabilitiesRequest.current;
-  }, [client]);
+  }, [client, capabilitiesRequest]);
 
   const store = useMemo(() => {
     const config = grimmlink;

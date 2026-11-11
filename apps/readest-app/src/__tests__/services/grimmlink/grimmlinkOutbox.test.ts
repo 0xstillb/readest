@@ -516,6 +516,49 @@ describe('GrimmLink durable outbox', () => {
     );
   });
 
+  it('does not invalidate a newer metadata payload when an older request is rejected', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      bookmarks: [{ dedupeKey: 'bookmark-a', title: 'Old title' }],
+    });
+
+    let markStarted: (() => void) | undefined;
+    let rejectRequest: ((error: Error) => void) | undefined;
+    const requestStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const client = {
+      syncMetadata: vi.fn().mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectRequest = reject;
+            markStarted?.();
+          }),
+      ),
+    };
+    const replay = new GrimmLinkOutbox(store, client).replay();
+    await requestStarted;
+
+    await store.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      bookmarks: [{ dedupeKey: 'bookmark-a', title: 'Corrected title' }],
+    });
+    rejectRequest?.(new GrimmLinkRequestError('validation', 'Rejected older payload.', 422));
+    await replay;
+
+    await expect(store.ready('metadata')).resolves.toEqual([
+      expect.objectContaining({
+        payload: {
+          bookId: 4,
+          bookHash: 'book-a',
+          bookmarks: [{ dedupeKey: 'bookmark-a', title: 'Corrected title' }],
+        },
+      }),
+    ]);
+  });
   it('keeps metadata queued when a bookmark fails inside an HTTP success response', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueMetadata('book-a', { bookId: 4, bookmarks: [{ dedupeKey: 'bm-a' }] });

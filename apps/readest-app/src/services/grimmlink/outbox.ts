@@ -176,14 +176,12 @@ export class GrimmLinkOutbox {
       retryable: requestError.category === 'network' || requestError.category === 'server',
     });
     if (requestError.category === 'invalid-data' || requestError.category === 'conflict') {
-      await this.store.invalidateMany(
-        rows.map((row) => row.id),
-        requestError.category,
-      );
+      await this.store.invalidateMatching(rows, requestError.category);
     } else {
-      await this.store.retryMany(
+      await this.store.retryMatching(
         rows.map((row) => ({
           id: row.id,
+          payload: row.payload,
           attempts: row.attempts + 1,
           nextRetryAt: retryAt(row.attempts + 1),
         })),

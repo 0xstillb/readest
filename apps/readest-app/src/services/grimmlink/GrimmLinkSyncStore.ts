@@ -591,6 +591,51 @@ export class GrimmLinkSyncStore {
     });
   }
 
+  /** Update failure state only for the exact payload that failed remotely. */
+  async invalidateMatching(
+    rows: Array<Pick<GrimmLinkOutboxRow, 'id' | 'payload'>>,
+    category: GrimmLinkDiagnosticsErrorCategory,
+  ): Promise<void> {
+    if (!rows.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (const row of rows) {
+          await db.execute(
+            "UPDATE outbox SET state = 'invalid', error_category = ? WHERE connection_id = ? AND id = ? AND payload = ?",
+            [category, this.connectionId, row.id, JSON.stringify(row.payload)],
+          );
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
+  }
+
+  async retryMatching(
+    rows: Array<
+      Pick<GrimmLinkOutboxRow, 'id' | 'payload'> & { attempts: number; nextRetryAt: number }
+    >,
+  ): Promise<void> {
+    if (!rows.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (const row of rows) {
+          await db.execute(
+            'UPDATE outbox SET attempts = ?, next_retry_at = ?, error_category = NULL WHERE connection_id = ? AND id = ? AND payload = ?',
+            [row.attempts, row.nextRetryAt, this.connectionId, row.id, JSON.stringify(row.payload)],
+          );
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
+  }
   async retry(id: string, attempts: number, nextRetryAt: number): Promise<void> {
     await this.withDb((db) =>
       db.execute(
