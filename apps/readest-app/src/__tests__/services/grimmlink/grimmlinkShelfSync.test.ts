@@ -147,13 +147,20 @@ describe('GrimmLink shelf sync safety', () => {
     expect(opf).toContain('<package xmlns:opf="http://www.idpf.org/2007/opf">');
   });
 
-  it('reports the import stage after a shelf download completes', async () => {
+  it('reports import progress and restores the original PDF filename', async () => {
     const stages: string[] = [];
     let importedFile: unknown;
     let downloadArgs: unknown[] = [];
     const client = {
       getShelfBooks: async () => [
-        { bookId: 1, bookHash: 'remote-hash', filename: 'book.pdf', format: 'PDF' as const },
+        {
+          bookId: 538,
+          bookHash: 'remote-hash',
+          filename: 'Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14 - Ryoko Kui & 九井諒子.pdf',
+          title: 'Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14',
+          author: 'Ryoko Kui & 九井諒子',
+          format: 'PDF' as const,
+        },
       ],
       downloadShelfBook: async (...args: unknown[]) => {
         downloadArgs = args;
@@ -173,23 +180,36 @@ describe('GrimmLink shelf sync safety', () => {
       deleteFile: async () => {},
       importBook: async (file: unknown) => {
         importedFile = file;
-        return { hash: 'local-hash', title: 'Book', format: 'PDF' };
+        return {
+          hash: 'local-hash',
+          title: '538-Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14 - Ryoko Kui & 九井諒子',
+          originalFilename: '538-Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14 - Ryoko Kui & 九井諒子.pdf',
+          format: 'PDF',
+        };
       },
       deleteBook: async () => {},
     };
 
+    let savedBook: Book | undefined;
     await new GrimmLinkShelfProvider(client, store as never).sync(
       1,
       [],
-      async () => {},
+      async (book) => {
+        savedBook = book;
+      },
       appService as never,
       { onStage: ({ stage }) => stages.push(stage) },
     );
 
     expect(stages).toEqual(['downloading', 'importing']);
+    expect(savedBook?.title).toBe('Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14');
+    expect(savedBook?.author).toBe('Ryoko Kui & 九井諒子');
+    expect(savedBook?.originalFilename).toBe(
+      'Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14 - Ryoko Kui & 九井諒子.pdf',
+    );
     expect(importedFile).toBeInstanceOf(File);
     // Adapter v2 requires the verified Grimmory content hash for downloads.
-    expect(downloadArgs.slice(0, 2)).toEqual([1, 'remote-hash']);
+    expect(downloadArgs.slice(0, 2)).toEqual([538, 'remote-hash']);
   });
 
   it('removes a stale partial temp file before writing and cleans up after import failure', async () => {

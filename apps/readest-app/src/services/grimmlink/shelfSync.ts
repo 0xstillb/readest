@@ -118,6 +118,25 @@ const removeShelfEntries = async (
     await store.removeShelfEntry(entry.shelfType, entry.shelfId, entry.bookId);
 };
 
+const applyShelfBookMetadata = (book: Book, remote: GrimmLinkShelfBook): Book => {
+  const originalFilename = remote.filename.replace(/^.*[\\/]/, '');
+  const cachedFilename = safeShelfFilename(originalFilename, remote.bookId);
+  const cachedTitle = cachedFilename.replace(/\.[^.]*$/, '');
+  const filenameTitle = originalFilename.replace(/\.[^.]*$/, '');
+  const title =
+    remote.title?.trim() ||
+    (book.format === 'PDF' && book.title === cachedTitle ? filenameTitle : book.title);
+  const author = remote.author?.trim() || book.author;
+  const filenameUsesCacheName = book.originalFilename === cachedFilename;
+  if (title === book.title && author === book.author && !filenameUsesCacheName) return book;
+  return {
+    ...book,
+    title,
+    author,
+    ...(filenameUsesCacheName ? { originalFilename } : {}),
+  };
+};
+
 const addToPresenceIndex = (index: GrimmLinkLibraryPresenceIndex, book: Book) => {
   const path = getLocalBookFilename(book);
   index.hashes.add(book.hash);
@@ -465,19 +484,20 @@ export class GrimmLinkShelfProvider {
           transfer?.onStage?.({ stage: 'importing', book: remote });
           const imported = await appService.importBook(nativePath, library);
           if (!imported) throw new Error('Failed to import GrimmLink shelf book');
-          const existingIndex = library.findIndex((book) => book.hash === imported.hash);
-          if (existingIndex === -1) library.push(imported);
-          else library[existingIndex] = imported;
-          await onImported(imported, [...library]);
+          const shelfBook = applyShelfBookMetadata(imported, remote);
+          const existingIndex = library.findIndex((book) => book.hash === shelfBook.hash);
+          if (existingIndex === -1) library.push(shelfBook);
+          else library[existingIndex] = shelfBook;
+          await onImported(shelfBook, [...library]);
           await this.store.markShelfEntry(
             type,
             shelfId,
             remote.bookId,
             remote.bookHash,
-            getLocalBookFilename(imported),
+            getLocalBookFilename(shelfBook),
             true,
           );
-          if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
+          if (presenceIndex) addToPresenceIndex(presenceIndex, shelfBook);
           return;
         }
       } finally {
@@ -518,17 +538,18 @@ export class GrimmLinkShelfProvider {
       }
       const imported = await appService.importBook(importSource, library);
       if (!imported) throw new Error('Failed to import GrimmLink shelf book');
-      const existingIndex = library.findIndex((book) => book.hash === imported.hash);
-      if (existingIndex === -1) library.push(imported);
-      else library[existingIndex] = imported;
-      await onImported(imported, [...library]);
-      if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
+      const shelfBook = applyShelfBookMetadata(imported, remote);
+      const existingIndex = library.findIndex((book) => book.hash === shelfBook.hash);
+      if (existingIndex === -1) library.push(shelfBook);
+      else library[existingIndex] = shelfBook;
+      await onImported(shelfBook, [...library]);
+      if (presenceIndex) addToPresenceIndex(presenceIndex, shelfBook);
       await this.store.markShelfEntry(
         type,
         shelfId,
         remote.bookId,
         remote.bookHash,
-        getLocalBookFilename(imported),
+        getLocalBookFilename(shelfBook),
         true,
       );
     } finally {

@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { useEnv } from '@/context/EnvContext';
 import { useLibrary } from '@/hooks/useLibrary';
 import { useTheme } from '@/hooks/useTheme';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -15,7 +16,9 @@ import { navigateToReader } from '@/utils/nav';
 import type { Book } from '@/types/book';
 import SettingsDialog from '@/components/settings/SettingsDialog';
 import BookCover from '@/components/BookCover';
+import WindowButtons from '@/components/WindowButtons';
 import SimpleUIBottomBar from './SimpleUIBottomBar';
+import useSimpleUIHomeDisplay from './useSimpleUIHomeDisplay';
 
 const progressPercent = (book: Book) => {
   const [current, total] = book.progress ?? [0, 0];
@@ -25,10 +28,13 @@ const progressPercent = (book: Book) => {
 export default function SimpleUIHome() {
   const _ = useTranslation();
   const router = useRouter();
+  const { appService } = useEnv();
+  const dragRegionRef = useRef<HTMLDivElement>(null);
   const { library } = useLibraryStore();
   const { libraryLoaded } = useLibrary();
   const { isSettingsDialogOpen, settings } = useSettingsStore();
   const { safeAreaInsets } = useThemeStore();
+  const { display } = useSimpleUIHomeDisplay();
   const [now, setNow] = useState(() => new Date());
 
   useTheme({ systemUIVisible: true, appThemeColor: 'base-100' });
@@ -54,17 +60,21 @@ export default function SimpleUIHome() {
     [library],
   );
   const currentBook = activeBooks[0];
-  const recentBooks = activeBooks.slice(currentBook ? 1 : 0, 5);
+  const recentBooks = activeBooks.slice(currentBook ? 1 : 0, (currentBook ? 1 : 0) + 4);
 
   const openBook = (book: Book) => navigateToReader(router, [book.hash]);
 
   return (
     <main
       className='simpleui-home full-height flex flex-col overflow-hidden bg-base-100 text-base-content'
+      data-home-display={display}
       style={{ '--simpleui-safe-bottom': `${safeAreaInsets?.bottom ?? 0}px` } as CSSProperties}
     >
       <div className='simpleui-home-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pt-[max(0.5rem,env(safe-area-inset-top))] sm:px-8'>
-        <header className='mx-auto flex max-w-3xl shrink-0 flex-col items-center py-1 text-center'>
+        <header
+          ref={dragRegionRef}
+          className='flex w-full shrink-0 flex-col items-center py-1 text-center'
+        >
           <time className='simpleui-clock tabular-nums'>
             {new Intl.DateTimeFormat(undefined, {
               hour: '2-digit',
@@ -81,13 +91,18 @@ export default function SimpleUIHome() {
             }).format(now)}
           </div>
         </header>
+        {appService?.hasWindowBar && (
+          <WindowButtons
+            className='absolute h-0 w-0 overflow-hidden'
+            headerRef={dragRegionRef}
+            showMinimize={false}
+            showMaximize={false}
+            showClose={false}
+          />
+        )}
 
         {currentBook ? (
-          <button
-            type='button'
-            onClick={() => openBook(currentBook)}
-            className='simpleui-current-reading mx-auto mt-3 grid w-full max-w-3xl shrink-0 grid-cols-[max-content_minmax(0,1fr)] items-center gap-4 sm:gap-9 bg-base-100 py-3 pe-3 ps-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current sm:mt-4 sm:pe-5'
-          >
+          <section className='simpleui-current-reading mx-auto mt-3 grid w-full max-w-3xl shrink-0 items-center gap-4 bg-transparent py-3 pe-3 ps-0 text-left sm:mt-4 sm:gap-8 sm:pe-5'>
             <div className='simpleui-cover-frame simpleui-current-cover flex items-center justify-center overflow-hidden bg-base-200'>
               <BookCover
                 book={currentBook}
@@ -99,7 +114,7 @@ export default function SimpleUIHome() {
               <div className='mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70'>
                 {_('Currently Reading')}
               </div>
-              <h1 className='line-clamp-3 text-xl font-bold [overflow-wrap:anywhere] sm:text-2xl'>
+              <h1 className='text-xl font-bold [overflow-wrap:anywhere] sm:text-2xl'>
                 {currentBook.title}
               </h1>
               <p className='mt-2 line-clamp-2 text-base text-base-content/75'>
@@ -115,9 +130,26 @@ export default function SimpleUIHome() {
                   {progressPercent(currentBook)}%
                 </span>
               </div>
-              <div className='mt-4 text-sm font-semibold'>{_('Continue Reading')}</div>
+              <button
+                type='button'
+                onClick={() => openBook(currentBook)}
+                className='simpleui-continue-reading mt-4 flex w-full cursor-pointer items-center justify-between text-left text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
+              >
+                <span>{_('Continue Reading')}</span>
+                <svg
+                  aria-hidden='true'
+                  viewBox='0 0 24 24'
+                  fill='none'
+                  stroke='currentColor'
+                  strokeWidth='1.8'
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                >
+                  <path d='M4 12h15m-6-6 6 6-6 6' />
+                </svg>
+              </button>
             </div>
-          </button>
+          </section>
         ) : (
           <div className='mx-auto mt-4 max-w-3xl shrink-0 border border-base-content/45 p-5 text-center'>
             <p className='text-lg font-semibold'>
@@ -126,7 +158,7 @@ export default function SimpleUIHome() {
           </div>
         )}
 
-        {recentBooks.length > 0 && (
+        {display === 'both' && recentBooks.length > 0 && (
           <section className='mx-auto mt-2 w-full max-w-3xl shrink-0 pb-5'>
             <div className='mb-2 flex shrink-0 items-center'>
               <h2 className='text-base font-bold'>{_('Recently read')}</h2>

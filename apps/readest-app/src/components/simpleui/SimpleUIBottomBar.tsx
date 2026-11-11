@@ -274,16 +274,34 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           display: none;
         }
         .simpleui-home {
-          --simpleui-current-cover-width: min(28vw, 18.67dvh, 13.33rem);
+          --simpleui-current-cover-width: clamp(8rem, 42vw, 18rem);
         }
         .simpleui-recent-grid {
-          grid-template-columns: repeat(auto-fill, minmax(0, calc(var(--simpleui-current-cover-width) * 0.8)));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
         }
         .simpleui-current-cover {
-          width: var(--simpleui-current-cover-width);
+          width: min(100%, var(--simpleui-current-cover-width));
           height: auto;
           aspect-ratio: 2 / 3;
-          justify-self: start;
+          justify-self: center;
+        }
+        .simpleui-current-reading {
+          grid-template-columns: minmax(0, 45%) minmax(0, 1fr);
+        }
+        .simpleui-continue-reading {
+          min-height: 2.75rem;
+          border: 1px solid currentColor;
+          border-radius: 0.2rem;
+          padding: 0 0.75rem;
+        }
+        .simpleui-continue-reading svg {
+          width: 1.25rem;
+          height: 1.25rem;
+          flex: none;
+        }
+        .simpleui-home[data-home-display='current'] .simpleui-current-reading {
+          flex: 1 0 auto;
+          align-content: center;
         }
         @media (max-height: 760px) {
           .simpleui-clock {
@@ -311,6 +329,35 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
             1px 2px 2px rgba(0, 0, 0, 0.32),
             3px 8px 10px rgba(0, 0, 0, 0.20),
             7px 17px 22px rgba(0, 0, 0, 0.09);
+        }
+        @media (max-width: 540px) {
+          .simpleui-home .simpleui-current-reading {
+            grid-template-columns: minmax(0, 1fr);
+            justify-items: center;
+            row-gap: 1.25rem;
+            padding-inline: 0;
+          }
+          .simpleui-home .simpleui-current-cover {
+            width: min(72vw, 18rem);
+          }
+          .simpleui-home .simpleui-current-copy {
+            width: min(100%, 32rem);
+          }
+        }
+        @media (max-width: 420px) {
+          .simpleui-home .simpleui-home-content {
+            padding-inline: 1rem;
+          }
+          .simpleui-home {
+            --simpleui-current-cover-width: clamp(6.25rem, 35.5vw, 9.5rem);
+          }
+          .simpleui-home .simpleui-current-reading {
+            column-gap: 0.75rem;
+            padding-inline-end: 0.5rem;
+          }
+          .simpleui-home .simpleui-current-copy > div:nth-of-type(2) {
+            gap: 0.5rem;
+          }
         }
         #simpleui-library .bookitem-main .cover-image,
         #simpleui-library .bookitem-main .fallback-cover {

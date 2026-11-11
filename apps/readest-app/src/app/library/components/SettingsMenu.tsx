@@ -51,6 +51,7 @@ import { type AppLockDialogMode, useAppLockStore } from '@/store/appLockStore';
 import GrimmLinkShelfSyncStatus from '@/components/settings/integrations/GrimmLinkShelfSyncStatus';
 import useSimpleUIMode from '@/components/simpleui/useSimpleUIMode';
 import useSimpleUIBottomBarIconSize from '@/components/simpleui/useSimpleUIBottomBarIconSize';
+import useSimpleUIHomeDisplay from '@/components/simpleui/useSimpleUIHomeDisplay';
 
 interface SettingsMenuProps {
   onPullLibrary: (fullRefresh?: boolean, verbose?: boolean) => void;
@@ -90,6 +91,8 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
     minIconSize,
     maxIconSize,
   } = useSimpleUIBottomBarIconSize();
+  const { display: simpleUIHomeDisplay, setDisplay: setSimpleUIHomeDisplay } =
+    useSimpleUIHomeDisplay();
 
   useEffect(() => {
     if (!isBiometricSupported(appService) || !isPinEnabled) return;
@@ -422,29 +425,50 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
         onClick={() => setSimpleUIEnabled(!simpleUIEnabled)}
       />
       {simpleUIEnabled && (
-        <MenuItem label={_('Bottom Bar Icon Size')}>
-          <div className='px-3 pb-3 pt-1'>
-            <div className='mb-2 flex items-center justify-between text-xs'>
-              <label htmlFor='simpleui-bottom-bar-icon-size'>{_('Icon size')}</label>
-              <output htmlFor='simpleui-bottom-bar-icon-size'>{simpleUIIconSize}px</output>
+        <>
+          <MenuItem label={_('Home display')}>
+            <div className='px-3 pb-3 pt-1'>
+              <label className='mb-2 block text-xs' htmlFor='simpleui-home-display'>
+                {_('Home sections')}
+              </label>
+              <select
+                id='simpleui-home-display'
+                aria-label={_('Home display')}
+                className='select select-sm w-full'
+                value={simpleUIHomeDisplay}
+                onChange={(event) =>
+                  setSimpleUIHomeDisplay(event.currentTarget.value as 'current' | 'both')
+                }
+              >
+                <option value='current'>{_('Currently Reading only')}</option>
+                <option value='both'>{_('Currently Reading and Recently read')}</option>
+              </select>
             </div>
-            <input
-              id='simpleui-bottom-bar-icon-size'
-              aria-label={_('Bottom Bar Icon Size')}
-              type='range'
-              min={minIconSize}
-              max={maxIconSize}
-              step={2}
-              value={simpleUIIconSize}
-              onChange={(event) => setIconSize(Number(event.currentTarget.value))}
-              className='range range-xs w-full'
-            />
-            <div className='mt-1 flex justify-between text-[10px] text-base-content/60'>
-              <span>{minIconSize}px</span>
-              <span>{maxIconSize}px</span>
+          </MenuItem>
+          <MenuItem label={_('Bottom Bar Icon Size')}>
+            <div className='px-3 pb-3 pt-1'>
+              <div className='mb-2 flex items-center justify-between text-xs'>
+                <label htmlFor='simpleui-bottom-bar-icon-size'>{_('Icon size')}</label>
+                <output htmlFor='simpleui-bottom-bar-icon-size'>{simpleUIIconSize}px</output>
+              </div>
+              <input
+                id='simpleui-bottom-bar-icon-size'
+                aria-label={_('Bottom Bar Icon Size')}
+                type='range'
+                min={minIconSize}
+                max={maxIconSize}
+                step={2}
+                value={simpleUIIconSize}
+                onChange={(event) => setIconSize(Number(event.currentTarget.value))}
+                className='range range-xs w-full'
+              />
+              <div className='mt-1 flex justify-between text-[10px] text-base-content/60'>
+                <span>{minIconSize}px</span>
+                <span>{maxIconSize}px</span>
+              </div>
             </div>
-          </div>
-        </MenuItem>
+          </MenuItem>
+        </>
       )}
 
       {isTauriAppPlatform() && (
