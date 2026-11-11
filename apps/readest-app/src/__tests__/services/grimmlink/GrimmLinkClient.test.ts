@@ -332,6 +332,7 @@ describe('GrimmLinkClient', () => {
     const client = new GrimmLinkClient(makeConfig());
 
     await client.getReadStatuses();
+    await client.getBookMetadata(1);
     await client.updateReadStatus(1, 'reading');
     await client.postSessionBatch({ bookId: 1, sessions: [] }, 'readest-session-1');
     await client.syncMetadata({ schemaVersion: 1, rating: { value: 8, scale: 10 } });
@@ -340,6 +341,7 @@ describe('GrimmLinkClient', () => {
     const requested = urls(fetchMock).filter((url) => !url.endsWith('/auth/session'));
     expect(requested).toEqual([
       'http://192.168.1.50:3000/api/grimmlink/v2/books/read-statuses',
+      'http://192.168.1.50:3000/api/grimmlink/v2/books/1/metadata',
       'http://192.168.1.50:3000/api/grimmlink/v2/books/1/status',
       'http://192.168.1.50:3000/api/grimmlink/v2/reading-sessions/batch',
       'http://192.168.1.50:3000/api/grimmlink/v2/syncs/metadata/batch',

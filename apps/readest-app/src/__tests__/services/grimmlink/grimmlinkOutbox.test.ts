@@ -641,6 +641,28 @@ describe('GrimmLink status and rating contract', () => {
     ).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
   });
 
+  it('pulls Grimmory read status with its authoritative modification time', async () => {
+    const provider = new GrimmLinkReadStatusProvider(
+      {
+        getReadStatuses: vi.fn().mockResolvedValue({ statuses: ['READ', 'READING'] }),
+        getBookMetadata: vi.fn().mockResolvedValue({
+          bookId: 42,
+          readStatus: 'READ',
+          readStatusModifiedTime: '2026-11-10T08:00:00.000Z',
+        }),
+      },
+      {} as never,
+      ['read-status'],
+    );
+
+    await expect(
+      provider.pullRemote(42, { readingStatus: 'reading', readingStatusUpdatedAt: 100 }),
+    ).resolves.toEqual({
+      readingStatus: 'finished',
+      readingStatusUpdatedAt: Date.parse('2026-11-10T08:00:00.000Z'),
+    });
+  });
+
   it('converts rating scales and preserves newer local ratings on pull', () => {
     expect(
       toGrimmLinkRating({ value: 4, scale: 5, updatedAt: 200 }, 'connection-a', 'book-a'),
@@ -700,6 +722,7 @@ describe('GrimmLink status and rating contract', () => {
       const client = {
         getCapabilities: vi.fn().mockResolvedValue({ capabilities: ['read-status'] }),
         getReadStatuses: vi.fn().mockResolvedValue({ statuses: ['finished'] }),
+        getBookMetadata: vi.fn().mockResolvedValue({}),
         matchBook: vi.fn().mockResolvedValue(null),
         updateReadStatus: vi.fn().mockResolvedValue({ ok: true }),
       };

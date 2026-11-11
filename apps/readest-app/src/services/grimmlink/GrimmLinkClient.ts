@@ -691,6 +691,10 @@ export class GrimmLinkClient {
     return this.requestJson('/books/read-statuses');
   }
 
+  getBookMetadata(bookId: number): Promise<Record<string, unknown>> {
+    return this.requestJson(`/books/${bookId}/metadata`);
+  }
+
   updateReadStatus(bookId: number, status: string): Promise<Record<string, unknown>> {
     return this.requestJson(`/books/${bookId}/status`, 'PUT', { status });
   }

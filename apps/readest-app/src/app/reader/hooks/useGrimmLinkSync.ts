@@ -4,6 +4,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useBookProgress } from '@/store/readerProgressStore';
 import { useBookDataStore } from '@/store/bookDataStore';
+import { useLibraryStore } from '@/store/libraryStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { DEFAULT_GRIMMLINK_SETTINGS } from '@/services/constants';
 import { debounce } from '@/utils/debounce';
@@ -25,6 +26,7 @@ import { GrimmLinkOutbox } from '@/services/grimmlink/outbox';
 import { GrimmLinkReplayScheduler } from '@/services/grimmlink/replayScheduler';
 import { GrimmLinkSessionTracker } from '@/services/grimmlink/sessions';
 import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
+import { GrimmLinkReadStatusProvider } from '@/services/grimmlink/readStatus';
 import { GrimmLinkMetadataProvider } from '@/services/grimmlink/metadataProvider';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import type { SyncDetails } from './useKOSync';
@@ -171,19 +173,22 @@ export const applyRemotePosition = async (
 /** Reader-only GrimmLink Adapter v2 progress, session, rating, annotation, and bookmark integration. */
 export const useGrimmLinkSync = (bookKey: string) => {
   const _ = useTranslation();
-  const { appService } = useEnv();
+  const { appService, envConfig } = useEnv();
   const { settings } = useSettingsStore();
   const grimmlink = settings.grimmlink ?? DEFAULT_GRIMMLINK_SETTINGS;
   const getProgress = useReaderStore((s) => s.getProgress);
   const getView = useReaderStore((s) => s.getView);
   const getBookData = useBookDataStore((s) => s.getBookData);
   const updateBooknotes = useBookDataStore((s) => s.updateBooknotes);
+  const getLibraryBook = useLibraryStore((s) => s.getBookByHash);
+  const updateLibraryBook = useLibraryStore((s) => s.updateBook);
   const progress = useBookProgress(bookKey);
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [conflictDetails, setConflictDetails] = useState<SyncDetails | null>(null);
   const pulled = useRef(false);
   const metadataPulled = useRef(false);
   const ratingPullKey = useRef<string | null>(null);
+  const statusPullKey = useRef<string | null>(null);
   const sessionTracker = useRef(new GrimmLinkSessionTracker());
   const pullInFlight = useRef<Promise<void> | null>(null);
   const sessionClosing = useRef<Promise<void> | null>(null);
@@ -597,6 +602,62 @@ export const useGrimmLinkSync = (bookKey: string) => {
     if (
       !client ||
       !store ||
+      !grimmlink.syncReadStatus ||
+      !linkResolver ||
+      grimmlink.strategy === 'send'
+    ) {
+      statusPullKey.current = null;
+      return;
+    }
+    const book = getBookData(bookKey)?.book;
+    if (!book) return;
+    const pullKey = [
+      bookKey,
+      grimmlink.serverUrl,
+      grimmlink.username,
+      grimmlink.userkey,
+      grimmlink.deviceId,
+    ].join('\u0000');
+    if (statusPullKey.current === pullKey) return;
+    statusPullKey.current = pullKey;
+    void loadCapabilities()
+      .then(async (capabilities) => {
+        const statuses = new GrimmLinkReadStatusProvider(client, store, capabilities);
+        const link = await linkResolver.resolveLink(book);
+        if (!link) {
+          if (statusPullKey.current === pullKey) statusPullKey.current = null;
+          return;
+        }
+        const local = getLibraryBook(book.hash) ?? book;
+        const merged = await statuses.pullRemote(link.bookId, local);
+        if (
+          merged.readingStatus !== local.readingStatus ||
+          merged.readingStatusUpdatedAt !== local.readingStatusUpdatedAt
+        ) {
+          await updateLibraryBook(envConfig, { ...local, ...merged });
+        }
+      })
+      .catch((error) => {
+        console.warn('[GrimmLink] reading status pull failed', error);
+        if (statusPullKey.current === pullKey) statusPullKey.current = null;
+      });
+  }, [
+    bookKey,
+    client,
+    envConfig,
+    getBookData,
+    getLibraryBook,
+    grimmlink,
+    linkResolver,
+    loadCapabilities,
+    store,
+    updateLibraryBook,
+  ]);
+
+  useEffect(() => {
+    if (
+      !client ||
+      !store ||
       !replayScheduler ||
       !grimmlink.syncMetadata ||
       !linkResolver ||
@@ -654,7 +715,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
 
   const startSession = useCallback(async () => {
     if (
-      !provider ||
+      !linkResolver ||
       !store ||
       !replayScheduler ||
       !grimmlink.syncSessions ||
@@ -674,13 +735,13 @@ export const useGrimmLinkSync = (bookKey: string) => {
       currentPage: value?.currentPage,
       totalPages: value?.totalPages,
     });
-  }, [makePosition, replayScheduler, provider, grimmlink.syncSessions, store]);
+  }, [makePosition, replayScheduler, linkResolver, grimmlink.syncSessions, store]);
 
   const closeSession = useCallback(async () => {
     if (sessionClosing.current) return sessionClosing.current;
     const run = (async () => {
       if (
-        !provider ||
+        !linkResolver ||
         !store ||
         !replayScheduler ||
         !grimmlink.syncSessions ||
@@ -692,7 +753,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       if (!book || !position) return;
       let link = lastBookLink.current;
       try {
-        link = (await provider.resolveLink(book)) ?? link;
+        link = (await linkResolver.resolveLink(book)) ?? link;
       } catch (error) {
         if (!link) {
           setSyncState(
@@ -720,7 +781,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
         },
         {
           bookId: link.bookId,
-          bookHash: book.hash,
+          bookHash: link.bookHash,
           bookType: book.format,
           device: grimmlink.deviceName,
           deviceId: grimmlink.deviceId,
@@ -738,7 +799,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     } finally {
       if (sessionClosing.current === run) sessionClosing.current = null;
     }
-  }, [bookKey, getBookData, makePosition, replayScheduler, provider, grimmlink, store]);
+  }, [bookKey, getBookData, makePosition, replayScheduler, linkResolver, grimmlink, store]);
 
   useEffect(() => {
     void startSession();
@@ -751,6 +812,8 @@ export const useGrimmLinkSync = (bookKey: string) => {
     if (active) {
       pulled.current = false;
       metadataPulled.current = false;
+      ratingPullKey.current = null;
+      statusPullKey.current = null;
       void startSession();
       void replayScheduler?.requestReplay();
       void pullProgress();
