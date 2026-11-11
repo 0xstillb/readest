@@ -183,6 +183,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
   const [conflictDetails, setConflictDetails] = useState<SyncDetails | null>(null);
   const pulled = useRef(false);
   const metadataPulled = useRef(false);
+  const ratingPullKey = useRef<string | null>(null);
   const sessionTracker = useRef(new GrimmLinkSessionTracker());
   const pullInFlight = useRef<Promise<void> | null>(null);
   const sessionClosing = useRef<Promise<void> | null>(null);
@@ -557,9 +558,21 @@ export const useGrimmLinkSync = (bookKey: string) => {
   }, [progress, pushProgress, grimmlink.strategy, syncState]);
 
   useEffect(() => {
-    if (!client || !store || !grimmlink.syncMetadata || !linkResolver) return;
+    if (!client || !store || !grimmlink.syncMetadata || !linkResolver) {
+      ratingPullKey.current = null;
+      return;
+    }
     const book = getBookData(bookKey)?.book;
     if (!book) return;
+    const pullKey = [
+      bookKey,
+      grimmlink.serverUrl,
+      grimmlink.username,
+      grimmlink.userkey,
+      grimmlink.deviceId,
+    ].join('\u0000');
+    if (ratingPullKey.current === pullKey) return;
+    ratingPullKey.current = pullKey;
     void loadCapabilities()
       .then(async (capabilities) => {
         const ratings = new GrimmLinkRatingProvider(client, store, {
@@ -568,11 +581,15 @@ export const useGrimmLinkSync = (bookKey: string) => {
           deviceId: grimmlink.deviceId,
         });
         const link = await linkResolver.resolveLink(book);
-        if (!link) return;
+        if (!link) {
+          if (ratingPullKey.current === pullKey) ratingPullKey.current = null;
+          return;
+        }
         await ratings.pull(link.bookHash, await store.getRating(link.bookHash));
       })
       .catch((error) => {
         console.warn('[GrimmLink] rating pull failed', error);
+        if (ratingPullKey.current === pullKey) ratingPullKey.current = null;
       });
   }, [bookKey, client, getBookData, grimmlink, linkResolver, loadCapabilities, store]);
 
@@ -615,6 +632,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
           (note) => {
             console.warn('[GrimmLink] retained unresolved remote note', note.id);
           },
+          link.format ?? book.format,
         );
       })
       .catch((error) => {

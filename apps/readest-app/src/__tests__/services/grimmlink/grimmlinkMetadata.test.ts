@@ -268,7 +268,7 @@ describe('GrimmLink metadata mapping', () => {
     });
     const onUnresolved = vi.fn();
 
-    await expect(provider.pull('book-a', [], vi.fn(), onUnresolved)).resolves.toMatchObject([
+    await expect(provider.pull('book-a', [], vi.fn(), onUnresolved, 'PDF')).resolves.toMatchObject([
       {
         id: 'grimmlink:bookmark:web-bookmark-without-cfi-or-time',
         type: 'bookmark',
@@ -278,6 +278,44 @@ describe('GrimmLink metadata mapping', () => {
       },
     ]);
     expect(onUnresolved).not.toHaveBeenCalled();
+  });
+
+  it('keeps an EPUB bookmark unresolved when Grimmory provides no CFI', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      getMetadataCursor: vi.fn().mockResolvedValue(null),
+      getNoteMapping: vi.fn().mockResolvedValue(null),
+      recordUnresolvedMetadata: vi.fn(),
+      applyMetadataPage: vi.fn(),
+    };
+    const getMetadata = vi.fn(async (query: Record<string, string | number>) =>
+      query['type'] === 'bookmark'
+        ? {
+            items: [
+              {
+                type: 'bookmark',
+                dedupeKey: 'epub-bookmark-without-cfi',
+                updatedAt: null,
+                payload: { type: 'bookmark', title: 'EPUB bookmark', page: 12, location: null },
+              },
+            ],
+            nextCursor: 'epub-bookmark-checkpoint',
+            hasMore: false,
+          }
+        : { items: [], nextCursor: 'epub-annotation-checkpoint', hasMore: false },
+    );
+    const provider = new GrimmLinkMetadataProvider({ getMetadata }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+    const apply = vi.fn();
+    const onUnresolved = vi.fn();
+
+    await expect(provider.pull('book-a', [], apply, onUnresolved, 'EPUB')).resolves.toEqual([]);
+    expect(store.recordUnresolvedMetadata).toHaveBeenCalledOnce();
+    expect(onUnresolved).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledTimes(2);
   });
 
   it('stops rating pagination when the server returns a final checkpoint cursor', async () => {

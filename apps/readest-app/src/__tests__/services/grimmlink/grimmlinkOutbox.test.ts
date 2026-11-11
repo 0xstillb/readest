@@ -758,7 +758,8 @@ describe('GrimmLink status and rating contract', () => {
           items: [
             {
               type: 'rating',
-              payload: { value: 4, scale: 10, updatedAt: '2026-08-23T00:00:01.000Z' },
+              updatedAt: '2026-08-23T00:00:01.000Z',
+              payload: { value: 4, scale: 10 },
             },
           ],
           nextCursor: 'page-2',
@@ -768,7 +769,8 @@ describe('GrimmLink status and rating contract', () => {
           items: [
             {
               type: 'rating',
-              payload: { value: 8, scale: 10, updatedAt: '2026-08-23T00:00:02.000Z' },
+              updatedAt: '2026-08-23T00:00:02.000Z',
+              payload: { value: 8, scale: 10 },
             },
           ],
           nextCursor: 'done',

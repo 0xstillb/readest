@@ -165,7 +165,8 @@ export const parseGrimmLinkRating = (item: unknown): GrimmLinkRating => {
       : record;
   const value = payload['value'];
   const scale = payload['scale'];
-  const updatedAt = payload['updatedAt'];
+  const updatedAt =
+    payload['updatedAt'] ?? record['updatedAt'] ?? record['syncedAt'] ?? record['clientUpdatedAt'];
   if (
     typeof value !== 'number' ||
     !Number.isFinite(value) ||

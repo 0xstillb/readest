@@ -90,6 +90,7 @@ export class GrimmLinkMetadataProvider {
     notes: BookNote[],
     apply: (notes: BookNote[]) => Promise<void> | void,
     onUnresolved?: (note: BookNote) => void,
+    fileFormat?: string,
   ): Promise<BookNote[]> {
     if (!hasGrimmLinkCapability(this.config.capabilities, 'metadata')) return notes;
     let merged = [...notes];
@@ -110,7 +111,12 @@ export class GrimmLinkMetadataProvider {
           const local = next.get(localId);
           const remote = fromGrimmLinkMetadataNote(item, local, localId);
           if (remote) {
-            if (!remote.cfi && remote.type !== 'bookmark') {
+            const pageOnlyPdfBookmark =
+              remote.type === 'bookmark' &&
+              fileFormat?.toUpperCase() === 'PDF' &&
+              typeof remote.page === 'number' &&
+              remote.page > 0;
+            if (!remote.cfi && !pageOnlyPdfBookmark) {
               await this.store.recordUnresolvedMetadata(
                 bookHash,
                 dedupeKey,
