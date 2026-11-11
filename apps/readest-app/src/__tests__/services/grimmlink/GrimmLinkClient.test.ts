@@ -311,6 +311,29 @@ describe('GrimmLinkClient', () => {
     expect(urls(fetchMock)).toContain('http://192.168.1.50:3000/api/grimmlink/v2/books/42/hash');
   });
 
+  it('rejects shelf snapshots that exceed the pagination limit', async () => {
+    const fetchMock = setFetch(async (url: unknown) => {
+      const target = String(url);
+      if (!target.includes('/shelves/7/items?')) return jsonResponse(200, {});
+      const offset = Number(new URL(target).searchParams.get('offset'));
+      return jsonResponse(
+        200,
+        Array.from({ length: 100 }, (_, index) => ({
+          bookId: offset + index + 1,
+          title: `Book ${offset + index + 1}`,
+          author: 'Reader',
+          fileName: `book-${offset + index + 1}.epub`,
+          extension: 'epub',
+          fileFormat: 'EPUB',
+          bookHash: `hash-${offset + index + 1}`,
+        })),
+      );
+    });
+    const client = new GrimmLinkClient(makeConfig());
+
+    await expect(client.getShelfBooks(7)).rejects.toThrow('exceeds the 5000-book pagination limit');
+    expect(urls(fetchMock).filter((url) => url.includes('/shelves/7/items?'))).toHaveLength(51);
+  });
   it('downloads book content through the v2 content route', async () => {
     const fetchMock = setFetch(async () => ({
       ok: true,

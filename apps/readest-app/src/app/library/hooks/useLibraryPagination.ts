@@ -7,6 +7,7 @@ import { isPencilNativeKey, normalizeDomKeyEvent, resolvePageTurn } from '@/util
 
 /** Wheel pixels that make one page turn; a trackpad flick adds up to this. */
 const WHEEL_PAGE_THRESHOLD = 50;
+const TOUCH_PAGE_THRESHOLD = 24;
 
 export function useLibraryPagination(scroller: HTMLElement | null, enabled: boolean) {
   const { appService } = useEnv();
@@ -155,6 +156,8 @@ export function useLibraryPagination(scroller: HTMLElement | null, enabled: bool
       if (!touch) return;
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
+      // Ignore tap jitter until the finger has clearly committed to a drag.
+      if (Math.abs(dy) < TOUCH_PAGE_THRESHOLD) return;
       // A horizontal drag belongs to the carousel that took it.
       if (Math.abs(dx) > Math.abs(dy)) return;
       // At the very top a downward drag is the pull-to-refresh gesture, and

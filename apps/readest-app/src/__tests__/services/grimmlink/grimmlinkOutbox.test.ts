@@ -53,6 +53,48 @@ describe('GrimmLink durable outbox', () => {
     await expect(restartedProcess.ready('progress')).resolves.toEqual([]);
   });
 
+  it('keeps a newer metadata payload queued when the older snapshot is acknowledged', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    const firstPayload = {
+      bookId: 7,
+      bookHash: 'book-a',
+      bookmarks: [{ id: 'bookmark-1', page: 4 }],
+    };
+    const newerPayload = {
+      ...firstPayload,
+      bookmarks: [{ id: 'bookmark-1', page: 8 }],
+    };
+    await store.enqueueMetadata('book-a', firstPayload);
+
+    let finishRequest!: (value: { ok: boolean }) => void;
+    let markRequestStarted!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    const request = new Promise<{ ok: boolean }>((resolve) => {
+      finishRequest = resolve;
+    });
+    const client = {
+      syncMetadata: vi.fn(() => {
+        markRequestStarted();
+        return request;
+      }),
+    };
+    const replay = new GrimmLinkOutbox(store, client).replay();
+    await requestStarted;
+
+    await store.enqueueMetadata('book-a', newerPayload);
+    finishRequest({ ok: true });
+    await replay;
+
+    await expect(store.ready('metadata')).resolves.toEqual([
+      expect.objectContaining({ payload: newerPayload }),
+    ]);
+    const retryClient = { syncMetadata: vi.fn().mockResolvedValue({ ok: true }) };
+    await new GrimmLinkOutbox(store, retryClient).replay();
+    expect(retryClient.syncMetadata).toHaveBeenCalledWith(newerPayload);
+    await expect(store.ready('metadata')).resolves.toEqual([]);
+  });
   it('retries schema initialization after a temporary database failure without losing queued rows', async () => {
     const firstProcess = new GrimmLinkSyncStore(service, 'connection-a');
     await firstProcess.enqueueProgress('book-a', { percentage: 64 });
@@ -126,14 +168,14 @@ describe('GrimmLink durable outbox', () => {
   it('recovers after a process stops between remote acknowledgement and local queue removal', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueProgress('book-a', { percentage: 35 });
-    const remove = store.remove.bind(store);
+    const removeMatching = store.removeMatching.bind(store);
     let simulateCrash = true;
-    store.remove = async (ids) => {
+    store.removeMatching = async (rows) => {
       if (simulateCrash) {
         simulateCrash = false;
         throw new Error('simulated process stop before local acknowledgement');
       }
-      await remove(ids);
+      await removeMatching(rows);
     };
     const client = { updateProgress: vi.fn().mockResolvedValue({ ok: true }) };
 
@@ -402,7 +444,9 @@ describe('GrimmLink durable outbox', () => {
       isPaused: vi.fn().mockResolvedValue(false),
       recordAttempt: vi.fn().mockResolvedValue(undefined),
       readyAll: vi.fn().mockResolvedValue(rows),
-      remove: vi.fn(async (ids: string[]) => removed.push([...ids])),
+      removeMatching: vi.fn(async (rows: Array<{ id: string }>) => {
+        removed.push(rows.map((row) => row.id));
+      }),
       recordSuccess: vi.fn().mockResolvedValue(undefined),
       recordReplay: vi.fn().mockResolvedValue(undefined),
       getOutboxSummary: vi.fn().mockResolvedValue({ totalPending: 0 }),
@@ -432,6 +476,11 @@ describe('GrimmLink durable outbox', () => {
     await expect(store.getManagedShelfReferenceCounts(localPaths)).resolves.toEqual(new Map());
     await expect(
       store.remove(localPaths.map((_, index) => `missing-${index}`)),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.removeMatching(
+        localPaths.map((_, index) => ({ id: `missing-${index}`, payload: { index } })),
+      ),
     ).resolves.toBeUndefined();
     await expect(store.invalidateMany(localPaths, 'invalid-data')).resolves.toBeUndefined();
   });

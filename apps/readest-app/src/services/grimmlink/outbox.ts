@@ -32,27 +32,27 @@ export class GrimmLinkOutbox {
     let hadFailure = false;
     let succeededRows = 0;
     let failedRows = 0;
-    const successfulIds: string[] = [];
+    const successfulRows: GrimmLinkOutboxRow[] = [];
     const failedIds: string[] = [];
     try {
       for (const category of ['progress', 'sessions', 'metadata', 'status'] as const) {
         const categoryRows = byCategory.get(category) ?? [];
         if (category === 'sessions') {
-          await this.replaySessions(categoryRows, successfulIds, failedIds);
+          await this.replaySessions(categoryRows, successfulRows, failedIds);
           if (failedIds.length) hadFailure = true;
         } else {
           for (const row of categoryRows) {
-            const rowFailed = await this.replayRow(row, successfulIds);
+            const rowFailed = await this.replayRow(row, successfulRows);
             if (rowFailed) {
               hadFailure = true;
               failedRows += 1;
             }
           }
         }
-        succeededRows += successfulIds.length;
+        succeededRows += successfulRows.length;
         failedRows += failedIds.length;
-        await this.store.remove(successfulIds);
-        successfulIds.length = 0;
+        await this.store.removeMatching(successfulRows);
+        successfulRows.length = 0;
         failedIds.length = 0;
         if (await this.store.isPaused()) break;
       }
@@ -69,7 +69,7 @@ export class GrimmLinkOutbox {
 
   private async replaySessions(
     rows: GrimmLinkOutboxRow[],
-    successfulIds: string[],
+    successfulRows: GrimmLinkOutboxRow[],
     failedIds: string[],
   ): Promise<void> {
     const byBook = new Map<string, GrimmLinkOutboxRow[]>();
@@ -97,7 +97,7 @@ export class GrimmLinkOutbox {
             payload,
             `readest-session-${batch[0]!.id}-${batch.at(-1)!.id}`,
           );
-          successfulIds.push(...batch.map((row) => row.id));
+          successfulRows.push(...batch);
         } catch (error) {
           failedIds.push(...batch.map((row) => row.id));
           await this.handleFailure(batch, error);
@@ -107,7 +107,10 @@ export class GrimmLinkOutbox {
     }
   }
 
-  private async replayRow(row: GrimmLinkOutboxRow, successfulIds: string[]): Promise<boolean> {
+  private async replayRow(
+    row: GrimmLinkOutboxRow,
+    successfulRows: GrimmLinkOutboxRow[],
+  ): Promise<boolean> {
     try {
       if (row.category === 'progress') {
         if (!this.client.updateProgress) return false;
@@ -143,7 +146,7 @@ export class GrimmLinkOutbox {
             );
         }
       }
-      successfulIds.push(row.id);
+      successfulRows.push(row);
       return false;
     } catch (error) {
       await this.handleFailure([row], error);

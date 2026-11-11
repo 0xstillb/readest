@@ -71,6 +71,7 @@ const DB_SCHEMA = 'grimmlink-sync';
 const DB_PATH = 'grimmlink-sync.db';
 // Leave headroom for SQLite builds with the historical 999-variable limit.
 const SQLITE_BIND_CHUNK_SIZE = 500;
+const SQLITE_OUTBOX_MATCH_CHUNK_SIZE = 400;
 const schema = [
   `CREATE TABLE IF NOT EXISTS outbox (
     id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, category TEXT NOT NULL, book_hash TEXT,
@@ -558,6 +559,29 @@ export class GrimmLinkSyncStore {
             `DELETE FROM outbox WHERE connection_id = ? AND id IN (${batch.map(() => '?').join(', ')})`,
             [this.connectionId, ...batch],
           );
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
+  }
+
+  /** Remove only the exact payload that was acknowledged remotely. A newer enqueue
+   * may replace the same deterministic ID while that request is in flight. */
+  async removeMatching(rows: Array<Pick<GrimmLinkOutboxRow, 'id' | 'payload'>>): Promise<void> {
+    if (!rows.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (let start = 0; start < rows.length; start += SQLITE_OUTBOX_MATCH_CHUNK_SIZE) {
+          const batch = rows.slice(start, start + SQLITE_OUTBOX_MATCH_CHUNK_SIZE);
+          const predicates = batch.map(() => '(id = ? AND payload = ?)').join(' OR ');
+          await db.execute(`DELETE FROM outbox WHERE connection_id = ? AND (${predicates})`, [
+            this.connectionId,
+            ...batch.flatMap((row) => [row.id, JSON.stringify(row.payload)]),
+          ]);
         }
         await db.execute('COMMIT');
       } catch (error) {

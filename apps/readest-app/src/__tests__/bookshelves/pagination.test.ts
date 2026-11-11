@@ -139,6 +139,20 @@ describe('library page-turn bindings', () => {
     scroller.dispatchEvent(wheel);
     expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 500, behavior: 'instant' });
   });
+  it('ignores tap jitter and turns once the vertical drag passes the threshold', () => {
+    renderHook(() => useLibraryPagination(scroller, true));
+    scroller.dispatchEvent(touchEvent('touchstart', 100, 300));
+    const jitter = touchEvent('touchmove', 101, 299);
+    scroller.dispatchEvent(jitter);
+    expect(jitter.defaultPrevented).toBe(false);
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+
+    const drag = touchEvent('touchmove', 101, 260);
+    scroller.dispatchEvent(drag);
+    expect(drag.defaultPrevented).toBe(true);
+    expect(scroller.scrollTo).toHaveBeenCalledOnce();
+    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'instant' });
+  });
   it('ignores a gesture that a second finger took over', () => {
     renderHook(() => useLibraryPagination(scroller, true));
     scroller.dispatchEvent(touchEvent('touchstart', 100, 300));

@@ -734,7 +734,7 @@ export class GrimmLinkClient {
 
   async getShelfBooks(shelfId: number): Promise<GrimmLinkShelfBook[]> {
     const collected: GrimmoryShelfBookResponse[] = [];
-    for (let page = 0; page < SHELF_MAX_PAGES; page += 1) {
+    for (let page = 0; page <= SHELF_MAX_PAGES; page += 1) {
       const data = await this.requestJson<
         { books?: GrimmoryShelfBookResponse[] } | GrimmoryShelfBookResponse[]
       >(`/shelves/${shelfId}/items?limit=${SHELF_PAGE_SIZE}&offset=${page * SHELF_PAGE_SIZE}`);
@@ -747,6 +747,12 @@ export class GrimmLinkClient {
       }
       collected.push(...books);
       if (books.length < SHELF_PAGE_SIZE) break;
+      if (page === SHELF_MAX_PAGES) {
+        throw new GrimmLinkRequestError(
+          'response',
+          `Invalid data: shelf ${shelfId} exceeds the ${SHELF_MAX_PAGES * SHELF_PAGE_SIZE}-book pagination limit.`,
+        );
+      }
     }
     const normalized = collected.map(normalizeShelfBook);
     if (normalized.some((book) => book === null)) {
