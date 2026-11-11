@@ -9,7 +9,10 @@ import { GrimmLinkReplayScheduler } from './replayScheduler';
 import { mapReadStatus, mergeRemoteReadStatus } from './status';
 import type { GrimmLinkBookLink } from './types';
 
-type StatusClient = { getReadStatuses(): Promise<{ statuses: string[] }> };
+type StatusClient = {
+  getReadStatuses(): Promise<{ statuses: string[] }>;
+  getBookMetadata?(bookId: number): Promise<Record<string, unknown>>;
+};
 
 export class GrimmLinkReadStatusProvider {
   private statuses: string[] | null = null;
@@ -39,11 +42,43 @@ export class GrimmLinkReadStatusProvider {
   ): Promise<T> {
     return { ...local, ...mergeRemoteReadStatus(local, remote, await this.available()) };
   }
+
+  async pullRemote<T extends { readingStatus?: ReadingStatus; readingStatusUpdatedAt?: number }>(
+    bookId: number,
+    local: T,
+    getLatestLocal?: () => T,
+  ): Promise<T> {
+    if (!this.client.getBookMetadata || !hasGrimmLinkCapability(this.capabilities, 'read-status'))
+      return getLatestLocal?.() ?? local;
+    const metadata = await this.client.getBookMetadata(bookId);
+    const nested =
+      metadata['readStatus'] && typeof metadata['readStatus'] === 'object'
+        ? (metadata['readStatus'] as Record<string, unknown>)
+        : null;
+    const status =
+      typeof metadata['readStatus'] === 'string'
+        ? metadata['readStatus']
+        : typeof nested?.['status'] === 'string'
+          ? nested['status']
+          : undefined;
+    const updatedAt =
+      typeof metadata['readStatusModifiedTime'] === 'string'
+        ? metadata['readStatusModifiedTime']
+        : typeof nested?.['updatedAt'] === 'string'
+          ? nested['updatedAt']
+          : undefined;
+    // Resolve the local snapshot after the network wait so a delayed response
+    // cannot overwrite a newer status or unrelated book fields.
+    const latestLocal = getLatestLocal?.() ?? local;
+    const available = await this.available();
+    const merged = mergeRemoteReadStatus(latestLocal, { status, updatedAt }, available);
+    return { ...latestLocal, ...merged };
+  }
 }
 
 type ReadStatusSyncClient = Pick<
   GrimmLinkClient,
-  'getCapabilities' | 'getReadStatuses' | 'matchBook' | 'updateReadStatus'
+  'getCapabilities' | 'getReadStatuses' | 'getBookMetadata' | 'matchBook' | 'updateReadStatus'
 >;
 
 const replaySchedulers = new WeakMap<

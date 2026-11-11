@@ -37,6 +37,7 @@ export const toGrimmLinkMetadataNote = (
   note: BookNote,
   connectionId: string,
   bookHash: string,
+  fileFormat?: string,
 ): GrimmLinkMetadataNote => ({
   dedupeKey: stableMetadataDedupeKey(connectionId, bookHash, note),
   type: note.type === 'bookmark' ? 'bookmark' : 'annotation',
@@ -50,7 +51,10 @@ export const toGrimmLinkMetadataNote = (
   updatedAt: new Date(note.updatedAt).toISOString(),
   deleted: !!note.deletedAt,
   location: {
-    cfi: note.cfi || undefined,
+    cfi:
+      fileFormat?.toUpperCase() === 'PDF' && note.type === 'bookmark'
+        ? undefined
+        : note.cfi || undefined,
     pos0: note.xpointer0 ?? undefined,
     pos1: note.xpointer1 ?? undefined,
     pageno: note.page,
@@ -73,17 +77,30 @@ export const fromGrimmLinkMetadataNote = (
   const type = payload['type'] ?? record['type'];
   if (type !== 'annotation' && type !== 'bookmark')
     throw new Error('Invalid GrimmLink metadata note');
-  const updatedAt = timestamp(payload['updatedAt'] ?? record['updatedAt']);
-  if (updatedAt === null) throw new Error('Invalid GrimmLink metadata note');
+  const remoteUpdatedAt = timestamp(
+    payload['updatedAt'] ??
+      record['updatedAt'] ??
+      record['syncedAt'] ??
+      record['clientUpdatedAt'] ??
+      payload['createdAt'] ??
+      record['createdAt'],
+  );
+  const isDeleted = payload['deleted'] === true || !!payload['deletedAt'];
+  const updatedAt = remoteUpdatedAt ?? (local && !isDeleted ? local.updatedAt : Date.now());
+  // Grimmory Web bookmarks can omit timestamps. Keep the mapped local copy stable
+  // when the server has no authoritative timestamp instead of rejecting it or
+  // rewriting it on every pull.
+  if (local && remoteUpdatedAt === null && !isDeleted) return local;
   if (local && local.updatedAt >= updatedAt) return local;
-  if (payload['deleted'] === true || payload['deletedAt']) {
+  if (isDeleted) {
     return local ? { ...local, updatedAt, deletedAt: updatedAt } : null;
   }
   const location =
     payload['location'] && typeof payload['location'] === 'object'
       ? (payload['location'] as Record<string, unknown>)
       : {};
-  const cfi = typeof location['cfi'] === 'string' ? location['cfi'] : '';
+  const rawCfi = location['cfi'] ?? payload['cfi'];
+  const cfi = typeof rawCfi === 'string' ? rawCfi : '';
   const page =
     typeof location['pageno'] === 'number'
       ? location['pageno']
@@ -96,8 +113,18 @@ export const fromGrimmLinkMetadataNote = (
     cfi,
     xpointer0: typeof location['pos0'] === 'string' ? location['pos0'] : undefined,
     xpointer1: typeof location['pos1'] === 'string' ? location['pos1'] : undefined,
-    text: typeof payload['text'] === 'string' ? payload['text'] : undefined,
-    note: typeof payload['note'] === 'string' ? payload['note'] : '',
+    text:
+      typeof payload['text'] === 'string'
+        ? payload['text']
+        : type === 'bookmark' && typeof payload['title'] === 'string'
+          ? payload['title']
+          : undefined,
+    note:
+      typeof payload['note'] === 'string'
+        ? payload['note']
+        : typeof payload['notes'] === 'string'
+          ? payload['notes']
+          : '',
     style:
       payload['style'] === 'highlight' ||
       payload['style'] === 'underline' ||
@@ -142,7 +169,8 @@ export const parseGrimmLinkRating = (item: unknown): GrimmLinkRating => {
       : record;
   const value = payload['value'];
   const scale = payload['scale'];
-  const updatedAt = payload['updatedAt'];
+  const updatedAt =
+    payload['updatedAt'] ?? record['updatedAt'] ?? record['syncedAt'] ?? record['clientUpdatedAt'];
   if (
     typeof value !== 'number' ||
     !Number.isFinite(value) ||

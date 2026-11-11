@@ -58,8 +58,10 @@ export class GrimmLinkRatingProvider {
       }
       const nextCursor =
         typeof data['nextCursor'] === 'string' && data['nextCursor'] ? data['nextCursor'] : null;
+      const hasMore =
+        typeof data['hasMore'] === 'boolean' ? data['hasMore'] : ratings.length >= 500;
       await this.store.applyRatingPage(bookHash, winner, nextCursor);
-      if (!nextCursor || nextCursor === cursor) break;
+      if (!hasMore || !nextCursor || nextCursor === cursor) break;
       cursor = nextCursor;
     }
     return winner;

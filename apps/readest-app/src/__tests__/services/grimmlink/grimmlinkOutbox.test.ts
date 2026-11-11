@@ -53,6 +53,48 @@ describe('GrimmLink durable outbox', () => {
     await expect(restartedProcess.ready('progress')).resolves.toEqual([]);
   });
 
+  it('keeps a newer metadata payload queued when the older snapshot is acknowledged', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    const firstPayload = {
+      bookId: 7,
+      bookHash: 'book-a',
+      bookmarks: [{ id: 'bookmark-1', page: 4 }],
+    };
+    const newerPayload = {
+      ...firstPayload,
+      bookmarks: [{ id: 'bookmark-1', page: 8 }],
+    };
+    await store.enqueueMetadata('book-a', firstPayload);
+
+    let finishRequest!: (value: { ok: boolean }) => void;
+    let markRequestStarted!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    const request = new Promise<{ ok: boolean }>((resolve) => {
+      finishRequest = resolve;
+    });
+    const client = {
+      syncMetadata: vi.fn(() => {
+        markRequestStarted();
+        return request;
+      }),
+    };
+    const replay = new GrimmLinkOutbox(store, client).replay();
+    await requestStarted;
+
+    await store.enqueueMetadata('book-a', newerPayload);
+    finishRequest({ ok: true });
+    await replay;
+
+    await expect(store.ready('metadata')).resolves.toEqual([
+      expect.objectContaining({ payload: newerPayload }),
+    ]);
+    const retryClient = { syncMetadata: vi.fn().mockResolvedValue({ ok: true }) };
+    await new GrimmLinkOutbox(store, retryClient).replay();
+    expect(retryClient.syncMetadata).toHaveBeenCalledWith(newerPayload);
+    await expect(store.ready('metadata')).resolves.toEqual([]);
+  });
   it('retries schema initialization after a temporary database failure without losing queued rows', async () => {
     const firstProcess = new GrimmLinkSyncStore(service, 'connection-a');
     await firstProcess.enqueueProgress('book-a', { percentage: 64 });
@@ -126,14 +168,14 @@ describe('GrimmLink durable outbox', () => {
   it('recovers after a process stops between remote acknowledgement and local queue removal', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueProgress('book-a', { percentage: 35 });
-    const remove = store.remove.bind(store);
+    const removeMatching = store.removeMatching.bind(store);
     let simulateCrash = true;
-    store.remove = async (ids) => {
+    store.removeMatching = async (rows) => {
       if (simulateCrash) {
         simulateCrash = false;
         throw new Error('simulated process stop before local acknowledgement');
       }
-      await remove(ids);
+      await removeMatching(rows);
     };
     const client = { updateProgress: vi.fn().mockResolvedValue({ ok: true }) };
 
@@ -402,7 +444,9 @@ describe('GrimmLink durable outbox', () => {
       isPaused: vi.fn().mockResolvedValue(false),
       recordAttempt: vi.fn().mockResolvedValue(undefined),
       readyAll: vi.fn().mockResolvedValue(rows),
-      remove: vi.fn(async (ids: string[]) => removed.push([...ids])),
+      removeMatching: vi.fn(async (rows: Array<{ id: string }>) => {
+        removed.push(rows.map((row) => row.id));
+      }),
       recordSuccess: vi.fn().mockResolvedValue(undefined),
       recordReplay: vi.fn().mockResolvedValue(undefined),
       getOutboxSummary: vi.fn().mockResolvedValue({ totalPending: 0 }),
@@ -432,6 +476,11 @@ describe('GrimmLink durable outbox', () => {
     await expect(store.getManagedShelfReferenceCounts(localPaths)).resolves.toEqual(new Map());
     await expect(
       store.remove(localPaths.map((_, index) => `missing-${index}`)),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.removeMatching(
+        localPaths.map((_, index) => ({ id: `missing-${index}`, payload: { index } })),
+      ),
     ).resolves.toBeUndefined();
     await expect(store.invalidateMany(localPaths, 'invalid-data')).resolves.toBeUndefined();
   });
@@ -467,6 +516,62 @@ describe('GrimmLink durable outbox', () => {
     );
   });
 
+  it('does not invalidate a newer metadata payload when an older request is rejected', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      bookmarks: [{ dedupeKey: 'bookmark-a', title: 'Old title' }],
+    });
+
+    let markStarted: (() => void) | undefined;
+    let rejectRequest: ((error: Error) => void) | undefined;
+    const requestStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const client = {
+      syncMetadata: vi.fn().mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectRequest = reject;
+            markStarted?.();
+          }),
+      ),
+    };
+    const replay = new GrimmLinkOutbox(store, client).replay();
+    await requestStarted;
+
+    await store.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      bookmarks: [{ dedupeKey: 'bookmark-a', title: 'Corrected title' }],
+    });
+    rejectRequest?.(new GrimmLinkRequestError('validation', 'Rejected older payload.', 422));
+    await replay;
+
+    await expect(store.ready('metadata')).resolves.toEqual([
+      expect.objectContaining({
+        payload: {
+          bookId: 4,
+          bookHash: 'book-a',
+          bookmarks: [{ dedupeKey: 'bookmark-a', title: 'Corrected title' }],
+        },
+      }),
+    ]);
+  });
+  it('keeps metadata queued when a bookmark fails inside an HTTP success response', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueMetadata('book-a', { bookId: 4, bookmarks: [{ dedupeKey: 'bm-a' }] });
+    const client = {
+      syncMetadata: vi.fn().mockResolvedValue({
+        ok: true,
+        results: { bookmarks: [{ status: 'FAILED', reason: 'No mapping' }], annotations: [] },
+      }),
+    };
+    await new GrimmLinkOutbox(store, client).replay();
+    expect(await store.all('metadata')).toHaveLength(1);
+  });
+
   it('retains metadata when no replay handler is available', async () => {
     const store = new GrimmLinkSyncStore(service, 'connection-a');
     await store.enqueueRating('book-a', { rating: { value: 8, scale: 10 } });
@@ -474,6 +579,36 @@ describe('GrimmLink durable outbox', () => {
     await new GrimmLinkOutbox(store, {}).replay();
 
     await expect(store.all('metadata')).resolves.toHaveLength(1);
+  });
+
+  it('coalesces pending note snapshots per book without replacing a rating', async () => {
+    const store = new GrimmLinkSyncStore(service, 'connection-a');
+    await store.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      annotations: [],
+      bookmarks: [{ dedupeKey: 'bookmark-a', title: 'Old title' }],
+    });
+    await store.enqueueMetadata('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      annotations: [],
+      bookmarks: [{ dedupeKey: 'bookmark-a', title: 'New title' }],
+    });
+    await store.enqueueRating('book-a', {
+      bookId: 4,
+      bookHash: 'book-a',
+      rating: { value: 8, scale: 10 },
+    });
+
+    const pending = await store.all('metadata');
+    expect(pending).toHaveLength(2);
+    expect(pending.find((row) => Array.isArray(row.payload['bookmarks']))?.payload).toMatchObject({
+      bookmarks: [{ title: 'New title' }],
+    });
+    expect(pending.find((row) => row.payload['rating'])?.payload).toMatchObject({
+      rating: { value: 8, scale: 10 },
+    });
   });
 
   it('persists diagnostics without leaking server URLs and clears invalid rows only', async () => {
@@ -611,6 +746,65 @@ describe('GrimmLink status and rating contract', () => {
     ).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
   });
 
+  it('merges a delayed status pull into the latest local book snapshot', async () => {
+    let resolveMetadata: ((metadata: Record<string, unknown>) => void) | undefined;
+    const client = {
+      getReadStatuses: vi.fn().mockResolvedValue({ statuses: ['READ', 'READING'] }),
+      getBookMetadata: vi.fn().mockReturnValue(
+        new Promise<Record<string, unknown>>((resolve) => {
+          resolveMetadata = resolve;
+        }),
+      ),
+    };
+    const provider = new GrimmLinkReadStatusProvider(client, {} as never, ['read-status']);
+    const original = {
+      readingStatus: 'reading' as const,
+      readingStatusUpdatedAt: 100,
+      progress: [10, 100],
+    };
+    let latest: {
+      readingStatus: 'reading' | 'finished';
+      readingStatusUpdatedAt: number;
+      progress: number[];
+    } = original;
+    const pending = provider.pullRemote(42, original, () => latest);
+
+    latest = {
+      readingStatus: 'finished',
+      readingStatusUpdatedAt: 200,
+      progress: [35, 100],
+    };
+    resolveMetadata?.({
+      bookId: 42,
+      readStatus: 'READ',
+      readStatusModifiedTime: '1970-01-01T00:00:00.150Z',
+    });
+
+    await expect(pending).resolves.toEqual(latest);
+  });
+
+  it('pulls Grimmory read status with its authoritative modification time', async () => {
+    const provider = new GrimmLinkReadStatusProvider(
+      {
+        getReadStatuses: vi.fn().mockResolvedValue({ statuses: ['READ', 'READING'] }),
+        getBookMetadata: vi.fn().mockResolvedValue({
+          bookId: 42,
+          readStatus: 'READ',
+          readStatusModifiedTime: '2026-11-10T08:00:00.000Z',
+        }),
+      },
+      {} as never,
+      ['read-status'],
+    );
+
+    await expect(
+      provider.pullRemote(42, { readingStatus: 'reading', readingStatusUpdatedAt: 100 }),
+    ).resolves.toEqual({
+      readingStatus: 'finished',
+      readingStatusUpdatedAt: Date.parse('2026-11-10T08:00:00.000Z'),
+    });
+  });
+
   it('converts rating scales and preserves newer local ratings on pull', () => {
     expect(
       toGrimmLinkRating({ value: 4, scale: 5, updatedAt: 200 }, 'connection-a', 'book-a'),
@@ -670,6 +864,7 @@ describe('GrimmLink status and rating contract', () => {
       const client = {
         getCapabilities: vi.fn().mockResolvedValue({ capabilities: ['read-status'] }),
         getReadStatuses: vi.fn().mockResolvedValue({ statuses: ['finished'] }),
+        getBookMetadata: vi.fn().mockResolvedValue({}),
         matchBook: vi.fn().mockResolvedValue(null),
         updateReadStatus: vi.fn().mockResolvedValue({ ok: true }),
       };
@@ -728,21 +923,24 @@ describe('GrimmLink status and rating contract', () => {
           items: [
             {
               type: 'rating',
-              payload: { value: 4, scale: 10, updatedAt: '2026-08-23T00:00:01.000Z' },
+              updatedAt: '2026-08-23T00:00:01.000Z',
+              payload: { value: 4, scale: 10 },
             },
           ],
           nextCursor: 'page-2',
+          hasMore: true,
         })
         .mockResolvedValueOnce({
           items: [
             {
               type: 'rating',
-              payload: { value: 8, scale: 10, updatedAt: '2026-08-23T00:00:02.000Z' },
+              updatedAt: '2026-08-23T00:00:02.000Z',
+              payload: { value: 8, scale: 10 },
             },
           ],
           nextCursor: 'done',
-        })
-        .mockResolvedValueOnce({ items: [], nextCursor: null });
+          hasMore: false,
+        });
       const ratings = new GrimmLinkRatingProvider({ getMetadata }, store, {
         capabilities: ['metadata'],
         device: 'Readest Test',
@@ -754,7 +952,6 @@ describe('GrimmLink status and rating contract', () => {
       expect(getMetadata.mock.calls.map(([query]) => query)).toEqual([
         { bookHash: 'book-a', type: 'rating', limit: 500 },
         { bookHash: 'book-a', type: 'rating', limit: 500, cursor: 'page-2' },
-        { bookHash: 'book-a', type: 'rating', limit: 500, cursor: 'done' },
       ]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

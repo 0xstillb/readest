@@ -99,6 +99,10 @@ export interface SyncDetails {
     updatedAt?: string;
     currentPage?: number;
     totalPages?: number;
+    /** Reader-native locators reported by Adapter v2 (GrimmLink only). */
+    location?: string;
+    cfi?: string;
+    xpointer?: string;
   };
 }
 

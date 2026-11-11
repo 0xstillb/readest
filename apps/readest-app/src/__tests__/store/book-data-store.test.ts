@@ -16,6 +16,7 @@ import { useLibraryStore } from '@/store/libraryStore';
 import type { EnvConfigType } from '@/services/environment';
 import type { AppService } from '@/types/system';
 import type { SystemSettings } from '@/types/settings';
+import { eventDispatcher } from '@/utils/event';
 
 function makeEnvConfig(appService: Partial<AppService>): EnvConfigType {
   return {
@@ -246,6 +247,21 @@ describe('bookDataStore', () => {
   });
 
   describe('updateBooknotes', () => {
+    test('notifies GrimmLink for local note changes but not remote pulls', () => {
+      const data = makeBookData('book1', { booknotes: [] });
+      useBookDataStore.setState({ booksData: { book1: data } });
+      const dispatch = vi.spyOn(eventDispatcher, 'dispatch').mockResolvedValue();
+      const notes = [makeBookNote({ type: 'bookmark' })];
+
+      useBookDataStore.getState().updateBooknotes('book1', notes);
+      expect(dispatch).toHaveBeenLastCalledWith('push-grimmlink-metadata', { bookKey: 'book1' });
+
+      dispatch.mockClear();
+      useBookDataStore.getState().updateBooknotes('book1', notes, 'remote');
+      expect(dispatch).not.toHaveBeenCalled();
+      dispatch.mockRestore();
+    });
+
     test('discards booknotes without a usable cfi', () => {
       const data = makeBookData('book1', { booknotes: [] });
       useBookDataStore.setState({ booksData: { book1: data } });

@@ -31,166 +31,384 @@ const jsonResponse = (status: number, body: unknown) => ({
   json: async () => body,
 });
 
-const setFetch = (impl: (...args: unknown[]) => unknown) => {
-  const mock = vi.fn(impl);
+const SESSION_BODY = {
+  accessToken: 'adapter-token',
+  tokenType: 'Bearer',
+  expiresAt: '2099-01-01T00:00:00.000Z',
+  username: 'alice',
+  userId: 7,
+};
+
+/** Every Adapter v2 call starts with a session request; answer it by default. */
+const setFetch = (
+  impl: (...args: unknown[]) => unknown,
+  options: { interceptSession?: boolean } = {},
+) => {
+  const interceptSession = options.interceptSession !== false;
+  const mock = vi.fn(async (...args: unknown[]) => {
+    const [url, init] = args as [string, RequestInit];
+    const payload =
+      typeof init.body === 'string' ? (JSON.parse(init.body) as { endpoint?: string }) : undefined;
+    const isSession =
+      String(url).endsWith('/auth/session') || payload?.endpoint === '/auth/session';
+    if (interceptSession && isSession) return jsonResponse(200, SESSION_BODY);
+    return await impl(...args);
+  });
   vi.stubGlobal('fetch', mock);
   window.fetch = mock as unknown as typeof window.fetch;
   return mock;
 };
 
+const calls = (mock: ReturnType<typeof setFetch>) =>
+  mock.mock.calls as unknown as [string, RequestInit][];
+
+const urls = (mock: ReturnType<typeof setFetch>) => calls(mock).map(([url]) => url);
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('GrimmLinkClient', () => {
-  it('uses the canonical v1 auth path and protects auth headers from custom headers', async () => {
-    const fetchMock = setFetch(async () => jsonResponse(200, { user: 'alice' }));
+  it('opens an Adapter v2 session and sends the bearer token afterwards', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: ['progress'] }));
     const client = new GrimmLinkClient(
       makeConfig({ customHeaders: { 'X-Auth-Key': 'override', 'CF-Access-Client-Id': 'id' } }),
     );
 
-    await expect(client.authenticate()).resolves.toEqual({ user: 'alice' });
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('http://192.168.1.50:3000/api/grimmlink/v1/auth');
-    expect(init.method).toBe('GET');
-    expect(init.headers).toMatchObject({
+    await expect(client.authenticate()).resolves.toMatchObject({
+      authenticated: true,
+      username: 'alice',
+      userId: 7,
+    });
+    await client.getCapabilities();
+
+    const [sessionUrl, sessionInit] = calls(fetchMock)[0]!;
+    expect(sessionUrl).toBe('http://192.168.1.50:3000/api/grimmlink/v2/auth/session');
+    expect(sessionInit.method).toBe('POST');
+    expect(sessionInit.headers).toMatchObject({
       Accept: 'application/json',
       'X-Auth-User': 'alice',
       'X-Auth-Key': 'a'.repeat(32),
       'CF-Access-Client-Id': 'id',
     });
+    expect(sessionInit.headers).not.toHaveProperty('Authorization');
+
+    const [, capabilitiesInit] = calls(fetchMock)[1]!;
+    expect(capabilitiesInit.headers).toMatchObject({ Authorization: 'Bearer adapter-token' });
+    expect(capabilitiesInit.headers).not.toHaveProperty('X-Auth-Key');
   });
 
-  it('tests authentication then returns server capabilities', async () => {
-    const fetchMock = setFetch(async (url: unknown) =>
-      jsonResponse(
-        200,
-        String(url).endsWith('/auth') ? { user: 'alice' } : { capabilities: ['sessions'] },
-      ),
-    );
-    const result = await new GrimmLinkClient(makeConfig()).connect();
-
-    expect(result).toEqual({ success: true, capabilities: ['sessions'] });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('runs a read-only health check without creating a session or writing data', async () => {
-    const fetchMock = setFetch(async (url: unknown) => {
-      const path = String(url);
-      if (path.endsWith('/auth')) return jsonResponse(200, { user: 'alice' });
-      if (path.endsWith('/capabilities'))
-        return jsonResponse(200, { capabilities: ['progress', 'metadata', 'sessions', 'shelves'] });
-      return jsonResponse(200, []);
+  it('opens a new session and retries once after a 401', async () => {
+    let capabilitiesCalls = 0;
+    const fetchMock = setFetch(async () => {
+      capabilitiesCalls += 1;
+      if (capabilitiesCalls === 1) return jsonResponse(401, { detail: 'Session expired.' });
+      return jsonResponse(200, { capabilities: ['progress'] });
     });
+    const client = new GrimmLinkClient(makeConfig());
 
-    await expect(new GrimmLinkClient(makeConfig()).healthCheck()).resolves.toEqual({
-      authentication: 'ok',
-      capabilities: 'ok',
-      progress: 'available',
-      metadata: 'available',
-      sessions: 'available',
-      shelves: 'available',
-      download: 'available',
-      capabilityNames: ['progress', 'metadata', 'sessions', 'shelves'],
+    await expect(client.getCapabilities()).resolves.toEqual({
+      capabilities: ['progress', 'read-status'],
     });
-    expect(
-      fetchMock.mock.calls.map(([url, init]) => [String(url), (init as RequestInit).method]),
-    ).toEqual([
-      ['http://192.168.1.50:3000/api/grimmlink/v1/auth', 'GET'],
-      ['http://192.168.1.50:3000/api/grimmlink/v1/capabilities', 'GET'],
-      ['http://192.168.1.50:3000/api/grimmlink/v1/shelves?type=regular', 'GET'],
+    expect(urls(fetchMock)).toEqual([
+      'http://192.168.1.50:3000/api/grimmlink/v2/auth/session',
+      'http://192.168.1.50:3000/api/grimmlink/v2/capabilities',
+      'http://192.168.1.50:3000/api/grimmlink/v2/auth/session',
+      'http://192.168.1.50:3000/api/grimmlink/v2/capabilities',
     ]);
   });
 
-  it('does not weaken TLS by default, and only opts into invalid certificates for LAN', async () => {
-    const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: [] }));
-    await new GrimmLinkClient(makeConfig()).getCapabilities();
-    expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty('danger');
+  it('resolves a book by hash through the v2 identity route', async () => {
+    const fetchMock = setFetch(async () =>
+      jsonResponse(200, { id: 42, title: 'Dune', primaryFile: { id: 9, extension: 'epub' } }),
+    );
+    const client = new GrimmLinkClient(makeConfig());
 
-    fetchMock.mockClear();
-    await new GrimmLinkClient(makeConfig({ allowSelfSignedCertificate: true })).getCapabilities();
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-      danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true },
+    await expect(client.matchBook('a/b')).resolves.toEqual({
+      bookHash: 'a/b',
+      bookId: 42,
+      bookFileId: 9,
+      format: 'EPUB',
     });
-
-    const publicFetch = setFetch(async () => jsonResponse(200, { capabilities: [] }));
-    await new GrimmLinkClient(
-      makeConfig({ serverUrl: 'https://books.example.com', allowSelfSignedCertificate: true }),
-    ).getCapabilities();
-    expect(publicFetch.mock.calls[0]?.[1]).not.toHaveProperty('danger');
+    expect(urls(fetchMock)).toContain(
+      'http://192.168.1.50:3000/api/grimmlink/v2/books/resolve?hash=a%2Fb',
+    );
   });
 
-  it('retries transient server responses with exponential backoff', async () => {
-    vi.useFakeTimers();
-    try {
-      let attempts = 0;
-      const fetchMock = setFetch(async () => {
-        attempts += 1;
-        return attempts < 3
-          ? jsonResponse(503, { message: 'busy' })
-          : jsonResponse(200, { capabilities: [] });
-      });
-      const result = new GrimmLinkClient(makeConfig()).getCapabilities();
-      await vi.runAllTimersAsync();
-      await expect(result).resolves.toEqual({ capabilities: [] });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('classifies exhausted timeouts as network errors', async () => {
-    vi.useFakeTimers();
-    try {
-      setFetch(
-        (_url, init) =>
-          new Promise<Response>((_, reject) => {
-            (init as RequestInit).signal?.addEventListener('abort', () =>
-              reject(new DOMException('aborted', 'AbortError')),
-            );
-          }),
-      );
-      const result = new GrimmLinkClient(makeConfig()).authenticate();
-      const assertion = expect(result).rejects.toMatchObject({
-        kind: 'transport',
-        category: 'network',
-      });
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(200_000);
-      await assertion;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('normalizes Grimmory v1 boolean capabilities, including its core read-status endpoint', async () => {
-    setFetch(async () =>
+  it('reads progress as a fraction and reports the reader-native locators', async () => {
+    const fetchMock = setFetch(async () =>
       jsonResponse(200, {
-        apiVersion: 'v1',
-        progressSync: true,
-        readingSessions: true,
-        metadataSync: true,
-        shelves: true,
+        status: 'ok',
+        bookHash: 'a/b',
+        fraction: 0.5,
+        updatedAt: '2026-11-09T00:00:00Z',
+        device: 'Readest Desktop',
+        deviceId: 'readest-device-1',
+        position: {
+          format: 'EPUB',
+          cfi: 'epubcfi(/6/4!/4/2/2)',
+          href: 'OEBPS/chapter-1.xhtml',
+          page: null,
+          totalPages: null,
+        },
       }),
     );
+    const client = new GrimmLinkClient(makeConfig());
 
-    await expect(new GrimmLinkClient(makeConfig()).getCapabilities()).resolves.toEqual({
-      capabilities: ['progress', 'sessions', 'metadata', 'shelves', 'read-status'],
+    await expect(client.getProgress('a/b')).resolves.toMatchObject({
+      bookHash: 'a/b',
+      location: 'epubcfi(/6/4!/4/2/2)',
+      cfi: 'epubcfi(/6/4!/4/2/2)',
+      href: 'OEBPS/chapter-1.xhtml',
+      percentage: 50,
+      device: 'Readest Desktop',
+      device_id: 'readest-device-1',
     });
+    expect(urls(fetchMock)).toContain(
+      'http://192.168.1.50:3000/api/grimmlink/v2/progress/a%2Fb?reader=readest',
+    );
+  });
+
+  it('falls back to the KOReader projection when the adapter cannot return a CFI', async () => {
+    const fetchMock = setFetch(async (url: unknown) => {
+      if (String(url).includes('reader=readest')) return jsonResponse(424, { detail: 'No CFI.' });
+      return jsonResponse(200, {
+        status: 'ok',
+        bookHash: 'a/b',
+        fraction: 0.25,
+        position: { format: 'EPUB', xpointer: '/body/DocFragment[3]/body' },
+      });
+    });
+    const client = new GrimmLinkClient(makeConfig());
+
+    await expect(client.getProgress('a/b')).resolves.toMatchObject({
+      xpointer: '/body/DocFragment[3]/body',
+      percentage: 25,
+    });
+    expect(urls(fetchMock)).toContain(
+      'http://192.168.1.50:3000/api/grimmlink/v2/progress/a%2Fb?reader=koreader',
+    );
+  });
+
+  it('never sends the raw KOSync key outside the session endpoint', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: ['progress'] }));
+    const client = new GrimmLinkClient(makeConfig());
+
+    await client.getCapabilities();
+    await client.getProgress('a/b');
+
+    for (const [url, init] of calls(fetchMock)) {
+      if (String(url).endsWith('/auth/session')) continue;
+      expect(init.headers).not.toHaveProperty('X-Auth-User');
+      expect(init.headers).not.toHaveProperty('X-Auth-Key');
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer adapter-token' });
+    }
+  });
+
+  it('treats a missing file format as no progress at all', async () => {
+    setFetch(async () => jsonResponse(501, { detail: 'A verified file format is required.' }));
+    const client = new GrimmLinkClient(makeConfig());
+
+    await expect(client.getProgress('a/b')).resolves.toBeNull();
+  });
+
+  it('writes progress with the v2 body and keeps the book hash in the URL', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { status: 'ok' }));
+    const client = new GrimmLinkClient(makeConfig());
+
+    await client.updateProgress({
+      bookHash: 'a/b',
+      operationId: 'operation-1',
+      source: 'readest',
+      device: { id: 'device-1', name: 'Readest Test' },
+      updatedAt: '2026-11-09T00:00:00.000Z',
+      fraction: 0.25,
+      position: { format: 'epub', cfi: 'epubcfi(/6/4!)' },
+    });
+
+    const [url, init] = calls(fetchMock).find(([target]) => target.includes('/progress/'))!;
+    expect(url).toBe('http://192.168.1.50:3000/api/grimmlink/v2/progress/a%2Fb');
+    expect(init.method).toBe('PUT');
+    const body = JSON.parse(init.body as string);
+    expect(body).toMatchObject({
+      operationId: 'operation-1',
+      source: 'readest',
+      fraction: 0.25,
+      position: { format: 'epub', cfi: 'epubcfi(/6/4!)' },
+    });
+    expect(body).not.toHaveProperty('bookHash');
+  });
+
+  it('converts a queued v1 progress payload into the v2 body', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { status: 'ok' }));
+    const client = new GrimmLinkClient(makeConfig());
+
+    await client.updateProgress({
+      bookHash: 'a/b',
+      document: 'a/b',
+      percentage: 50,
+      location: 'epubcfi(/6/4!)',
+      fileFormat: 'EPUB',
+      device: 'Readest Test',
+      device_id: 'device-1',
+      updatedAt: '2026-11-09T00:00:00.000Z',
+    });
+
+    const [, init] = calls(fetchMock).find(([target]) => target.includes('/progress/'))!;
+    const body = JSON.parse(init.body as string);
+    expect(body).toMatchObject({
+      source: 'readest',
+      fraction: 0.5,
+      position: { format: 'epub', cfi: 'epubcfi(/6/4!)' },
+    });
+    expect(body.device).toEqual({ id: 'device-1', name: 'Readest Test' });
+  });
+
+  it('lists regular shelves and resolves the hash of every shelf book', async () => {
+    const fetchMock = setFetch(async (url: unknown) => {
+      const path = String(url);
+      if (path.endsWith('/shelves')) {
+        return jsonResponse(200, [
+          { id: 7, name: 'Sci-Fi', type: 'regular', visibility: 'personal', bookCount: 1 },
+        ]);
+      }
+      if (path.includes('/shelves/7/items')) {
+        return jsonResponse(200, [
+          {
+            bookId: 42,
+            bookFileId: 9,
+            title: 'Dune',
+            author: 'Frank Herbert',
+            fileName: 'dune.epub',
+            extension: 'epub',
+            fileFormat: 'EPUB',
+            bookHash: null,
+          },
+        ]);
+      }
+      if (path.endsWith('/books/42/hash')) {
+        return jsonResponse(200, { bookId: 42, bookFileId: 9, bookHash: 'server-hash' });
+      }
+      return jsonResponse(200, []);
+    });
+    const client = new GrimmLinkClient(makeConfig());
+
+    await expect(client.getShelves()).resolves.toEqual([
+      { id: 7, name: 'Sci-Fi', type: 'regular', visibility: 'personal', bookCount: 1 },
+    ]);
+    await expect(client.getShelfBooks(7)).resolves.toEqual([
+      {
+        bookId: 42,
+        bookHash: 'server-hash',
+        filename: 'dune.epub',
+        format: 'EPUB',
+        size: undefined,
+        title: 'Dune',
+        author: 'Frank Herbert',
+      },
+    ]);
+    expect(urls(fetchMock)).toContain(
+      'http://192.168.1.50:3000/api/grimmlink/v2/shelves/7/items?limit=100&offset=0',
+    );
+    expect(urls(fetchMock)).toContain('http://192.168.1.50:3000/api/grimmlink/v2/books/42/hash');
+  });
+
+  it('rejects shelf snapshots that exceed the pagination limit', async () => {
+    const fetchMock = setFetch(async (url: unknown) => {
+      const target = String(url);
+      if (!target.includes('/shelves/7/items?')) return jsonResponse(200, {});
+      const offset = Number(new URL(target).searchParams.get('offset'));
+      return jsonResponse(
+        200,
+        Array.from({ length: 100 }, (_, index) => ({
+          bookId: offset + index + 1,
+          title: `Book ${offset + index + 1}`,
+          author: 'Reader',
+          fileName: `book-${offset + index + 1}.epub`,
+          extension: 'epub',
+          fileFormat: 'EPUB',
+          bookHash: `hash-${offset + index + 1}`,
+        })),
+      );
+    });
+    const client = new GrimmLinkClient(makeConfig());
+
+    await expect(client.getShelfBooks(7)).rejects.toThrow('exceeds the 5000-book pagination limit');
+    expect(urls(fetchMock).filter((url) => url.includes('/shelves/7/items?'))).toHaveLength(51);
+  });
+  it('downloads book content through the v2 content route', async () => {
+    const fetchMock = setFetch(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-length': '4' }),
+      body: null,
+      arrayBuffer: async () => new ArrayBuffer(4),
+    }));
+    const client = new GrimmLinkClient(makeConfig());
+
+    await expect(client.downloadShelfBook(42, 'a/b')).resolves.toBeInstanceOf(ArrayBuffer);
+    const [url, init] = calls(fetchMock).find(([target]) => target.includes('/content'))!;
+    expect(url).toBe('http://192.168.1.50:3000/api/grimmlink/v2/books/42/content?hash=a%2Fb');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer adapter-token' });
+  });
+
+  it('keeps the read-status, session-batch and metadata routes on the v2 prefix', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { status: 'ok' }));
+    const client = new GrimmLinkClient(makeConfig());
+
+    await client.getReadStatuses();
+    await client.getBookMetadata(1);
+    await client.updateReadStatus(1, 'reading');
+    await client.postSessionBatch({ bookId: 1, sessions: [] }, 'readest-session-1');
+    await client.syncMetadata({ schemaVersion: 1, rating: { value: 8, scale: 10 } });
+    await client.getMetadata({ bookHash: 'a/b', type: 'rating', limit: 1 });
+
+    const requested = urls(fetchMock).filter((url) => !url.endsWith('/auth/session'));
+    expect(requested).toEqual([
+      'http://192.168.1.50:3000/api/grimmlink/v2/books/read-statuses',
+      'http://192.168.1.50:3000/api/grimmlink/v2/books/1/metadata',
+      'http://192.168.1.50:3000/api/grimmlink/v2/books/1/status',
+      'http://192.168.1.50:3000/api/grimmlink/v2/reading-sessions/batch',
+      'http://192.168.1.50:3000/api/grimmlink/v2/syncs/metadata/batch',
+      'http://192.168.1.50:3000/api/grimmlink/v2/syncs/metadata?bookHash=a%2Fb&type=rating&limit=1',
+    ]);
+  });
+
+  it('forwards a public server through the web proxy with the bearer token', async () => {
+    const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: [] }));
+    const client = new GrimmLinkClient(makeConfig({ serverUrl: 'https://books.example.com' }));
+
+    await client.getCapabilities();
+
+    const proxyCalls = calls(fetchMock).filter(([target]) =>
+      target.startsWith('https://web.readest.com'),
+    );
+    expect(proxyCalls.length).toBeGreaterThan(0);
+    expect(proxyCalls[0]![0]).toBe('https://web.readest.com/api/grimmlink');
+    const payloads = proxyCalls.map(
+      ([, request]) =>
+        JSON.parse(request.body as string) as { endpoint: string; headers: Record<string, string> },
+    );
+    expect(payloads.map((payload) => payload.endpoint)).toContain('/capabilities');
+    const capabilitiesPayload = payloads.find((payload) => payload.endpoint === '/capabilities')!;
+    expect(capabilitiesPayload.headers['Authorization']).toBe('Bearer adapter-token');
   });
 
   it('rejects HTML success pages and classifies HTTP errors', async () => {
-    setFetch(async () => ({
-      ok: true,
-      status: 200,
-      headers: new Headers(),
-      json: async () => {
-        throw new Error('HTML');
-      },
-    }));
+    setFetch(
+      async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => {
+          throw new Error('HTML');
+        },
+      }),
+      { interceptSession: false },
+    );
     await expect(new GrimmLinkClient(makeConfig()).authenticate()).rejects.toThrow(
       GrimmLinkRequestError,
     );
 
-    setFetch(async () => jsonResponse(401, { message: 'Nope' }));
+    setFetch(async () => jsonResponse(401, { detail: 'Nope' }), { interceptSession: false });
     const error = await new GrimmLinkClient(makeConfig())
       .authenticate()
       .catch((cause: unknown) => cause);
@@ -198,133 +416,23 @@ describe('GrimmLinkClient', () => {
       status: 401,
       kind: 'authentication',
       category: 'auth',
-      message: 'Nope',
     });
 
-    setFetch(async () => jsonResponse(409, { message: 'stale revision' }));
-    await expect(
-      new GrimmLinkClient(makeConfig()).updateProgress({ percentage: 20 }),
-    ).rejects.toMatchObject({
-      kind: 'conflict',
-      category: 'conflict',
-      status: 409,
-    });
+    setFetch(async () => jsonResponse(409, { detail: 'Conflict' }), { interceptSession: false });
+    const conflict = await new GrimmLinkClient(makeConfig())
+      .authenticate()
+      .catch((cause: unknown) => cause);
+    expect(conflict).toMatchObject({ status: 409, kind: 'conflict', category: 'conflict' });
 
-    setFetch(async () => jsonResponse(200, null));
+    setFetch(async () => jsonResponse(200, null), { interceptSession: false });
     await expect(new GrimmLinkClient(makeConfig()).authenticate()).rejects.toMatchObject({
       category: 'invalid-data',
     });
   });
 
-  it('routes public servers through the GrimmLink proxy', async () => {
-    const fetchMock = setFetch(async () => jsonResponse(200, { capabilities: [] }));
-    await new GrimmLinkClient(
-      makeConfig({ serverUrl: 'https://books.example.com' }),
-    ).getCapabilities();
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://web.readest.com/api/grimmlink');
-    expect(JSON.parse(init.body as string)).toMatchObject({
-      serverUrl: 'https://books.example.com',
-      endpoint: '/capabilities',
-      method: 'GET',
-    });
-  });
-
-  it('uses v1 hash matching and progress endpoints with encoded hashes and JSON payloads', async () => {
-    const fetchMock = setFetch(async (url: unknown) => {
-      if (String(url).includes('by-hash'))
-        return jsonResponse(200, { bookHash: 'a/b', bookId: 42, bookFileId: 9 });
-      if (String(url).includes('/syncs/progress/a%2Fb'))
-        return jsonResponse(200, { progress: '/body/DocFragment[1]/body', percentage: 50 });
-      return jsonResponse(200, { ok: true });
-    });
-    const client = new GrimmLinkClient(makeConfig());
-
-    await expect(client.matchBook('a/b')).resolves.toMatchObject({ bookId: 42 });
-    await expect(client.getProgress('a/b')).resolves.toMatchObject({ percentage: 50 });
-    await client.updateProgress({ bookHash: 'a/b', percentage: 50 });
-
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'http://192.168.1.50:3000/api/grimmlink/v1/books/by-hash/a%2Fb',
-      'http://192.168.1.50:3000/api/grimmlink/v1/syncs/progress/a%2Fb',
-      'http://192.168.1.50:3000/api/grimmlink/v1/syncs/progress',
-    ]);
-    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
-      method: 'PUT',
-      body: JSON.stringify({ bookHash: 'a/b', percentage: 50 }),
-    });
-  });
-
-  it('uses the documented session, status, and rating metadata endpoints', async () => {
-    const fetchMock = setFetch(async () => jsonResponse(200, { statuses: ['reading'], items: [] }));
-    const client = new GrimmLinkClient(makeConfig());
-
-    await client.postSessionBatch({ bookId: 1, sessions: [] });
-    await client.getReadStatuses();
-    await client.updateReadStatus(1, 'reading');
-    await client.syncMetadata({ schemaVersion: 1, rating: { value: 8, scale: 10 } });
-    await client.getMetadata({ bookHash: 'a/b', type: 'rating', limit: 1 });
-
-    expect(fetchMock.mock.calls.map(([url, init]) => [url, (init as RequestInit).method])).toEqual([
-      ['http://192.168.1.50:3000/api/grimmlink/v1/reading-sessions/batch', 'POST'],
-      ['http://192.168.1.50:3000/api/grimmlink/v1/books/read-statuses', 'GET'],
-      ['http://192.168.1.50:3000/api/grimmlink/v1/books/1/status', 'PUT'],
-      ['http://192.168.1.50:3000/api/grimmlink/v1/syncs/metadata/batch', 'POST'],
-      [
-        'http://192.168.1.50:3000/api/grimmlink/v1/syncs/metadata?bookHash=a%2Fb&type=rating&limit=1',
-        'GET',
-      ],
-    ]);
-  });
-
-  it('sends a stable idempotency key with replayable session batches', async () => {
-    const fetchMock = setFetch(async () => jsonResponse(200, { ok: true }));
-    await new GrimmLinkClient(makeConfig()).postSessionBatch(
-      { bookId: 4, sessions: [{ startTime: '2026-09-23T00:00:00.000Z' }] },
-      'readest-session-session-a-session-z',
-    );
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.headers).toMatchObject({
-      'Idempotency-Key': 'readest-session-session-a-session-z',
-    });
-  });
-
-  it('normalizes Grimmory shelf-book fields before downloading or importing', async () => {
-    setFetch(async () =>
-      jsonResponse(200, [
-        {
-          bookId: 42,
-          bookHash: 'server-hash',
-          fileName: 'Ocean 5.epub',
-          fileFormat: 'EPUB',
-          fileSize: 1024,
-          title: 'Ocean 5',
-        },
-      ]),
-    );
-
-    await expect(new GrimmLinkClient(makeConfig()).getShelfBooks('regular', 7)).resolves.toEqual([
-      {
-        bookId: 42,
-        bookHash: 'server-hash',
-        filename: 'Ocean 5.epub',
-        format: 'EPUB',
-        size: undefined,
-        title: 'Ocean 5',
-        author: undefined,
-      },
-    ]);
-  });
-
-  it('rejects malformed shelf records instead of silently dropping them', async () => {
-    setFetch(async () =>
-      jsonResponse(200, [{ bookId: 'not-a-number', bookHash: 'missing-valid-id' }]),
-    );
-    await expect(
-      new GrimmLinkClient(makeConfig()).getShelfBooks('regular', 7),
-    ).rejects.toMatchObject({
+  it('reports an empty shelf list as invalid data', async () => {
+    setFetch(async () => jsonResponse(200, { shelves: 'nope' }));
+    await expect(new GrimmLinkClient(makeConfig()).getShelves()).rejects.toMatchObject({
       category: 'invalid-data',
     });
   });

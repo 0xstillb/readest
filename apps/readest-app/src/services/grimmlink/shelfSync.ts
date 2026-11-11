@@ -4,7 +4,6 @@ import type {
   GrimmLinkShelfBook,
   GrimmLinkShelfCleanupPolicy,
   GrimmLinkShelfDownloadPolicy,
-  GrimmLinkShelfType,
 } from './types';
 import {
   repairMalformedEpubOpfNamespace,
@@ -117,6 +116,25 @@ const removeShelfEntries = async (
   if (batchStore.removeShelfEntries) return batchStore.removeShelfEntries(entries);
   for (const entry of entries)
     await store.removeShelfEntry(entry.shelfType, entry.shelfId, entry.bookId);
+};
+
+const applyShelfBookMetadata = (book: Book, remote: GrimmLinkShelfBook): Book => {
+  const originalFilename = remote.filename.replace(/^.*[\\/]/, '');
+  const cachedFilename = safeShelfFilename(originalFilename, remote.bookId);
+  const cachedTitle = cachedFilename.replace(/\.[^.]*$/, '');
+  const filenameTitle = originalFilename.replace(/\.[^.]*$/, '');
+  const title =
+    remote.title?.trim() ||
+    (book.format === 'PDF' && book.title === cachedTitle ? filenameTitle : book.title);
+  const author = remote.author?.trim() || book.author;
+  const filenameUsesCacheName = book.originalFilename === cachedFilename;
+  if (title === book.title && author === book.author && !filenameUsesCacheName) return book;
+  return {
+    ...book,
+    title,
+    author,
+    ...(filenameUsesCacheName ? { originalFilename } : {}),
+  };
 };
 
 const addToPresenceIndex = (index: GrimmLinkLibraryPresenceIndex, book: Book) => {
@@ -244,19 +262,28 @@ export const planShelfSync = (
 };
 
 type ShelfClient = {
-  getShelfBooks(type: GrimmLinkShelfType, shelfId: number): Promise<GrimmLinkShelfBook[]>;
+  getShelfBooks(shelfId: number): Promise<GrimmLinkShelfBook[]>;
   downloadShelfBook(
     bookId: number,
+    bookHash: string,
     onProgress?: ProgressHandler,
     signal?: AbortSignal,
   ): Promise<ArrayBuffer>;
   downloadShelfBookToFile?: (
     bookId: number,
+    bookHash: string,
     filePath: string,
     onProgress?: ProgressHandler,
     signal?: AbortSignal,
   ) => Promise<void>;
 };
+
+/**
+ * Adapter v2 exposes regular shelves only; magic shelves are rule-derived,
+ * read-only upstream and are advertised as unsupported.  The stored shelf type
+ * stays `'regular'` so existing local state remains readable.
+ */
+export const GRIMMLINK_REGULAR_SHELF_TYPE = 'regular';
 
 export class GrimmLinkShelfProvider {
   constructor(
@@ -265,7 +292,6 @@ export class GrimmLinkShelfProvider {
   ) {}
 
   async sync(
-    type: GrimmLinkShelfType,
     shelfId: number,
     library: Book[],
     onImported: (book: Book, library: Book[]) => Promise<void> | void,
@@ -276,7 +302,8 @@ export class GrimmLinkShelfProvider {
     downloadPolicy: GrimmLinkShelfDownloadPolicy = 'always',
     presenceIndex?: GrimmLinkLibraryPresenceIndex,
   ): Promise<GrimmLinkShelfSyncResult> {
-    const remote = await this.client.getShelfBooks(type, shelfId);
+    const type = GRIMMLINK_REGULAR_SHELF_TYPE;
+    const remote = await this.client.getShelfBooks(shelfId);
     const existing = await this.store.getShelfEntries(type, shelfId);
     const localLibrary = [...library];
     // A normal Readest delete retains a tombstone so other storage providers
@@ -337,7 +364,6 @@ export class GrimmLinkShelfProvider {
       // duplicate records on Android/WebView readers.
       for (const remoteBook of needsDownload) {
         await this.downloadAndImport(
-          type,
           shelfId,
           remoteBook,
           localLibrary,
@@ -419,7 +445,6 @@ export class GrimmLinkShelfProvider {
   }
 
   private async downloadAndImport(
-    type: GrimmLinkShelfType,
     shelfId: number,
     remote: GrimmLinkShelfBook,
     library: Book[],
@@ -429,27 +454,29 @@ export class GrimmLinkShelfProvider {
     presenceIndex?: GrimmLinkLibraryPresenceIndex,
   ): Promise<void> {
     transfer?.onStage?.({ stage: 'downloading', book: remote });
+    const type = GRIMMLINK_REGULAR_SHELF_TYPE;
 
-    // On native builds, keep the payload out of the WebView entirely.  The
-    // previous path accumulated all response chunks and then created another
-    // ArrayBuffer before writing Temp, which is enough to make Android kill the
-    // process while importing otherwise ordinary 15–50 MB books.
+    // On native builds, keep the payload out of the WebView entirely.  Stage
+    // it under Cache: the native downloader only accepts paths inside
+    // app-owned data/cache roots, while the generic Temp base can resolve to
+    // the system temp directory and be rejected by the filesystem scope.
     if (isTauriAppPlatform() && this.client.downloadShelfBookToFile) {
       const tempPath = `grimmlink/${safeShelfFilename(remote.filename, remote.bookId)}`;
       try {
-        await appService.createDir('grimmlink', 'Temp', true);
-        if (await appService.exists(tempPath, 'Temp')) {
-          await appService.deleteFile(tempPath, 'Temp');
+        await appService.createDir('grimmlink', 'Cache', true);
+        if (await appService.exists(tempPath, 'Cache')) {
+          await appService.deleteFile(tempPath, 'Cache');
         }
         let nativePath: string;
         try {
-          nativePath = await appService.resolveFilePath(tempPath, 'Temp');
+          nativePath = await appService.resolveFilePath(tempPath, 'Cache');
         } catch {
           nativePath = '';
         }
         if (nativePath) {
           await this.client.downloadShelfBookToFile(
             remote.bookId,
+            remote.bookHash,
             nativePath,
             transfer?.onProgress,
             transfer?.signal,
@@ -457,28 +484,30 @@ export class GrimmLinkShelfProvider {
           transfer?.onStage?.({ stage: 'importing', book: remote });
           const imported = await appService.importBook(nativePath, library);
           if (!imported) throw new Error('Failed to import GrimmLink shelf book');
-          const existingIndex = library.findIndex((book) => book.hash === imported.hash);
-          if (existingIndex === -1) library.push(imported);
-          else library[existingIndex] = imported;
-          await onImported(imported, [...library]);
+          const shelfBook = applyShelfBookMetadata(imported, remote);
+          const existingIndex = library.findIndex((book) => book.hash === shelfBook.hash);
+          if (existingIndex === -1) library.push(shelfBook);
+          else library[existingIndex] = shelfBook;
+          await onImported(shelfBook, [...library]);
           await this.store.markShelfEntry(
             type,
             shelfId,
             remote.bookId,
             remote.bookHash,
-            getLocalBookFilename(imported),
+            getLocalBookFilename(shelfBook),
             true,
           );
-          if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
+          if (presenceIndex) addToPresenceIndex(presenceIndex, shelfBook);
           return;
         }
       } finally {
-        await appService.deleteFile(tempPath, 'Temp').catch(() => {});
+        await appService.deleteFile(tempPath, 'Cache').catch(() => {});
       }
     }
 
     const downloaded = await this.client.downloadShelfBook(
       remote.bookId,
+      remote.bookHash,
       transfer?.onProgress,
       transfer?.signal,
     );
@@ -495,13 +524,13 @@ export class GrimmLinkShelfProvider {
         // Large files are safer through the native filesystem path. EPUBs can
         // use the Rust metadata bridge and PDFs avoid ferrying a large Blob into
         // the WebView parser over the Android bridge.
-        await appService.createDir('grimmlink', 'Temp', true);
-        if (await appService.exists(tempPath, 'Temp')) {
-          await appService.deleteFile(tempPath, 'Temp');
+        await appService.createDir('grimmlink', 'Cache', true);
+        if (await appService.exists(tempPath, 'Cache')) {
+          await appService.deleteFile(tempPath, 'Cache');
         }
-        await appService.writeFile(tempPath, 'Temp', importSource);
+        await appService.writeFile(tempPath, 'Cache', importSource);
         try {
-          importSource = await appService.resolveFilePath(tempPath, 'Temp');
+          importSource = await appService.resolveFilePath(tempPath, 'Cache');
         } catch {
           // Keep the File path as a safe fallback on platforms without path
           // resolution support (web/test doubles).
@@ -509,21 +538,22 @@ export class GrimmLinkShelfProvider {
       }
       const imported = await appService.importBook(importSource, library);
       if (!imported) throw new Error('Failed to import GrimmLink shelf book');
-      const existingIndex = library.findIndex((book) => book.hash === imported.hash);
-      if (existingIndex === -1) library.push(imported);
-      else library[existingIndex] = imported;
-      await onImported(imported, [...library]);
-      if (presenceIndex) addToPresenceIndex(presenceIndex, imported);
+      const shelfBook = applyShelfBookMetadata(imported, remote);
+      const existingIndex = library.findIndex((book) => book.hash === shelfBook.hash);
+      if (existingIndex === -1) library.push(shelfBook);
+      else library[existingIndex] = shelfBook;
+      await onImported(shelfBook, [...library]);
+      if (presenceIndex) addToPresenceIndex(presenceIndex, shelfBook);
       await this.store.markShelfEntry(
         type,
         shelfId,
         remote.bookId,
         remote.bookHash,
-        getLocalBookFilename(imported),
+        getLocalBookFilename(shelfBook),
         true,
       );
     } finally {
-      if (useNativeImport) await appService.deleteFile(tempPath, 'Temp').catch(() => {});
+      if (useNativeImport) await appService.deleteFile(tempPath, 'Cache').catch(() => {});
     }
   }
 }
@@ -584,9 +614,10 @@ async function syncSubscribedGrimmLinkShelvesInternal(
   let removed = 0;
   const presenceIndex = await buildGrimmLinkLibraryPresenceIndex(getLibrary(), appService);
   for (const subscription of subscriptions) {
-    if (subscription.shelfType !== 'regular' && subscription.shelfType !== 'magic') continue;
+    // Adapter v2 has no magic shelves: legacy 'magic' subscriptions are
+    // skipped instead of failing the whole sync.
+    if (subscription.shelfType !== GRIMMLINK_REGULAR_SHELF_TYPE) continue;
     const result = await new GrimmLinkShelfProvider(client, store).sync(
-      subscription.shelfType,
       subscription.shelfId,
       getLibrary(),
       onImported,

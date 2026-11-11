@@ -10,28 +10,30 @@ interface SimpleUITitleModeMenuProps {
   menuClassName?: string;
 }
 
-const MODES: { value: SimpleUITitleMode; label: string }[] = [
-  { value: 'hidden', label: 'Hide all titles' },
-  { value: 'cover', label: 'Titles on cover' },
-  { value: 'below', label: 'Titles below cover' },
-];
-
 export default function SimpleUITitleModeMenu({
   setIsDropdownOpen,
   menuClassName,
 }: SimpleUITitleModeMenuProps) {
   const _ = useTranslation();
   const { titleMode, setTitleMode } = useSimpleUIBookTitles();
+  // The labels have to stay literal: the translation scanner only finds
+  // `_('…')` calls with a literal argument, and it drops every key it
+  // cannot find.
+  const modes: { value: SimpleUITitleMode; label: string }[] = [
+    { value: 'hidden', label: _('Hide all titles') },
+    { value: 'cover', label: _('Titles on cover') },
+    { value: 'below', label: _('Titles below cover') },
+  ];
 
   return (
     <Menu
       className={`simpleui-title-mode-menu dropdown-content no-triangle z-20 mt-2 shadow-2xl ${menuClassName || ''}`}
       onCancel={() => setIsDropdownOpen?.(false)}
     >
-      {MODES.map((mode) => (
+      {modes.map((mode) => (
         <MenuItem
           key={mode.value}
-          label={_(mode.label)}
+          label={mode.label}
           toggled={titleMode === mode.value}
           setIsDropdownOpen={setIsDropdownOpen}
           transient

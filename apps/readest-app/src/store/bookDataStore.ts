@@ -4,6 +4,7 @@ import { SystemSettings } from '@/types/settings';
 import { Book, BookConfig, BookFormat, BookNote } from '@/types/book';
 import { EnvConfigType } from '@/services/environment';
 import { BookDoc } from '@/libs/document';
+import { eventDispatcher } from '@/utils/event';
 import { useLibraryStore } from './libraryStore';
 
 // Throttle library.json writes triggered by per-book saveConfig.
@@ -78,7 +79,11 @@ interface BookDataState {
     config: BookConfig,
     settings: SystemSettings,
   ) => Promise<void>;
-  updateBooknotes: (key: string, booknotes: BookNote[]) => BookConfig | undefined;
+  updateBooknotes: (
+    key: string,
+    booknotes: BookNote[],
+    origin?: 'local' | 'remote',
+  ) => BookConfig | undefined;
   getBookData: (keyOrId: string) => BookData | null;
   clearBookData: (keyOrId: string) => void;
 }
@@ -183,7 +188,7 @@ export const useBookDataStore = create<BookDataState>((set, get) => ({
     // page turn.
     scheduleLibrarySave(appService);
   },
-  updateBooknotes: (key: string, booknotes: BookNote[]) => {
+  updateBooknotes: (key: string, booknotes: BookNote[], origin: 'local' | 'remote' = 'local') => {
     let updatedConfig: BookConfig | undefined;
     set((state) => {
       const id = key.split('-')[0]!;
@@ -216,6 +221,9 @@ export const useBookDataStore = create<BookDataState>((set, get) => ({
         },
       };
     });
+    if (updatedConfig && origin === 'local') {
+      void eventDispatcher.dispatch('push-grimmlink-metadata', { bookKey: key });
+    }
     return updatedConfig;
   },
 }));

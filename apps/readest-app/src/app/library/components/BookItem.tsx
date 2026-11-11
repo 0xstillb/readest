@@ -157,6 +157,9 @@ const BookItem: React.FC<BookItemProps> = ({
           imageClassName={clsx('shadow-md', showSpine ? 'rounded-none' : 'rounded-sm')}
           onAspectRatioChange={setCoverAspect}
         />
+        <span aria-hidden='true' className='simpleui-cover-title hidden' dir='auto'>
+          {book.title}
+        </span>
         {isTransferring && (
           // E-ink cannot render a translucent wash — it dithers over the cover
           // art — and has no shadows, so the scrim becomes a solid base-100

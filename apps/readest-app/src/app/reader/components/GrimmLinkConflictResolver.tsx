@@ -16,9 +16,17 @@ const positionLabel = (percentage: number | undefined, fallback: string) =>
     ? `${Math.round(Math.max(0, Math.min(100, percentage)))}%`
     : fallback;
 
-const pageLabel = (currentPage: number | undefined, totalPages: number | undefined) =>
+/**
+ * The local section index is 0-based, while Adapter v2 reports a remote page
+ * 1-based, so the display page differs per side.
+ */
+const pageLabel = (
+  currentPage: number | undefined,
+  totalPages: number | undefined,
+  oneBased: boolean,
+) =>
   currentPage != null && totalPages != null && totalPages > 0
-    ? `Page ${currentPage + 1} / ${totalPages}`
+    ? `Page ${oneBased ? currentPage : currentPage + 1} / ${totalPages}`
     : null;
 
 const timeLabel = (value: string | number | undefined) => {
@@ -38,7 +46,7 @@ const timestamp = (value: string | number | undefined) => {
 const positionSummary = (details: SyncDetails, side: 'local' | 'remote', fallback: string) => {
   const position = details[side];
   const chapter = position.chapter?.trim();
-  const page = pageLabel(position.currentPage, position.totalPages);
+  const page = pageLabel(position.currentPage, position.totalPages, side === 'remote');
   const percentage = positionLabel(
     position.percentage == null ? undefined : position.percentage * 100,
     fallback,

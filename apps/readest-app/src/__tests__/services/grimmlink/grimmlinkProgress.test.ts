@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Book } from '@/types/book';
 import {
   GrimmLinkProgressProvider,
+  normalizeGrimmLinkProgressPayload,
   progressPullDisposition,
   toGrimmLinkProgressPayload,
 } from '@/services/grimmlink/progress';
@@ -12,6 +13,21 @@ const pdf = { hash: 'pdf-hash', format: 'PDF', title: 'Pdf', author: 'A' } as Bo
 const link = { bookHash: 'epub-hash', bookId: 42, bookFileId: 9, format: 'EPUB' };
 
 describe('GrimmLink progress', () => {
+  it('does not replay a legacy EPUB XPointer as a CFI', () => {
+    const normalized = normalizeGrimmLinkProgressPayload({
+      document: 'legacy-epub-hash',
+      fileFormat: 'EPUB',
+      percentage: 37,
+      location: '/body/DocFragment[4]/body/p/text().12',
+    });
+
+    expect(normalized).toMatchObject({
+      bookHash: 'legacy-epub-hash',
+      fraction: 0.37,
+      position: { format: 'epub' },
+    });
+    expect(normalized?.position.cfi).toBeUndefined();
+  });
   it('caches a hash match and does not match it again', async () => {
     const links = { get: vi.fn().mockResolvedValue(null), set: vi.fn(), markUnmatched: vi.fn() };
     const client = {
@@ -117,36 +133,33 @@ describe('GrimmLink progress', () => {
       ),
     ).toMatchObject({
       bookHash: 'grimory-hash',
-      document: 'grimory-hash',
-      bookId: 77,
+      source: 'readest',
+      fraction: 0.5,
+      position: { format: 'epub', cfi: '/body/DocFragment[2]' },
     });
   });
 
-  it('serializes reflowable locations as XPointer-compatible progress', () => {
+  it('serializes the reader-native CFI as an Adapter v2 position', () => {
     expect(
       toGrimmLinkProgressPayload(
         epub,
         link,
         {
-          location: '/body/DocFragment[4]/body/p/text().12',
+          location: 'epubcfi(/6/4!/4/2/4)',
           fraction: 0.25,
         },
         { deviceId: 'device-1', deviceName: 'Readest Test' },
       ),
     ).toMatchObject({
       bookHash: 'epub-hash',
-      bookId: 42,
-      bookFileId: 9,
-      fileFormat: 'EPUB',
-      progress: '/body/DocFragment[4]/body/p/text().12',
-      location: '/body/DocFragment[4]/body/p/text().12',
-      percentage: 25,
-      device: 'Readest Test',
-      device_id: 'device-1',
+      source: 'readest',
+      fraction: 0.25,
+      device: { id: 'device-1', name: 'Readest Test' },
+      position: { format: 'epub', cfi: 'epubcfi(/6/4!/4/2/4)' },
     });
   });
 
-  it('serializes fixed-page payloads with page, total, and server percentage', () => {
+  it('serializes fixed-page payloads with a 1-indexed page and its ratio', () => {
     expect(
       toGrimmLinkProgressPayload(
         pdf,
@@ -158,12 +171,38 @@ describe('GrimmLink progress', () => {
         { deviceId: 'device-1', deviceName: 'Readest Test' },
       ),
     ).toMatchObject({
-      fileFormat: 'PDF',
-      progress: '9',
-      currentPage: 9,
-      totalPages: 100,
-      percentage: 10,
+      source: 'readest',
+      fraction: 0.1,
+      position: { format: 'pdf', page: 10, totalPages: 100 },
     });
+  });
+
+  it('never invents a page for a fixed-layout book that has no position yet', () => {
+    // Adapter v2 rejects `totalPages` below 1 and reads `page` as the
+    // 1-indexed location, so a made-up page 1 would move the remote
+    // progress to the first page instead of leaving it alone.
+    const payload = toGrimmLinkProgressPayload(
+      pdf,
+      { ...link, bookHash: pdf.hash, format: 'PDF' },
+      { currentPage: undefined, totalPages: undefined },
+      { deviceId: 'device-1', deviceName: 'Readest Test' },
+    );
+
+    expect(payload.position.page).toBeUndefined();
+    expect(payload.position.totalPages).toBeUndefined();
+    expect(payload.fraction).toBe(0);
+  });
+
+  it('omits a page total the Adapter would reject', () => {
+    const payload = toGrimmLinkProgressPayload(
+      pdf,
+      { ...link, bookHash: pdf.hash, format: 'PDF' },
+      { currentPage: 0, totalPages: 0 },
+      { deviceId: 'device-1', deviceName: 'Readest Test' },
+    );
+
+    expect(payload.position.totalPages).toBeUndefined();
+    expect(payload.fraction).toBe(0);
   });
 
   it.each([
@@ -178,6 +217,10 @@ describe('GrimmLink progress', () => {
   it('never silently applies a remote conflict in prompt mode', () => {
     expect(progressPullDisposition('prompt', true)).toBe('prompt');
     expect(progressPullDisposition('silent', false)).toBe('ignore');
+  });
+
+  it('does not reopen a prompt for an older or equal remote acknowledgement', () => {
+    expect(progressPullDisposition('prompt', false)).toBe('ignore');
   });
 
   it('does not reopen a conflict for the originating device acknowledgement', () => {

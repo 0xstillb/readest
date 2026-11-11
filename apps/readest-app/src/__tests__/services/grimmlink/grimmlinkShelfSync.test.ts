@@ -5,6 +5,7 @@ import {
   planShelfSync,
   reconcileShelfSnapshot,
   summarizeShelfReconciliation,
+  syncSubscribedGrimmLinkShelves,
 } from '@/services/grimmlink/shelfSync';
 import {
   repairMalformedEpubOpfNamespace,
@@ -146,14 +147,25 @@ describe('GrimmLink shelf sync safety', () => {
     expect(opf).toContain('<package xmlns:opf="http://www.idpf.org/2007/opf">');
   });
 
-  it('reports the import stage after a shelf download completes', async () => {
+  it('reports import progress and restores the original PDF filename', async () => {
     const stages: string[] = [];
     let importedFile: unknown;
+    let downloadArgs: unknown[] = [];
     const client = {
       getShelfBooks: async () => [
-        { bookId: 1, bookHash: 'remote-hash', filename: 'book.pdf', format: 'PDF' as const },
+        {
+          bookId: 538,
+          bookHash: 'remote-hash',
+          filename: 'Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14 - Ryoko Kui & 九井諒子.pdf',
+          title: 'Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14',
+          author: 'Ryoko Kui & 九井諒子',
+          format: 'PDF' as const,
+        },
       ],
-      downloadShelfBook: async () => new TextEncoder().encode('%PDF-1.7').buffer,
+      downloadShelfBook: async (...args: unknown[]) => {
+        downloadArgs = args;
+        return new TextEncoder().encode('%PDF-1.7').buffer;
+      },
     };
     const store = {
       getShelfEntries: async () => [],
@@ -168,22 +180,36 @@ describe('GrimmLink shelf sync safety', () => {
       deleteFile: async () => {},
       importBook: async (file: unknown) => {
         importedFile = file;
-        return { hash: 'local-hash', title: 'Book', format: 'PDF' };
+        return {
+          hash: 'local-hash',
+          title: '538-Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14 - Ryoko Kui & 九井諒子',
+          originalFilename: '538-Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14 - Ryoko Kui & 九井諒子.pdf',
+          format: 'PDF',
+        };
       },
       deleteBook: async () => {},
     };
 
+    let savedBook: Book | undefined;
     await new GrimmLinkShelfProvider(client, store as never).sync(
-      'regular',
       1,
       [],
-      async () => {},
+      async (book) => {
+        savedBook = book;
+      },
       appService as never,
       { onStage: ({ stage }) => stages.push(stage) },
     );
 
     expect(stages).toEqual(['downloading', 'importing']);
+    expect(savedBook?.title).toBe('Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14');
+    expect(savedBook?.author).toBe('Ryoko Kui & 九井諒子');
+    expect(savedBook?.originalFilename).toBe(
+      'Dungeon Meshi สูตรลับตำรับดันเจียน เล่ม 14 - Ryoko Kui & 九井諒子.pdf',
+    );
     expect(importedFile).toBeInstanceOf(File);
+    // Adapter v2 requires the verified Grimmory content hash for downloads.
+    expect(downloadArgs.slice(0, 2)).toEqual([538, 'remote-hash']);
   });
 
   it('removes a stale partial temp file before writing and cleans up after import failure', async () => {
@@ -203,14 +229,19 @@ describe('GrimmLink shelf sync safety', () => {
       removeShelfEntry: async () => {},
     };
     const appService = {
-      exists: async (_path: string, folder?: string) => (folder === 'Temp' ? tempExists : false),
-      createDir: async () => {},
-      writeFile: async () => {
+      exists: async (_path: string, folder?: string) => (folder === 'Cache' ? tempExists : false),
+      createDir: async (_path: string, folder?: string) => expect(folder).toBe('Cache'),
+      writeFile: async (_path: string, folder?: string) => {
+        expect(folder).toBe('Cache');
         events.push('write');
         expect(tempExists).toBe(false);
       },
-      resolveFilePath: async () => '/tmp/book.pdf',
-      deleteFile: async () => {
+      resolveFilePath: async (_path: string, folder?: string) => {
+        expect(folder).toBe('Cache');
+        return '/app/cache/book.pdf';
+      },
+      deleteFile: async (_path: string, folder?: string) => {
+        expect(folder).toBe('Cache');
         events.push('delete');
         tempExists = false;
       },
@@ -220,7 +251,6 @@ describe('GrimmLink shelf sync safety', () => {
 
     await expect(
       new GrimmLinkShelfProvider(client, store as never).sync(
-        'regular',
         1,
         [],
         async () => {},
@@ -297,10 +327,10 @@ describe('GrimmLink shelf sync safety', () => {
     };
     const provider = new GrimmLinkShelfProvider(client, store as never);
 
-    await expect(
-      provider.sync('regular', 1, library, onImported, appService as never),
-    ).rejects.toThrow('simulated temporary database failure');
-    await provider.sync('regular', 1, library, onImported, appService as never);
+    await expect(provider.sync(1, library, onImported, appService as never)).rejects.toThrow(
+      'simulated temporary database failure',
+    );
+    await provider.sync(1, library, onImported, appService as never);
 
     expect(downloads).toBe(1);
     expect(imports).toBe(1);
@@ -344,7 +374,6 @@ describe('GrimmLink shelf sync safety', () => {
     };
 
     const result = await new GrimmLinkShelfProvider(client, store as never).sync(
-      'regular',
       1,
       [book as never],
       async () => {},
@@ -386,7 +415,6 @@ describe('GrimmLink shelf sync safety', () => {
     };
     const book = { hash: 'local-hash', title: 'Shared', sourceTitle: 'Shared', format: 'PDF' };
     const result = await new GrimmLinkShelfProvider(client, store as never).sync(
-      'magic',
       2,
       [book as never],
       async () => {},
@@ -397,6 +425,58 @@ describe('GrimmLink shelf sync safety', () => {
     );
     expect(result.removed).toBe(0);
     expect(purged).toBe(0);
+  });
+
+  it('skips a legacy magic shelf subscription instead of fetching it', async () => {
+    const fetchedShelfIds: number[] = [];
+    const client = {
+      getShelfBooks: async (shelfId: number) => {
+        fetchedShelfIds.push(shelfId);
+        return [];
+      },
+      downloadShelfBook: async () => new ArrayBuffer(0),
+    };
+    const store = {
+      connectionId: 'grimmlink-connection',
+      getShelfSubscriptions: async () => [
+        {
+          shelfType: 'magic',
+          shelfId: 9,
+          cleanupPolicy: 'keep_local',
+          downloadPolicy: 'always',
+        },
+        {
+          shelfType: 'regular',
+          shelfId: 3,
+          cleanupPolicy: 'keep_local',
+          downloadPolicy: 'always',
+        },
+      ],
+      getShelfEntries: async () => [],
+      markShelfEntry: async () => {},
+      removeShelfEntry: async () => {},
+    };
+    const appService = {
+      exists: async () => false,
+      createDir: async () => {},
+      writeFile: async () => {},
+      resolveFilePath: async () => '/tmp/book.pdf',
+      deleteFile: async () => {},
+      importBook: async () => null,
+      deleteBook: async () => {},
+    };
+
+    const result = await syncSubscribedGrimmLinkShelves(
+      client,
+      store as never,
+      () => [],
+      async () => {},
+      appService as never,
+    );
+
+    // Only the regular shelf is fetched; the legacy magic shelf is ignored.
+    expect(fetchedShelfIds).toEqual([3]);
+    expect(result).toEqual({ reused: 0, downloaded: 0, removed: 0 });
   });
 
   it('does not delete user-imported entries even with destructive cleanup', async () => {
@@ -426,7 +506,6 @@ describe('GrimmLink shelf sync safety', () => {
     };
     const book = { hash: 'local-hash', title: 'User', sourceTitle: 'User', format: 'PDF' };
     await new GrimmLinkShelfProvider(client, store as never).sync(
-      'regular',
       3,
       [book as never],
       async () => {},

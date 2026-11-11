@@ -43,6 +43,15 @@ vi.mock('@/store/deviceStore', () => ({
   },
 }));
 let scroller: HTMLDivElement;
+// happy-dom has no TouchEvent, so the gesture is a plain event carrying the
+// one touch the handler reads.
+const touchEvent = (type: string, clientX: number, clientY: number, touches = 1) => {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'touches', {
+    value: Array.from({ length: touches }, () => ({ clientX, clientY })),
+  });
+  return event;
+};
 beforeEach(() => {
   vi.clearAllMocks();
   h.volumeKeysToFlip = false;
@@ -109,6 +118,93 @@ describe('library page-turn bindings', () => {
     rerender({ enabled: true });
     expect(h.forward).toHaveBeenCalledOnce();
     expect(h.acquire).not.toHaveBeenCalled();
+  });
+  it('turns a page instead of scrolling when the wheel moves vertically', () => {
+    renderHook(() => useLibraryPagination(scroller, true));
+    const wheel = new WheelEvent('wheel', { deltaY: 120, cancelable: true, bubbles: true });
+    scroller.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+    expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 500, behavior: 'instant' });
+  });
+  it('turns a page for a single Firefox wheel notch', () => {
+    // Firefox reports a mouse notch as three lines, so the line delta has to
+    // reach the page threshold on its own.
+    renderHook(() => useLibraryPagination(scroller, true));
+    const wheel = new WheelEvent('wheel', {
+      deltaY: 3,
+      deltaMode: 1,
+      cancelable: true,
+      bubbles: true,
+    });
+    scroller.dispatchEvent(wheel);
+    expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 500, behavior: 'instant' });
+  });
+  it('ignores tap jitter and turns once the vertical drag passes the threshold', () => {
+    renderHook(() => useLibraryPagination(scroller, true));
+    scroller.dispatchEvent(touchEvent('touchstart', 100, 300));
+    const jitter = touchEvent('touchmove', 101, 299);
+    scroller.dispatchEvent(jitter);
+    expect(jitter.defaultPrevented).toBe(false);
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+
+    const drag = touchEvent('touchmove', 101, 260);
+    scroller.dispatchEvent(drag);
+    expect(drag.defaultPrevented).toBe(true);
+    expect(scroller.scrollTo).toHaveBeenCalledOnce();
+    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'instant' });
+  });
+  it('ignores a gesture that a second finger took over', () => {
+    renderHook(() => useLibraryPagination(scroller, true));
+    scroller.dispatchEvent(touchEvent('touchstart', 100, 300));
+    const move = touchEvent('touchmove', 100, 200, 2);
+    scroller.dispatchEvent(move);
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+  });
+  it('leaves a horizontal wheel gesture to the carousel', () => {
+    renderHook(() => useLibraryPagination(scroller, true));
+    const wheel = new WheelEvent('wheel', {
+      deltaX: 120,
+      deltaY: 0,
+      cancelable: true,
+      bubbles: true,
+    });
+    scroller.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(false);
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+  });
+  it('turns one page per vertical drag and never scrolls the list', () => {
+    renderHook(() => useLibraryPagination(scroller, true));
+    scroller.dispatchEvent(touchEvent('touchstart', 100, 300));
+    const move = touchEvent('touchmove', 100, 200);
+    scroller.dispatchEvent(move);
+    expect(move.defaultPrevented).toBe(true);
+    expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+    expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 500, behavior: 'instant' });
+    scroller.dispatchEvent(touchEvent('touchmove', 100, 50));
+    expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+  });
+  it('leaves a horizontal drag to the carousel', () => {
+    renderHook(() => useLibraryPagination(scroller, true));
+    scroller.dispatchEvent(touchEvent('touchstart', 100, 300));
+    const move = touchEvent('touchmove', 200, 310);
+    scroller.dispatchEvent(move);
+    expect(move.defaultPrevented).toBe(false);
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+  });
+  it('leaves the pull-to-refresh drag at the top alone', () => {
+    renderHook(() => useLibraryPagination(scroller, true));
+    scroller.dispatchEvent(touchEvent('touchstart', 100, 100));
+    const move = touchEvent('touchmove', 100, 200);
+    scroller.dispatchEvent(move);
+    expect(move.defaultPrevented).toBe(false);
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+  });
+  it('leaves the pointer alone when paging is off', () => {
+    renderHook(() => useLibraryPagination(scroller, false));
+    const wheel = new WheelEvent('wheel', { deltaY: 120, cancelable: true, bubbles: true });
+    scroller.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(false);
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
   });
   it('pages with volume keys only when Use Volume Keys is on', async () => {
     scroller.scrollTop = 500;

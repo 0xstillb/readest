@@ -1,18 +1,24 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
+import type { CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { useEnv } from '@/context/EnvContext';
 import { useLibrary } from '@/hooks/useLibrary';
 import { useTheme } from '@/hooks/useTheme';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useUICSS } from '@/hooks/useUICSS';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import { useThemeStore } from '@/store/themeStore';
 import { navigateToReader } from '@/utils/nav';
 import type { Book } from '@/types/book';
 import SettingsDialog from '@/components/settings/SettingsDialog';
+import BookCover from '@/components/BookCover';
+import WindowButtons from '@/components/WindowButtons';
 import SimpleUIBottomBar from './SimpleUIBottomBar';
+import useSimpleUIHomeDisplay from './useSimpleUIHomeDisplay';
 
 const progressPercent = (book: Book) => {
   const [current, total] = book.progress ?? [0, 0];
@@ -22,9 +28,13 @@ const progressPercent = (book: Book) => {
 export default function SimpleUIHome() {
   const _ = useTranslation();
   const router = useRouter();
+  const { appService } = useEnv();
+  const dragRegionRef = useRef<HTMLDivElement>(null);
   const { library } = useLibraryStore();
   const { libraryLoaded } = useLibrary();
-  const { isSettingsDialogOpen } = useSettingsStore();
+  const { isSettingsDialogOpen, settings } = useSettingsStore();
+  const { safeAreaInsets } = useThemeStore();
+  const { display } = useSimpleUIHomeDisplay();
   const [now, setNow] = useState(() => new Date());
 
   useTheme({ systemUIVisible: true, appThemeColor: 'base-100' });
@@ -50,14 +60,21 @@ export default function SimpleUIHome() {
     [library],
   );
   const currentBook = activeBooks[0];
-  const recentBooks = activeBooks.slice(currentBook ? 1 : 0, 5);
+  const recentBooks = activeBooks.slice(currentBook ? 1 : 0, (currentBook ? 1 : 0) + 4);
 
   const openBook = (book: Book) => navigateToReader(router, [book.hash]);
 
   return (
-    <main className='simpleui-home full-height flex flex-col overflow-hidden bg-base-100 text-base-content'>
-      <div className='simpleui-home-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-24 pt-[max(0.5rem,env(safe-area-inset-top))] sm:px-8'>
-        <header className='mx-auto flex max-w-3xl shrink-0 flex-col items-center py-1 text-center'>
+    <main
+      className='simpleui-home full-height flex flex-col overflow-hidden bg-base-100 text-base-content'
+      data-home-display={display}
+      style={{ '--simpleui-safe-bottom': `${safeAreaInsets?.bottom ?? 0}px` } as CSSProperties}
+    >
+      <div className='simpleui-home-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pt-[max(0.5rem,env(safe-area-inset-top))] sm:px-8'>
+        <header
+          ref={dragRegionRef}
+          className='flex w-full shrink-0 flex-col items-center py-1 text-center'
+        >
           <time className='simpleui-clock tabular-nums'>
             {new Intl.DateTimeFormat(undefined, {
               hour: '2-digit',
@@ -74,45 +91,74 @@ export default function SimpleUIHome() {
             }).format(now)}
           </div>
         </header>
+        {appService?.hasWindowBar && (
+          <WindowButtons
+            className='absolute h-0 w-0 overflow-hidden'
+            headerRef={dragRegionRef}
+            showMinimize={false}
+            showMaximize={false}
+            showClose={false}
+          />
+        )}
 
         {currentBook ? (
-          <button
-            type='button'
-            onClick={() => openBook(currentBook)}
-            className='simpleui-current-reading mx-auto mt-3 grid w-full max-w-3xl shrink-0 grid-cols-[max-content_minmax(0,1fr)] items-center gap-9 bg-base-100 py-3 pe-3 ps-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current sm:mt-4 sm:pe-5'
-          >
-            <div className='simpleui-cover-frame simpleui-current-cover flex items-center justify-center overflow-hidden bg-base-200'>
-              {currentBook.coverImageUrl ? (
-                <img
-                  src={currentBook.coverImageUrl}
-                  alt=''
-                  className='h-full w-full object-contain'
-                />
-              ) : (
-                <span className='px-3 text-center text-sm font-semibold'>{currentBook.title}</span>
-              )}
+          <section className='simpleui-current-reading mx-auto mt-3 grid w-full max-w-3xl shrink-0 items-center gap-4 bg-transparent py-3 pe-3 ps-0 text-left sm:mt-4 sm:gap-8 sm:pe-5'>
+            <div className='simpleui-cover-frame simpleui-current-cover flex items-center justify-center overflow-hidden rounded-xl bg-base-200'>
+              <BookCover
+                book={currentBook}
+                coverFit={settings.libraryCoverFit}
+                showSpine={settings.librarySkeuomorphicCovers}
+              />
             </div>
             <div className='simpleui-current-copy min-w-0'>
               <div className='mb-2 text-sm font-semibold uppercase tracking-wide text-base-content/70'>
                 {_('Currently Reading')}
               </div>
-              <h1 className='line-clamp-3 text-xl font-bold sm:text-2xl'>{currentBook.title}</h1>
+              <h1 className='text-xl font-bold [overflow-wrap:anywhere] sm:text-2xl'>
+                {currentBook.title}
+              </h1>
               <p className='mt-2 line-clamp-2 text-base text-base-content/75'>
                 {currentBook.author}
               </p>
-              <div className='mt-5 flex items-center gap-3'>
-                <progress
-                  className='progress h-2 flex-1 border border-base-content/40'
-                  value={progressPercent(currentBook)}
-                  max='100'
-                />
-                <span className='min-w-10 text-right text-sm tabular-nums'>
+              <div
+                className='simpleui-progress mt-4'
+                role='progressbar'
+                aria-label={_('Reading')}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progressPercent(currentBook)}
+                aria-valuetext={`${progressPercent(currentBook)}%`}
+                style={
+                  { '--simpleui-progress': `${progressPercent(currentBook)}%` } as CSSProperties
+                }
+              >
+                <span className='simpleui-progress-track' aria-hidden='true'>
+                  <span className='simpleui-progress-fill' />
+                </span>
+                <span className='simpleui-progress-label' aria-hidden='true'>
                   {progressPercent(currentBook)}%
                 </span>
               </div>
-              <div className='mt-4 text-sm font-semibold'>{_('Continue Reading')}</div>
+              <button
+                type='button'
+                onClick={() => openBook(currentBook)}
+                className='simpleui-continue-reading mt-4 flex w-full cursor-pointer items-center justify-between text-left text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
+              >
+                <span>{_('Continue Reading')}</span>
+                <svg
+                  aria-hidden='true'
+                  viewBox='0 0 24 24'
+                  fill='none'
+                  stroke='currentColor'
+                  strokeWidth='1.8'
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                >
+                  <path d='M4 12h15m-6-6 6 6-6 6' />
+                </svg>
+              </button>
             </div>
-          </button>
+          </section>
         ) : (
           <div className='mx-auto mt-4 max-w-3xl shrink-0 border border-base-content/45 p-5 text-center'>
             <p className='text-lg font-semibold'>
@@ -121,31 +167,25 @@ export default function SimpleUIHome() {
           </div>
         )}
 
-        {recentBooks.length > 0 && (
-          <section className='mx-auto mt-2 flex min-h-0 w-full max-w-3xl flex-1 flex-col pb-5'>
+        {display === 'both' && recentBooks.length > 0 && (
+          <section className='mx-auto mt-2 w-full max-w-3xl shrink-0 pb-5'>
             <div className='mb-2 flex shrink-0 items-center'>
               <h2 className='text-base font-bold'>{_('Recently read')}</h2>
             </div>
-            <div className='auto-rows-fr grid min-h-0 flex-1 grid-cols-2 gap-3 sm:grid-cols-4'>
+            <div className='simpleui-recent-grid grid items-start gap-3'>
               {recentBooks.map((book) => (
                 <button
                   type='button'
                   key={book.hash}
                   onClick={() => openBook(book)}
-                  className='flex h-full min-h-0 min-w-0 flex-col bg-transparent p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
+                  className='min-w-0 bg-transparent p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
                 >
-                  <div className='simpleui-cover-frame flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-base-200'>
-                    {book.coverImageUrl ? (
-                      <img
-                        src={book.coverImageUrl}
-                        alt=''
-                        className='h-full w-full object-contain'
-                      />
-                    ) : (
-                      <span className='line-clamp-3 px-2 text-center text-sm font-medium'>
-                        {book.title}
-                      </span>
-                    )}
+                  <div className='simpleui-cover-frame flex aspect-[2/3] w-full items-center justify-center overflow-hidden rounded-lg bg-base-200'>
+                    <BookCover
+                      book={book}
+                      coverFit={settings.libraryCoverFit}
+                      showSpine={settings.librarySkeuomorphicCovers}
+                    />
                   </div>
                 </button>
               ))}

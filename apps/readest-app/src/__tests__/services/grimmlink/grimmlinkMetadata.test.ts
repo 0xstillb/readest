@@ -6,6 +6,7 @@ import {
   toGrimmLinkMetadataNote,
 } from '@/services/grimmlink/metadata';
 import { GrimmLinkMetadataProvider } from '@/services/grimmlink/metadataProvider';
+import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
 
 const annotation: BookNote = {
   id: 'note-1',
@@ -18,6 +19,17 @@ const annotation: BookNote = {
   color: 'yellow',
   style: 'highlight',
   page: 3,
+  createdAt: 100,
+  updatedAt: 200,
+};
+
+const bookmark: BookNote = {
+  id: 'bookmark-1',
+  type: 'bookmark',
+  cfi: 'epubcfi(/6/4!/4/2)',
+  text: 'Chapter 2',
+  note: '',
+  page: 4,
   createdAt: 100,
   updatedAt: 200,
 };
@@ -117,6 +129,7 @@ describe('GrimmLink metadata mapping', () => {
     const store = {
       connectionId: 'connection-a',
       enqueueMetadata: vi.fn(),
+      getNoteDedupeKey: vi.fn().mockResolvedValue(null),
       applyMetadataPage: vi.fn(),
     };
     const provider = new GrimmLinkMetadataProvider({ getMetadata: vi.fn() }, store as never, {
@@ -137,5 +150,232 @@ describe('GrimmLink metadata mapping', () => {
       ],
       null,
     );
+  });
+
+  it('reuses the mapped bookmark key after an edit or deletion', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      enqueueMetadata: vi.fn(),
+      getNoteDedupeKey: vi.fn().mockResolvedValue('existing-remote-key'),
+      applyMetadataPage: vi.fn(),
+    };
+    const provider = new GrimmLinkMetadataProvider({ getMetadata: vi.fn() }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+    await provider.queuePush('book-a', 4, [{ ...bookmark, updatedAt: 300, deletedAt: 300 }]);
+    expect(store.enqueueMetadata).toHaveBeenCalledWith(
+      'book-a',
+      expect.objectContaining({
+        bookmarks: [expect.objectContaining({ dedupeKey: 'existing-remote-key', deleted: true })],
+      }),
+    );
+  });
+
+  it('queues a locally added bookmark with its CFI for Grimmory', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      enqueueMetadata: vi.fn(),
+      getNoteDedupeKey: vi.fn().mockResolvedValue(null),
+      applyMetadataPage: vi.fn(),
+    };
+    const provider = new GrimmLinkMetadataProvider({ getMetadata: vi.fn() }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+
+    await expect(provider.queuePush('book-a', 4, [bookmark])).resolves.toBe(true);
+    expect(store.enqueueMetadata).toHaveBeenCalledWith(
+      'book-a',
+      expect.objectContaining({
+        bookmarks: [
+          expect.objectContaining({
+            type: 'bookmark',
+            title: 'Chapter 2',
+            location: expect.objectContaining({ cfi: bookmark.cfi, pageno: 4 }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('pulls a Grimmory bookmark into Readest with its CFI anchor', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      getMetadataCursor: vi.fn().mockResolvedValue(null),
+      getNoteMapping: vi.fn().mockResolvedValue(null),
+      applyMetadataPage: vi.fn(),
+    };
+    const getMetadata = vi.fn(async (query: Record<string, string | number>) =>
+      query['type'] === 'bookmark'
+        ? {
+            items: [
+              {
+                type: 'bookmark',
+                dedupeKey: 'grimmory-bookmark-21',
+                payload: {
+                  type: 'bookmark',
+                  title: 'From Grimmory',
+                  notes: '',
+                  createdAt: '2026-11-10T12:00:00Z',
+                  updatedAt: '2026-11-10T12:00:01Z',
+                  location: { cfi: 'epubcfi(/6/8!/4/2)', pageno: 8 },
+                },
+              },
+            ],
+            nextCursor: 'bookmark-checkpoint-2',
+            hasMore: false,
+          }
+        : { items: [], nextCursor: 'annotation-checkpoint-1', hasMore: false },
+    );
+    const provider = new GrimmLinkMetadataProvider(
+      {
+        getMetadata,
+      },
+      store as never,
+      { capabilities: ['metadata'], device: 'Readest Test', deviceId: 'device-1' },
+    );
+
+    const apply = vi.fn();
+    await expect(provider.pull('book-a', [], apply)).resolves.toMatchObject([
+      {
+        id: 'grimmlink:bookmark:grimmory-bookmark-21',
+        type: 'bookmark',
+        cfi: 'epubcfi(/6/8!/4/2)',
+        text: 'From Grimmory',
+        page: 8,
+      },
+    ]);
+    expect(apply).toHaveBeenCalledTimes(2);
+    expect(getMetadata.mock.calls.map(([query]) => query['type'])).toEqual([
+      'annotation',
+      'bookmark',
+    ]);
+  });
+
+  it('imports a page-only Grimmory bookmark when the server omits its timestamp', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      getMetadataCursor: vi.fn().mockResolvedValue(null),
+      getNoteMapping: vi.fn().mockResolvedValue(null),
+      applyMetadataPage: vi.fn(),
+    };
+    const getMetadata = vi.fn(async (query: Record<string, string | number>) =>
+      query['type'] === 'bookmark'
+        ? {
+            items: [
+              {
+                type: 'bookmark',
+                dedupeKey: 'web-bookmark-without-cfi-or-time',
+                updatedAt: null,
+                payload: {
+                  type: 'bookmark',
+                  title: 'Page only bookmark',
+                  page: 12,
+                  cfi: null,
+                  location: null,
+                },
+              },
+            ],
+            nextCursor: 'bookmark-checkpoint-no-time',
+            hasMore: false,
+          }
+        : { items: [], nextCursor: 'annotation-checkpoint-no-time', hasMore: false },
+    );
+    const provider = new GrimmLinkMetadataProvider({ getMetadata }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+    const onUnresolved = vi.fn();
+
+    await expect(provider.pull('book-a', [], vi.fn(), onUnresolved, 'PDF')).resolves.toMatchObject([
+      {
+        id: 'grimmlink:bookmark:web-bookmark-without-cfi-or-time',
+        type: 'bookmark',
+        cfi: 'epubcfi(/6/24)',
+        text: 'Page only bookmark',
+        page: 12,
+      },
+    ]);
+    expect(onUnresolved).not.toHaveBeenCalled();
+    expect(getMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'bookmark', cursor: '1970-01-01T00:00:00Z' }),
+    );
+  });
+
+  it('sends PDF bookmarks as page numbers and preserves EPUB CFIs', () => {
+    const pdf = { ...bookmark, cfi: 'epubcfi(/6/24)', page: 12 };
+    expect(toGrimmLinkMetadataNote(pdf, 'connection-a', 'book-a', 'PDF')).toMatchObject({
+      page: 12,
+      location: { pageno: 12, cfi: undefined },
+    });
+    expect(toGrimmLinkMetadataNote(bookmark, 'connection-a', 'book-a', 'EPUB').location.cfi).toBe(
+      bookmark.cfi,
+    );
+  });
+
+  it('keeps an EPUB bookmark unresolved when Grimmory provides no CFI', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      getMetadataCursor: vi.fn().mockResolvedValue(null),
+      getNoteMapping: vi.fn().mockResolvedValue(null),
+      recordUnresolvedMetadata: vi.fn(),
+      applyMetadataPage: vi.fn(),
+    };
+    const getMetadata = vi.fn(async (query: Record<string, string | number>) =>
+      query['type'] === 'bookmark'
+        ? {
+            items: [
+              {
+                type: 'bookmark',
+                dedupeKey: 'epub-bookmark-without-cfi',
+                updatedAt: null,
+                payload: { type: 'bookmark', title: 'EPUB bookmark', page: 12, location: null },
+              },
+            ],
+            nextCursor: 'epub-bookmark-checkpoint',
+            hasMore: false,
+          }
+        : { items: [], nextCursor: 'epub-annotation-checkpoint', hasMore: false },
+    );
+    const provider = new GrimmLinkMetadataProvider({ getMetadata }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+    const apply = vi.fn();
+    const onUnresolved = vi.fn();
+
+    await expect(provider.pull('book-a', [], apply, onUnresolved, 'EPUB')).resolves.toEqual([]);
+    expect(store.recordUnresolvedMetadata).toHaveBeenCalledOnce();
+    expect(onUnresolved).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops rating pagination when the server returns a final checkpoint cursor', async () => {
+    const store = {
+      connectionId: 'connection-a',
+      getRating: vi.fn().mockResolvedValue(null),
+      getMetadataCursor: vi.fn().mockResolvedValue(null),
+      applyRatingPage: vi.fn(),
+    };
+    const getMetadata = vi.fn().mockResolvedValue({
+      items: [],
+      nextCursor: 'new-final-checkpoint',
+      hasMore: false,
+    });
+    const provider = new GrimmLinkRatingProvider({ getMetadata }, store as never, {
+      capabilities: ['metadata'],
+      device: 'Readest Test',
+      deviceId: 'device-1',
+    });
+
+    await provider.pull('book-a', null);
+
+    expect(getMetadata).toHaveBeenCalledOnce();
+    expect(store.applyRatingPage).toHaveBeenCalledWith('book-a', null, 'new-final-checkpoint');
   });
 });

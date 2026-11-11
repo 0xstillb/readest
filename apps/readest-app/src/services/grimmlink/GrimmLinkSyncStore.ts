@@ -71,6 +71,7 @@ const DB_SCHEMA = 'grimmlink-sync';
 const DB_PATH = 'grimmlink-sync.db';
 // Leave headroom for SQLite builds with the historical 999-variable limit.
 const SQLITE_BIND_CHUNK_SIZE = 500;
+const SQLITE_OUTBOX_MATCH_CHUNK_SIZE = 400;
 const schema = [
   `CREATE TABLE IF NOT EXISTS outbox (
     id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, category TEXT NOT NULL, book_hash TEXT,
@@ -122,10 +123,20 @@ const schema = [
   'CREATE INDEX IF NOT EXISTS shelf_entries_local_path ON shelf_entries(connection_id, local_path)',
 ];
 
-const outboxId = (connectionId: string, category: GrimmLinkOutboxCategory, bookHash?: string) =>
-  category === 'progress'
-    ? `progress:${connectionId}:${bookHash}`
-    : `${category}:${crypto.randomUUID()}`;
+const outboxId = (
+  connectionId: string,
+  category: GrimmLinkOutboxCategory,
+  bookHash: string | undefined,
+  payload: object,
+) => {
+  if (category === 'progress' && bookHash) return `progress:${connectionId}:${bookHash}`;
+  if (category === 'metadata' && bookHash) {
+    const metadata = payload as Record<string, unknown>;
+    const kind = metadata['rating'] ? 'rating' : 'notes';
+    return `metadata:${connectionId}:${bookHash}:${kind}`;
+  }
+  return `${category}:${crypto.randomUUID()}`;
+};
 
 /** Provider-private SQLite state. It intentionally opens per operation so writes survive abrupt reader teardown. */
 export class GrimmLinkSyncStore {
@@ -239,7 +250,7 @@ export class GrimmLinkSyncStore {
     bookHash?: string,
   ): Promise<void> {
     const now = Date.now();
-    const id = outboxId(this.connectionId, category, bookHash);
+    const id = outboxId(this.connectionId, category, bookHash, payload);
     const idempotencyKey = `${this.connectionId}:${id}`;
     await this.withDb((db) =>
       db.execute(
@@ -557,6 +568,74 @@ export class GrimmLinkSyncStore {
     });
   }
 
+  /** Remove only the exact payload that was acknowledged remotely. A newer enqueue
+   * may replace the same deterministic ID while that request is in flight. */
+  async removeMatching(rows: Array<Pick<GrimmLinkOutboxRow, 'id' | 'payload'>>): Promise<void> {
+    if (!rows.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (let start = 0; start < rows.length; start += SQLITE_OUTBOX_MATCH_CHUNK_SIZE) {
+          const batch = rows.slice(start, start + SQLITE_OUTBOX_MATCH_CHUNK_SIZE);
+          const predicates = batch.map(() => '(id = ? AND payload = ?)').join(' OR ');
+          await db.execute(`DELETE FROM outbox WHERE connection_id = ? AND (${predicates})`, [
+            this.connectionId,
+            ...batch.flatMap((row) => [row.id, JSON.stringify(row.payload)]),
+          ]);
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
+  }
+
+  /** Update failure state only for the exact payload that failed remotely. */
+  async invalidateMatching(
+    rows: Array<Pick<GrimmLinkOutboxRow, 'id' | 'payload'>>,
+    category: GrimmLinkDiagnosticsErrorCategory,
+  ): Promise<void> {
+    if (!rows.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (const row of rows) {
+          await db.execute(
+            "UPDATE outbox SET state = 'invalid', error_category = ? WHERE connection_id = ? AND id = ? AND payload = ?",
+            [category, this.connectionId, row.id, JSON.stringify(row.payload)],
+          );
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
+  }
+
+  async retryMatching(
+    rows: Array<
+      Pick<GrimmLinkOutboxRow, 'id' | 'payload'> & { attempts: number; nextRetryAt: number }
+    >,
+  ): Promise<void> {
+    if (!rows.length) return;
+    await this.withDb(async (db) => {
+      await db.execute('BEGIN');
+      try {
+        for (const row of rows) {
+          await db.execute(
+            'UPDATE outbox SET attempts = ?, next_retry_at = ?, error_category = NULL WHERE connection_id = ? AND id = ? AND payload = ?',
+            [row.attempts, row.nextRetryAt, this.connectionId, row.id, JSON.stringify(row.payload)],
+          );
+        }
+        await db.execute('COMMIT');
+      } catch (error) {
+        await db.execute('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
+  }
   async retry(id: string, attempts: number, nextRetryAt: number): Promise<void> {
     await this.withDb((db) =>
       db.execute(
@@ -882,6 +961,18 @@ export class GrimmLinkSyncStore {
             [this.connectionId, bookHash, type],
           )
         )[0]?.cursor ?? null,
+    );
+  }
+
+  async getNoteDedupeKey(bookHash: string, noteId: string, type: string): Promise<string | null> {
+    return this.withDb(
+      async (db) =>
+        (
+          await db.select<{ dedupe_key: string }>(
+            'SELECT dedupe_key FROM note_mappings WHERE connection_id = ? AND book_hash = ? AND note_id = ? AND type = ?',
+            [this.connectionId, bookHash, noteId, type],
+          )
+        )[0]?.dedupe_key ?? null,
     );
   }
 

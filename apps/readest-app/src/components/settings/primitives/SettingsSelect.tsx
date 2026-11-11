@@ -52,7 +52,7 @@ const SettingsSelect: React.FC<SettingsSelectProps> = ({
         onKeyDown={(e) => e.stopPropagation()}
         disabled={disabled}
         aria-label={ariaLabel}
-        className='select settings-content h-9 w-auto min-w-0 [field-sizing:content] cursor-pointer truncate border-0! bg-transparent! bg-none! pe-1! ps-2! text-end focus:border-0! focus:shadow-none! focus:outline-hidden! focus:ring-0! open:outline-hidden!'
+        className='select settings-content h-9 w-auto max-w-full min-w-0 [field-sizing:content] cursor-pointer truncate border-0! bg-transparent! bg-none! pe-1! ps-2! text-end focus:border-0! focus:shadow-none! focus:outline-hidden! focus:ring-0! open:outline-hidden!'
         style={{
           textAlignLast: 'end',
         }}
