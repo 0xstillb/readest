@@ -274,7 +274,7 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           display: none;
         }
         .simpleui-home {
-          --simpleui-current-cover-width: clamp(8rem, 42vw, 18rem);
+          --simpleui-current-cover-width: clamp(8rem, 46vw, 20rem);
         }
         .simpleui-recent-grid {
           grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -286,13 +286,56 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           justify-self: center;
         }
         .simpleui-current-reading {
-          grid-template-columns: minmax(0, 45%) minmax(0, 1fr);
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        }
+        .simpleui-progress {
+          --simpleui-progress: 0%;
+          position: relative;
+          display: flex;
+          align-items: center;
+          height: 1.2rem;
+        }
+        .simpleui-progress-track {
+          display: block;
+          width: 100%;
+          height: 0.65rem;
+          overflow: hidden;
+          border: 1px solid currentColor;
+          border-radius: 9999px;
+          background: var(--color-base-100);
+        }
+        .simpleui-progress-fill {
+          display: block;
+          width: var(--simpleui-progress);
+          height: 100%;
+          border-radius: inherit;
+          background: var(--color-base-content);
+        }
+        .simpleui-progress-label {
+          position: absolute;
+          inset-inline-start: clamp(0.75rem, var(--simpleui-progress), calc(100% - 0.75rem));
+          display: grid;
+          min-width: 1.35rem;
+          height: 1.35rem;
+          place-items: center;
+          margin-inline-start: -0.675rem;
+          border: 1px solid var(--color-base-content);
+          border-radius: 9999px;
+          background: var(--color-base-100);
+          color: var(--color-base-content);
+          font-size: 0.65rem;
+          font-variant-numeric: tabular-nums;
+          font-weight: 700;
+          line-height: 1;
+          white-space: nowrap;
         }
         .simpleui-continue-reading {
-          min-height: 2.75rem;
-          border: 1px solid currentColor;
-          border-radius: 0.2rem;
-          padding: 0 0.75rem;
+          min-height: 2.25rem;
+          border: 0;
+          border-radius: 9999px;
+          padding: 0 0.8rem;
+          background: var(--color-base-content);
+          color: var(--color-base-100);
         }
         .simpleui-continue-reading svg {
           width: 1.25rem;
@@ -324,13 +367,14 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
         }
         .simpleui-cover-frame,
         #simpleui-library .bookitem-main {
+          border-radius: 0.7rem;
           border: 0 !important;
           box-shadow:
             1px 2px 2px rgba(0, 0, 0, 0.32),
             3px 8px 10px rgba(0, 0, 0, 0.20),
             7px 17px 22px rgba(0, 0, 0, 0.09);
         }
-        @media (max-width: 540px) {
+        @media (max-width: 440px) {
           .simpleui-home .simpleui-current-reading {
             grid-template-columns: minmax(0, 1fr);
             justify-items: center;
@@ -344,16 +388,33 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
             width: min(100%, 32rem);
           }
         }
+        @media (min-width: 441px) and (max-width: 540px) {
+          .simpleui-home .simpleui-current-reading {
+            column-gap: 0.75rem;
+            padding-inline-end: 0.5rem;
+          }
+          .simpleui-home .simpleui-current-copy > div:first-child {
+            font-size: 0.7rem;
+          }
+          .simpleui-home .simpleui-current-copy > h1 {
+            font-size: 1rem;
+            line-height: 1.25;
+          }
+          .simpleui-home .simpleui-current-copy > p {
+            margin-top: 0.35rem;
+            font-size: 0.8rem;
+          }
+          .simpleui-home .simpleui-current-copy > div:nth-of-type(2),
+          .simpleui-home .simpleui-current-copy > div:last-child {
+            margin-top: 0.65rem;
+          }
+        }
         @media (max-width: 420px) {
           .simpleui-home .simpleui-home-content {
             padding-inline: 1rem;
           }
-          .simpleui-home {
-            --simpleui-current-cover-width: clamp(6.25rem, 35.5vw, 9.5rem);
-          }
           .simpleui-home .simpleui-current-reading {
             column-gap: 0.75rem;
-            padding-inline-end: 0.5rem;
           }
           .simpleui-home .simpleui-current-copy > div:nth-of-type(2) {
             gap: 0.5rem;

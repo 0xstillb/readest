@@ -103,7 +103,7 @@ export default function SimpleUIHome() {
 
         {currentBook ? (
           <section className='simpleui-current-reading mx-auto mt-3 grid w-full max-w-3xl shrink-0 items-center gap-4 bg-transparent py-3 pe-3 ps-0 text-left sm:mt-4 sm:gap-8 sm:pe-5'>
-            <div className='simpleui-cover-frame simpleui-current-cover flex items-center justify-center overflow-hidden bg-base-200'>
+            <div className='simpleui-cover-frame simpleui-current-cover flex items-center justify-center overflow-hidden rounded-xl bg-base-200'>
               <BookCover
                 book={currentBook}
                 coverFit={settings.libraryCoverFit}
@@ -120,13 +120,22 @@ export default function SimpleUIHome() {
               <p className='mt-2 line-clamp-2 text-base text-base-content/75'>
                 {currentBook.author}
               </p>
-              <div className='mt-5 flex items-center gap-3'>
-                <progress
-                  className='progress h-2 flex-1 border border-base-content/40'
-                  value={progressPercent(currentBook)}
-                  max='100'
-                />
-                <span className='min-w-10 text-right text-sm tabular-nums'>
+              <div
+                className='simpleui-progress mt-4'
+                role='progressbar'
+                aria-label={_('Reading')}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progressPercent(currentBook)}
+                aria-valuetext={`${progressPercent(currentBook)}%`}
+                style={
+                  { '--simpleui-progress': `${progressPercent(currentBook)}%` } as CSSProperties
+                }
+              >
+                <span className='simpleui-progress-track' aria-hidden='true'>
+                  <span className='simpleui-progress-fill' />
+                </span>
+                <span className='simpleui-progress-label' aria-hidden='true'>
                   {progressPercent(currentBook)}%
                 </span>
               </div>
@@ -171,7 +180,7 @@ export default function SimpleUIHome() {
                   onClick={() => openBook(book)}
                   className='min-w-0 bg-transparent p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
                 >
-                  <div className='simpleui-cover-frame flex aspect-[2/3] w-full items-center justify-center overflow-hidden bg-base-200'>
+                  <div className='simpleui-cover-frame flex aspect-[2/3] w-full items-center justify-center overflow-hidden rounded-lg bg-base-200'>
                     <BookCover
                       book={book}
                       coverFit={settings.libraryCoverFit}
