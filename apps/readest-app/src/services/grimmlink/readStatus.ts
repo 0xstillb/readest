@@ -46,9 +46,10 @@ export class GrimmLinkReadStatusProvider {
   async pullRemote<T extends { readingStatus?: ReadingStatus; readingStatusUpdatedAt?: number }>(
     bookId: number,
     local: T,
+    getLatestLocal?: () => T,
   ): Promise<T> {
     if (!this.client.getBookMetadata || !hasGrimmLinkCapability(this.capabilities, 'read-status'))
-      return local;
+      return getLatestLocal?.() ?? local;
     const metadata = await this.client.getBookMetadata(bookId);
     const nested =
       metadata['readStatus'] && typeof metadata['readStatus'] === 'object'
@@ -66,7 +67,12 @@ export class GrimmLinkReadStatusProvider {
         : typeof nested?.['updatedAt'] === 'string'
           ? nested['updatedAt']
           : undefined;
-    return this.mergeRemote(local, { status, updatedAt });
+    // Resolve the local snapshot after the network wait so a delayed response
+    // cannot overwrite a newer status or unrelated book fields.
+    const latestLocal = getLatestLocal?.() ?? local;
+    const available = await this.available();
+    const merged = mergeRemoteReadStatus(latestLocal, { status, updatedAt }, available);
+    return { ...latestLocal, ...merged };
   }
 }
 

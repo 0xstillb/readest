@@ -703,6 +703,43 @@ describe('GrimmLink status and rating contract', () => {
     ).toEqual({ readingStatus: 'finished', readingStatusUpdatedAt: 200 });
   });
 
+  it('merges a delayed status pull into the latest local book snapshot', async () => {
+    let resolveMetadata: ((metadata: Record<string, unknown>) => void) | undefined;
+    const client = {
+      getReadStatuses: vi.fn().mockResolvedValue({ statuses: ['READ', 'READING'] }),
+      getBookMetadata: vi.fn().mockReturnValue(
+        new Promise<Record<string, unknown>>((resolve) => {
+          resolveMetadata = resolve;
+        }),
+      ),
+    };
+    const provider = new GrimmLinkReadStatusProvider(client, {} as never, ['read-status']);
+    const original = {
+      readingStatus: 'reading' as const,
+      readingStatusUpdatedAt: 100,
+      progress: [10, 100],
+    };
+    let latest: {
+      readingStatus: 'reading' | 'finished';
+      readingStatusUpdatedAt: number;
+      progress: number[];
+    } = original;
+    const pending = provider.pullRemote(42, original, () => latest);
+
+    latest = {
+      readingStatus: 'finished',
+      readingStatusUpdatedAt: 200,
+      progress: [35, 100],
+    };
+    resolveMetadata?.({
+      bookId: 42,
+      readStatus: 'READ',
+      readStatusModifiedTime: '1970-01-01T00:00:00.150Z',
+    });
+
+    await expect(pending).resolves.toEqual(latest);
+  });
+
   it('pulls Grimmory read status with its authoritative modification time', async () => {
     const provider = new GrimmLinkReadStatusProvider(
       {

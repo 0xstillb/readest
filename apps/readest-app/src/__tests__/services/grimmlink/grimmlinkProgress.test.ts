@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Book } from '@/types/book';
 import {
   GrimmLinkProgressProvider,
+  normalizeGrimmLinkProgressPayload,
   progressPullDisposition,
   toGrimmLinkProgressPayload,
 } from '@/services/grimmlink/progress';
@@ -12,6 +13,21 @@ const pdf = { hash: 'pdf-hash', format: 'PDF', title: 'Pdf', author: 'A' } as Bo
 const link = { bookHash: 'epub-hash', bookId: 42, bookFileId: 9, format: 'EPUB' };
 
 describe('GrimmLink progress', () => {
+  it('does not replay a legacy EPUB XPointer as a CFI', () => {
+    const normalized = normalizeGrimmLinkProgressPayload({
+      document: 'legacy-epub-hash',
+      fileFormat: 'EPUB',
+      percentage: 37,
+      location: '/body/DocFragment[4]/body/p/text().12',
+    });
+
+    expect(normalized).toMatchObject({
+      bookHash: 'legacy-epub-hash',
+      fraction: 0.37,
+      position: { format: 'epub' },
+    });
+    expect(normalized?.position.cfi).toBeUndefined();
+  });
   it('caches a hash match and does not match it again', async () => {
     const links = { get: vi.fn().mockResolvedValue(null), set: vi.fn(), markUnmatched: vi.fn() };
     const client = {

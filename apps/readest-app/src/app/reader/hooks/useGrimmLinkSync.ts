@@ -630,12 +630,23 @@ export const useGrimmLinkSync = (bookKey: string) => {
           return;
         }
         const local = getLibraryBook(book.hash) ?? book;
-        const merged = await statuses.pullRemote(link.bookId, local);
+        const merged = await statuses.pullRemote(
+          link.bookId,
+          local,
+          () => getLibraryBook(book.hash) ?? local,
+        );
+        const latest = getLibraryBook(book.hash) ?? local;
+        const remoteIsNewer =
+          (merged.readingStatusUpdatedAt ?? 0) > (latest.readingStatusUpdatedAt ?? 0);
+        const readingStatus = remoteIsNewer ? merged.readingStatus : latest.readingStatus;
+        const readingStatusUpdatedAt = remoteIsNewer
+          ? merged.readingStatusUpdatedAt
+          : latest.readingStatusUpdatedAt;
         if (
-          merged.readingStatus !== local.readingStatus ||
-          merged.readingStatusUpdatedAt !== local.readingStatusUpdatedAt
+          readingStatus !== latest.readingStatus ||
+          readingStatusUpdatedAt !== latest.readingStatusUpdatedAt
         ) {
-          await updateLibraryBook(envConfig, { ...local, ...merged });
+          await updateLibraryBook(envConfig, { ...latest, readingStatus, readingStatusUpdatedAt });
         }
       })
       .catch((error) => {

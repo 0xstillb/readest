@@ -106,6 +106,7 @@ export const normalizeGrimmLinkProgressPayload = (
   const pageTotal = typeof payload['totalPages'] === 'number' ? payload['totalPages'] : undefined;
   const location = typeof payload['location'] === 'string' ? payload['location'] : undefined;
   const { page, totalPages } = fixed ? fixedLayoutPosition(currentPage, pageTotal) : {};
+  const hasLegacyXPointer = !fixed && location?.startsWith('/body/DocFragment[');
   return {
     bookHash,
     operationId: createOperationId(),
@@ -119,7 +120,7 @@ export const normalizeGrimmLinkProgressPayload = (
     fraction: Math.max(0, Math.min(1, percentage / 100)),
     position: {
       format: fileFormat.toLowerCase(),
-      cfi: fixed ? undefined : location,
+      ...(fixed || hasLegacyXPointer || !location ? {} : { cfi: location }),
       page,
       totalPages,
     },
