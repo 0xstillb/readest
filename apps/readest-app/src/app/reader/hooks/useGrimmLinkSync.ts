@@ -180,7 +180,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
   const getView = useReaderStore((s) => s.getView);
   const getBookData = useBookDataStore((s) => s.getBookData);
   const metadataReady = useBookDataStore((s) => {
-    const data = s.booksData[bookKey.split('-')[0]!];
+    const data = s.getBookData(bookKey);
     return !!data?.book && !!data.config;
   });
   const updateBooknotes = useBookDataStore((s) => s.updateBooknotes);
