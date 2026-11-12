@@ -2,10 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Book } from '@/types/book';
 import type { ShelfSection } from '@/app/library/components/BookshelfStream';
-import {
-  buildBookshelfRows,
-  paginateBookshelfRows,
-} from '@/app/library/components/BookshelfStream';
+import { buildBookshelfRows } from '@/app/library/components/BookshelfStream';
+import { paginateBookshelfRows } from '@/components/simpleui/useSimpleUILibraryPagination';
 import { defaultBookshelves } from '@/services/bookshelves/definitions';
 
 const defaultShelf = defaultBookshelves({}).find((shelf) => shelf.id === 'default')!;

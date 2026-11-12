@@ -23,6 +23,7 @@ import type { BookshelfDefinition } from '@/types/bookshelf';
 import { bookshelfName } from '@/services/bookshelves/definitions';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useLibraryPagination } from '../hooks/useLibraryPagination';
+import { useSimpleUILibraryPagination } from '@/components/simpleui/useSimpleUILibraryPagination';
 
 export interface ShelfSection {
   definition: BookshelfDefinition;
@@ -109,31 +110,6 @@ export const buildBookshelfRows = (
       });
     return rows;
   });
-const PAGE_CONTENT_ROWS = 2;
-export const paginateBookshelfRows = (rows: StreamRow[]): StreamRow[][] => {
-  const pages: StreamRow[][] = [];
-  let page: StreamRow[] = [];
-  let pendingSectionRows: StreamRow[] = [];
-  let contentRows = 0;
-
-  for (const row of rows) {
-    if (row.type === 'heading' || row.type === 'divider') {
-      pendingSectionRows.push(row);
-      continue;
-    }
-    if (contentRows === PAGE_CONTENT_ROWS) {
-      pages.push(page);
-      page = [];
-      contentRows = 0;
-    }
-    page.push(...pendingSectionRows, row);
-    pendingSectionRows = [];
-    contentRows++;
-  }
-  page.push(...pendingSectionRows);
-  if (page.length) pages.push(page);
-  return pages;
-};
 const itemKey = (item: Book | BooksGroup) => ('hash' in item ? item.hash : item.id);
 
 /** A bounded horizontal window; vertical scrolling belongs only to the parent stream. */
@@ -355,26 +331,12 @@ export default function BookshelfStream({
     [sections, columns, includeImport],
   );
   const rowKeys = useMemo(() => rows.map((row) => row.key).join('\n'), [rows]);
-  const pages = useMemo(
-    () => (fixedPageNavigation ? paginateBookshelfRows(rows) : []),
-    [fixedPageNavigation, rows],
-  );
-  const [paginationState, setPaginationState] = useState({ rowKeys, pageIndex: 0 });
-  const pageIndex = paginationState.rowKeys === rowKeys ? paginationState.pageIndex : 0;
-  const currentPageIndex = Math.min(pageIndex, Math.max(0, pages.length - 1));
-  const visibleRows = fixedPageNavigation ? (pages[currentPageIndex] ?? []) : rows;
-  const turnFixedPage = useCallback(
-    (direction: number) => {
-      setPaginationState((current) => {
-        const currentIndex = current.rowKeys === rowKeys ? current.pageIndex : 0;
-        return {
-          rowKeys,
-          pageIndex: Math.max(0, Math.min(pages.length - 1, currentIndex + direction)),
-        };
-      });
-    },
-    [pages.length, rowKeys],
-  );
+  const {
+    pages,
+    currentPageIndex,
+    visibleRows,
+    turnPage: turnFixedPage,
+  } = useSimpleUILibraryPagination(rows, rowKeys, fixedPageNavigation);
   const turnPage = useLibraryPagination(
     scroller,
     pageNavigation,
