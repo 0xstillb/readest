@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 type LibraryRow = { type: 'divider' | 'heading' | 'empty' | 'carousel' | 'items' };
 
-export function paginateBookshelfRows<T extends LibraryRow>(rows: T[]): T[][] {
+export function paginateBookshelfRows<T extends LibraryRow>(rows: T[], rowsPerPage = 2): T[][] {
   const pages: T[][] = [];
   let page: T[] = [];
   let pending: T[] = [];
@@ -12,7 +12,7 @@ export function paginateBookshelfRows<T extends LibraryRow>(rows: T[]): T[][] {
       pending.push(row);
       continue;
     }
-    if (contentRows === 2) {
+    if (contentRows === rowsPerPage) {
       pages.push(page);
       page = [];
       contentRows = 0;
@@ -30,8 +30,12 @@ export function useSimpleUILibraryPagination<T extends LibraryRow>(
   rows: T[],
   rowKeys: string,
   enabled: boolean,
+  rowsPerPage = 2,
 ) {
-  const pages = useMemo(() => (enabled ? paginateBookshelfRows(rows) : []), [enabled, rows]);
+  const pages = useMemo(
+    () => (enabled ? paginateBookshelfRows(rows, rowsPerPage) : []),
+    [enabled, rows, rowsPerPage],
+  );
   const [state, setState] = useState({ rowKeys, pageIndex: 0 });
   const pageIndex = state.rowKeys === rowKeys ? state.pageIndex : 0;
   const currentPageIndex = Math.min(pageIndex, Math.max(0, pages.length - 1));

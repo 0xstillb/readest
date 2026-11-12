@@ -16,11 +16,14 @@ const makeSection = (count: number): ShelfSection => ({
   ),
 });
 const itemCountsPerPage = (columns: number) =>
-  paginateBookshelfRows(buildBookshelfRows([makeSection(9)], columns)).map((page) =>
-    page.reduce((count, row) => count + (row.items?.length ?? 0), 0),
+  paginateBookshelfRows(buildBookshelfRows([makeSection(9)], columns), columns === 1 ? 1 : 2).map(
+    (page) => page.reduce((count, row) => count + (row.items?.length ?? 0), 0),
   );
 
 describe('Simple UI Library pagination', () => {
+  it('shows only one book per page for a single-column grid', () => {
+    expect(itemCountsPerPage(1)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  });
   it('shows two grid rows per page when Readest uses two columns', () => {
     expect(itemCountsPerPage(2)).toEqual([4, 4, 1]);
   });
