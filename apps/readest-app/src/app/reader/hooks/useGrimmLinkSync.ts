@@ -179,6 +179,10 @@ export const useGrimmLinkSync = (bookKey: string) => {
   const getProgress = useReaderStore((s) => s.getProgress);
   const getView = useReaderStore((s) => s.getView);
   const getBookData = useBookDataStore((s) => s.getBookData);
+  const metadataReady = useBookDataStore((s) => {
+    const data = s.getBookData(bookKey);
+    return !!data?.book && !!data.config;
+  });
   const updateBooknotes = useBookDataStore((s) => s.updateBooknotes);
   const saveConfig = useBookDataStore((s) => s.saveConfig);
   const getLibraryBook = useLibraryStore((s) => s.getBookByHash);
@@ -567,7 +571,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
   }, [progress, pushProgress, grimmlink.strategy, syncState]);
 
   useEffect(() => {
-    if (!client || !store || !grimmlink.syncMetadata || !linkResolver) {
+    if (!client || !store || !grimmlink.syncMetadata || !linkResolver || !metadataReady) {
       ratingPullKey.current = null;
       return;
     }
@@ -600,7 +604,16 @@ export const useGrimmLinkSync = (bookKey: string) => {
         console.warn('[GrimmLink] rating pull failed', error);
         if (ratingPullKey.current === pullKey) ratingPullKey.current = null;
       });
-  }, [bookKey, client, getBookData, grimmlink, linkResolver, loadCapabilities, store]);
+  }, [
+    bookKey,
+    client,
+    getBookData,
+    grimmlink,
+    linkResolver,
+    loadCapabilities,
+    metadataReady,
+    store,
+  ]);
 
   useEffect(() => {
     if (
@@ -608,6 +621,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       !store ||
       !grimmlink.syncReadStatus ||
       !linkResolver ||
+      !metadataReady ||
       grimmlink.strategy === 'send'
     ) {
       statusPullKey.current = null;
@@ -665,6 +679,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     grimmlink,
     linkResolver,
     loadCapabilities,
+    metadataReady,
     store,
     updateLibraryBook,
   ]);
@@ -676,12 +691,13 @@ export const useGrimmLinkSync = (bookKey: string) => {
       !replayScheduler ||
       !grimmlink.syncMetadata ||
       !linkResolver ||
+      !metadataReady ||
       metadataPulled.current
     )
       return;
     const data = getBookData(bookKey);
     const book = data?.book;
-    if (!book) return;
+    if (!book || !data?.config) return;
     metadataPulled.current = true;
     void loadCapabilities()
       .then(async (capabilities) => {
@@ -724,6 +740,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     grimmlink,
     loadCapabilities,
     linkResolver,
+    metadataReady,
     queueMetadata,
     replayScheduler,
     saveConfig,

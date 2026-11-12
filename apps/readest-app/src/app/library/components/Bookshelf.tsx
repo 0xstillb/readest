@@ -51,9 +51,7 @@ import { getLocalBookFilename } from '@/utils/book';
 import { MIMETYPES, EXTS } from '@/libs/document';
 import { makeSafeFilename } from '@/utils/misc';
 import { isTauriAppPlatform } from '@/services/environment';
-import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
-import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
-import { queueExplicitGrimmLinkReadStatus } from '@/services/grimmlink/readStatus';
+import { useGrimmLinkLibraryReadStatus } from '@/hooks/useGrimmLinkLibraryReadStatus';
 import { isLocalSendEnabled } from '@/services/localsend/devicePrefs';
 import { splitLibraryOpenIds } from '@/utils/audiobook';
 
@@ -133,6 +131,7 @@ const Bookshelf: React.FC<BookshelfProps> = ({
   const searchParams = useSearchParams();
   const { envConfig, appService } = useEnv();
   const { settings } = useSettingsStore();
+  const queueGrimmLinkReadStatuses = useGrimmLinkLibraryReadStatus();
   const { safeAreaInsets } = useThemeStore();
   const { enabled: simpleUIEnabled } = useSimpleUIMode();
   const { enabled: simpleUILibraryScroll } = useSimpleUILibraryScroll();
@@ -742,33 +741,6 @@ const Bookshelf: React.FC<BookshelfProps> = ({
       });
     }
   };
-
-  const queueGrimmLinkReadStatuses = useCallback(
-    async (books: Book[], status: ReadingStatus | undefined) => {
-      const config = settings.grimmlink;
-      if (
-        !appService ||
-        !config.enabled ||
-        !config.syncReadStatus ||
-        !config.serverUrl ||
-        !config.userkey
-      )
-        return;
-      const connectionId = `${config.serverUrl}\u0000${config.username}`;
-      const store = new GrimmLinkSyncStore(appService, connectionId);
-      const client = new GrimmLinkClient(config);
-      for (const book of books) {
-        try {
-          await queueExplicitGrimmLinkReadStatus(book, status, config, store, client);
-        } catch (error) {
-          // The local library update already succeeded. A later explicit change
-          // retries normally; do not let an unavailable server interrupt it.
-          console.warn('[GrimmLink] failed to queue reading status', error);
-        }
-      }
-    },
-    [appService, settings.grimmlink],
-  );
 
   const updateBooksStatus = async (status: ReadingStatus | undefined) => {
     const selectedIds = getSelectedBooks();
