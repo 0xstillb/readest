@@ -71,6 +71,8 @@ import TaggingModal from './TaggingModal';
 import SetStatusAlert from './SetStatusAlert';
 import { useOpenBook } from '../hooks/useOpenBook';
 import LibrarySearchResults from './LibrarySearchResults';
+import useSimpleUIMode from '@/components/simpleui/useSimpleUIMode';
+import useSimpleUILibraryScroll from '@/components/simpleui/useSimpleUILibraryScroll';
 
 export interface ContentSearchRequest {
   query: string;
@@ -132,6 +134,8 @@ const Bookshelf: React.FC<BookshelfProps> = ({
   const { envConfig, appService } = useEnv();
   const { settings } = useSettingsStore();
   const { safeAreaInsets } = useThemeStore();
+  const { enabled: simpleUIEnabled } = useSimpleUIMode();
+  const { enabled: simpleUILibraryScroll } = useSimpleUILibraryScroll();
 
   const groupId = searchParams?.get('group') || '';
   const shelfId = searchParams?.get('shelf') || '';
@@ -1099,7 +1103,10 @@ const Bookshelf: React.FC<BookshelfProps> = ({
         <div className='min-h-0 flex-1'>
           <BookshelfStream
             scrollKey={searchParams?.toString() ?? ''}
-            pageNavigation={!!settings.globalViewSettings?.isEink}
+            pageNavigation={
+              simpleUIEnabled ? !simpleUILibraryScroll : !!settings.globalViewSettings?.isEink
+            }
+            fixedPageNavigation={simpleUIEnabled && !simpleUILibraryScroll}
             hidePageButtons={settings.hideBookshelfPageButtons}
             navigationBottomInset={
               selectModeActionsHeight ||

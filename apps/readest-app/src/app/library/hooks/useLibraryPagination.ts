@@ -9,7 +9,11 @@ import { isPencilNativeKey, normalizeDomKeyEvent, resolvePageTurn } from '@/util
 const WHEEL_PAGE_THRESHOLD = 50;
 const TOUCH_PAGE_THRESHOLD = 24;
 
-export function useLibraryPagination(scroller: HTMLElement | null, enabled: boolean) {
+export function useLibraryPagination(
+  scroller: HTMLElement | null,
+  enabled: boolean,
+  onPageTurn?: (direction: number) => void,
+) {
   const { appService } = useEnv();
   const hardware = useSettingsStore((s) => s.settings.hardwarePageTurner);
   const volumeKeys = useSettingsStore((s) => !!s.settings.globalViewSettings?.volumeKeysToFlip);
@@ -17,6 +21,10 @@ export function useLibraryPagination(scroller: HTMLElement | null, enabled: bool
   const turnPage = useCallback(
     (direction: number) => {
       if (!scroller) return;
+      if (onPageTurn) {
+        onPageTurn(direction);
+        return;
+      }
       const viewport = scroller.getBoundingClientRect();
       const top = scroller.scrollTop;
       const height = scroller.clientHeight;
@@ -46,7 +54,7 @@ export function useLibraryPagination(scroller: HTMLElement | null, enabled: bool
           : top + direction * height;
       scroller.scrollTo({ top: Math.max(0, next), behavior: 'instant' });
     },
-    [scroller],
+    [onPageTurn, scroller],
   );
 
   useEffect(() => {
@@ -162,7 +170,7 @@ export function useLibraryPagination(scroller: HTMLElement | null, enabled: bool
       if (Math.abs(dx) > Math.abs(dy)) return;
       // At the very top a downward drag is the pull-to-refresh gesture, and
       // there is no page above the first one to turn to.
-      if (dy > 0 && scroller.scrollTop <= 0) return;
+      if (!onPageTurn && dy > 0 && scroller.scrollTop <= 0) return;
       event.preventDefault();
       if (turned) return;
       turned = true;

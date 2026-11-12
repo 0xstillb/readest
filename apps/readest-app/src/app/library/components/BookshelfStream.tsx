@@ -47,6 +47,8 @@ interface StreamProps {
   pageNavigation?: boolean;
   /** Drop the e-ink Previous/Next buttons; keys still page. */
   hidePageButtons?: boolean;
+  /** Simple UI turns two content rows at a time instead of scrolling the full list. */
+  fixedPageNavigation?: boolean;
   navigationBottomInset?: number;
   /** Identifies the shelf view; its scroll state survives remounts (open a book, come back). */
   scrollKey?: string;
@@ -107,6 +109,31 @@ export const buildBookshelfRows = (
       });
     return rows;
   });
+const PAGE_CONTENT_ROWS = 2;
+export const paginateBookshelfRows = (rows: StreamRow[]): StreamRow[][] => {
+  const pages: StreamRow[][] = [];
+  let page: StreamRow[] = [];
+  let pendingSectionRows: StreamRow[] = [];
+  let contentRows = 0;
+
+  for (const row of rows) {
+    if (row.type === 'heading' || row.type === 'divider') {
+      pendingSectionRows.push(row);
+      continue;
+    }
+    if (contentRows === PAGE_CONTENT_ROWS) {
+      pages.push(page);
+      page = [];
+      contentRows = 0;
+    }
+    page.push(...pendingSectionRows, row);
+    pendingSectionRows = [];
+    contentRows++;
+  }
+  page.push(...pendingSectionRows);
+  if (page.length) pages.push(page);
+  return pages;
+};
 const itemKey = (item: Book | BooksGroup) => ('hash' in item ? item.hash : item.id);
 
 /** A bounded horizontal window; vertical scrolling belongs only to the parent stream. */
@@ -288,6 +315,7 @@ export default function BookshelfStream({
   pageDurations,
   scale = 1,
   pageNavigation = false,
+  fixedPageNavigation = false,
   hidePageButtons = false,
   navigationBottomInset = 0,
   scrollKey,
@@ -307,7 +335,6 @@ export default function BookshelfStream({
   );
   const [start, setStart] = useState(true);
   const [end, setEnd] = useState(true);
-  const turnPage = useLibraryPagination(scroller, pageNavigation);
   useEffect(() => {
     const element = root.current;
     if (!element) return;
@@ -328,6 +355,38 @@ export default function BookshelfStream({
     [sections, columns, includeImport],
   );
   const rowKeys = useMemo(() => rows.map((row) => row.key).join('\n'), [rows]);
+  const pages = useMemo(
+    () => (fixedPageNavigation ? paginateBookshelfRows(rows) : []),
+    [fixedPageNavigation, rows],
+  );
+  const [paginationState, setPaginationState] = useState({ rowKeys, pageIndex: 0 });
+  const pageIndex = paginationState.rowKeys === rowKeys ? paginationState.pageIndex : 0;
+  const currentPageIndex = Math.min(pageIndex, Math.max(0, pages.length - 1));
+  const visibleRows = fixedPageNavigation ? (pages[currentPageIndex] ?? []) : rows;
+  const turnFixedPage = useCallback(
+    (direction: number) => {
+      setPaginationState((current) => {
+        const currentIndex = current.rowKeys === rowKeys ? current.pageIndex : 0;
+        return {
+          rowKeys,
+          pageIndex: Math.max(0, Math.min(pages.length - 1, currentIndex + direction)),
+        };
+      });
+    },
+    [pages.length, rowKeys],
+  );
+  const turnPage = useLibraryPagination(
+    scroller,
+    pageNavigation,
+    fixedPageNavigation ? turnFixedPage : undefined,
+  );
+  useEffect(() => {
+    if (!scroller || !fixedPageNavigation) return;
+    scroller.style.overflowY = 'hidden';
+    return () => {
+      scroller.style.overflowY = '';
+    };
+  }, [fixedPageNavigation, scroller]);
   const [restoreState] = useState(() => {
     const saved = scrollKey === undefined ? undefined : savedScrollStates.get(scrollKey);
     return saved?.rowKeys === rowKeys ? saved.state : undefined;
@@ -367,9 +426,10 @@ export default function BookshelfStream({
         <div className='min-h-0 flex-1' data-overlayscrollbars-initialize=''>
           <Virtuoso
             ref={virtuoso}
+            key={fixedPageNavigation ? `library-page-${currentPageIndex}` : 'library-stream'}
             restoreStateFrom={restoreState}
             style={scale !== 1 ? { overflowX: 'hidden' } : undefined}
-            data={rows}
+            data={visibleRows}
             overscan={pageNavigation ? Math.max(400, height) : 400}
             defaultItemHeight={200}
             context={context}
@@ -462,7 +522,7 @@ export default function BookshelfStream({
                 type='button'
                 className='btn btn-ghost eink-bordered min-h-11'
                 aria-label={_('Previous page')}
-                disabled={start}
+                disabled={fixedPageNavigation ? currentPageIndex === 0 : start}
                 onClick={() => turnPage(-1)}
               >
                 {_('Previous')}
@@ -471,7 +531,7 @@ export default function BookshelfStream({
                 type='button'
                 className='btn btn-ghost eink-bordered min-h-11'
                 aria-label={_('Next page')}
-                disabled={end}
+                disabled={fixedPageNavigation ? currentPageIndex >= pages.length - 1 : end}
                 onClick={() => turnPage(1)}
               >
                 {_('Next')}
