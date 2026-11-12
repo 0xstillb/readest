@@ -57,7 +57,7 @@ describe.each(['grid', 'list'] as const)('full title on hover in %s mode', (mode
         showTimeRemaining={false}
       />,
     );
-    expect(screen.getByText(longTitle).getAttribute('title')).toBe(longTitle);
+    expect(screen.getByRole('heading', { name: longTitle }).getAttribute('title')).toBe(longTitle);
   });
 
   it('gives a group name its full text as a tooltip', () => {

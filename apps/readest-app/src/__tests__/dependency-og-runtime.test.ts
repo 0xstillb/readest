@@ -4,12 +4,14 @@ import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const vinextRequire = createRequire(
   `${realpathSync(new URL('../../node_modules/vinext', import.meta.url))}/package.json`,
 );
 const ogPath = vinextRequire.resolve('@vercel/og');
+const ogUrl = pathToFileURL(ogPath).href;
 
 describe('patched Open Graph renderer', () => {
   it('renders a PNG in Node with the font shaper available', () => {
@@ -19,7 +21,7 @@ describe('patched Open Graph renderer', () => {
         '--input-type=module',
         '-e',
         `
-          const { ImageResponse } = await import(${JSON.stringify(ogPath)});
+          const { ImageResponse } = await import(${JSON.stringify(ogUrl)});
           const image = new ImageResponse({
             type: 'div',
             props: {
