@@ -28,6 +28,7 @@ import { GrimmLinkSessionTracker } from '@/services/grimmlink/sessions';
 import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
 import { GrimmLinkReadStatusProvider } from '@/services/grimmlink/readStatus';
 import { GrimmLinkMetadataProvider } from '@/services/grimmlink/metadataProvider';
+import { mergeNotes } from '@/services/sync/file/merge';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import type { SyncDetails } from './useKOSync';
 import { useWindowActiveChanged } from './useWindowActiveChanged';
@@ -706,7 +707,6 @@ export const useGrimmLinkSync = (bookKey: string) => {
           device: grimmlink.deviceName,
           deviceId: grimmlink.deviceId,
         });
-        const notes = data?.config?.booknotes ?? [];
         const link = await linkResolver.resolveLink(book);
         if (!link) {
           metadataPulled.current = false;
@@ -715,11 +715,16 @@ export const useGrimmLinkSync = (bookKey: string) => {
         // Push local notes first. Pulling first can immediately echo notes that
         // were just mapped from Grimmory back as new local dedupe keys.
         if (grimmlink.strategy !== 'receive') await queueMetadata();
+        const notes = getBookData(bookKey)?.config?.booknotes ?? [];
         await metadata.pull(
           link.bookHash,
           notes,
           async (merged) => {
-            const updated = updateBooknotes(bookKey, merged, 'remote');
+            // Other syncs and local edits can finish while the network request
+            // is in flight. Merge against the live notes, not the snapshot taken
+            // at the start of the pull.
+            const current = getBookData(bookKey)?.config?.booknotes ?? [];
+            const updated = updateBooknotes(bookKey, mergeNotes(current, merged), 'remote');
             if (updated) await saveConfig(envConfig, bookKey, updated, settings);
           },
           (note) => {

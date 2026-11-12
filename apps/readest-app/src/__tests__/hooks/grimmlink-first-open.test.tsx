@@ -6,6 +6,7 @@ import { useBookDataStore, type BookData } from '@/store/bookDataStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useGrimmLinkSync } from '@/app/reader/hooks/useGrimmLinkSync';
 import type { SystemSettings } from '@/types/settings';
+import type { BookNote } from '@/types/book';
 
 const spies = vi.hoisted(() => ({
   pull: vi.fn(async (..._args: unknown[]) => []),
@@ -105,4 +106,58 @@ it('pulls bookmarks on the first open after the book and config become ready', a
   const reopened = renderHook(() => useGrimmLinkSync('hash-view'));
   await waitFor(() => expect(spies.pull).toHaveBeenCalledTimes(2));
   reopened.unmount();
+});
+
+it('updates live notes and preserves an edit made during the pull', async () => {
+  const originalSave = useBookDataStore.getState().saveConfig;
+  const note = (id: string): BookNote => ({
+    id,
+    type: 'bookmark',
+    cfi: 'epubcfi(/6/2!/4/2)',
+    text: id,
+    note: '',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  const local = note('local');
+  const remote = note('remote');
+  let finishPull: (() => void) | undefined;
+  spies.pull.mockImplementationOnce(async (...args: unknown[]) => {
+    await new Promise<void>((resolve) => {
+      finishPull = resolve;
+    });
+    await (args[2] as (notes: BookNote[]) => Promise<void>)([remote]);
+    return [];
+  });
+  useBookDataStore.setState({
+    saveConfig: vi.fn(async () => {}),
+    booksData: {
+      hash: {
+        id: 'hash',
+        book: { hash: 'hash', format: 'PDF' },
+        config: { booknotes: [] },
+      } as unknown as BookData,
+    },
+  });
+  const view = renderHook(() => useGrimmLinkSync('hash-view'));
+  try {
+    await waitFor(() => expect(finishPull).toBeDefined());
+    act(() => {
+      useBookDataStore.getState().updateBooknotes('hash-view', [local], 'remote');
+    });
+    await act(async () => {
+      finishPull!();
+    });
+    await waitFor(() =>
+      expect(
+        useBookDataStore
+          .getState()
+          .getConfig('hash-view')
+          ?.booknotes?.map((n) => n.id),
+      ).toEqual(['local', 'remote']),
+    );
+  } finally {
+    view.unmount();
+    useBookDataStore.setState({ saveConfig: originalSave });
+  }
 });

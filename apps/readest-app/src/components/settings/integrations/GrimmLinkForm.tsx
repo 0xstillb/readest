@@ -13,7 +13,14 @@ import { KOSyncStrategy } from '@/types/settings';
 import { eventDispatcher } from '@/utils/event';
 import { isLanAddress } from '@/utils/network';
 import SubPageHeader from '../SubPageHeader';
-import { SectionTitle, SettingLabel, SettingsSelect, SettingsSwitchRow, Tips } from '../primitives';
+import {
+  BoxedList,
+  SectionTitle,
+  SettingsRow,
+  SettingsSelect,
+  SettingsSwitchRow,
+  Tips,
+} from '../primitives';
 import GrimmLinkShelfPanel from './GrimmLinkShelfPanel';
 import GrimmLinkDiagnosticsPanel from './GrimmLinkDiagnosticsPanel';
 
@@ -242,7 +249,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
         {isLanServer && (
           <section className='space-y-2'>
             <SectionTitle>{_('LAN security')}</SectionTitle>
-            <div className='card eink-bordered border-base-200 bg-base-100 overflow-hidden border'>
+            <BoxedList innerClassName='[&>label]:py-3'>
               <SettingsSwitchRow
                 label={_('Allow self-signed certificate')}
                 checked={settings.grimmlink.allowSelfSignedCertificate === true}
@@ -252,7 +259,7 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
                   })
                 }
               />
-            </div>
+            </BoxedList>
             <Tips>
               <li>
                 {_(
@@ -304,54 +311,51 @@ const GrimmLinkForm: React.FC<GrimmLinkFormProps> = ({ onBack }) => {
         {settings.grimmlink.enabled && settings.grimmlink.userkey && (
           <section className='space-y-2'>
             <SectionTitle>{_('Sync Options')}</SectionTitle>
-            <div className='card eink-bordered border-base-200 bg-base-100 overflow-hidden border'>
-              <div className='divide-base-200 divide-y'>
-                <div className='flex min-h-14 items-center justify-between gap-3 px-4'>
-                  <SettingLabel>{_('Sync Strategy')}</SettingLabel>
-                  <SettingsSelect
-                    value={settings.grimmlink.strategy}
-                    onChange={(event) =>
-                      void saveGrimmLink({ strategy: event.target.value as KOSyncStrategy })
-                    }
-                    ariaLabel={_('Sync Strategy')}
-                    options={[
-                      { value: 'prompt', label: _('Ask on conflict') },
-                      { value: 'silent', label: _('Always use latest') },
-                      { value: 'send', label: _('Send only') },
-                      { value: 'receive', label: _('Receive only') },
-                    ]}
-                  />
-                </div>
-                <SettingsSwitchRow
-                  label={_('Sync Reading Progress')}
-                  checked={settings.grimmlink.syncProgress}
-                  onChange={() =>
-                    void saveGrimmLink({ syncProgress: !settings.grimmlink.syncProgress })
+            <BoxedList innerClassName='[&>label]:py-3'>
+              <SettingsRow label={_('Sync Strategy')} className='py-3'>
+                <SettingsSelect
+                  value={settings.grimmlink.strategy}
+                  onChange={(event) =>
+                    void saveGrimmLink({ strategy: event.target.value as KOSyncStrategy })
                   }
+                  ariaLabel={_('Sync Strategy')}
+                  options={[
+                    { value: 'prompt', label: _('Ask on conflict') },
+                    { value: 'silent', label: _('Always use latest') },
+                    { value: 'send', label: _('Send only') },
+                    { value: 'receive', label: _('Receive only') },
+                  ]}
                 />
-                <SettingsSwitchRow
-                  label={_('Sync Highlights, Bookmarks, and Ratings')}
-                  checked={settings.grimmlink.syncMetadata}
-                  onChange={() =>
-                    void saveGrimmLink({ syncMetadata: !settings.grimmlink.syncMetadata })
-                  }
-                />
-                <SettingsSwitchRow
-                  label={_('Sync Reading Sessions')}
-                  checked={settings.grimmlink.syncSessions}
-                  onChange={() =>
-                    void saveGrimmLink({ syncSessions: !settings.grimmlink.syncSessions })
-                  }
-                />
-                <SettingsSwitchRow
-                  label={_('Sync Reading Status')}
-                  checked={settings.grimmlink.syncReadStatus}
-                  onChange={() =>
-                    void saveGrimmLink({ syncReadStatus: !settings.grimmlink.syncReadStatus })
-                  }
-                />
-              </div>
-            </div>
+              </SettingsRow>
+              <SettingsSwitchRow
+                label={_('Sync Reading Progress')}
+                checked={settings.grimmlink.syncProgress}
+                onChange={() =>
+                  void saveGrimmLink({ syncProgress: !settings.grimmlink.syncProgress })
+                }
+              />
+              <SettingsSwitchRow
+                label={_('Sync Highlights, Bookmarks, and Ratings')}
+                checked={settings.grimmlink.syncMetadata}
+                onChange={() =>
+                  void saveGrimmLink({ syncMetadata: !settings.grimmlink.syncMetadata })
+                }
+              />
+              <SettingsSwitchRow
+                label={_('Sync Reading Sessions')}
+                checked={settings.grimmlink.syncSessions}
+                onChange={() =>
+                  void saveGrimmLink({ syncSessions: !settings.grimmlink.syncSessions })
+                }
+              />
+              <SettingsSwitchRow
+                label={_('Sync Reading Status')}
+                checked={settings.grimmlink.syncReadStatus}
+                onChange={() =>
+                  void saveGrimmLink({ syncReadStatus: !settings.grimmlink.syncReadStatus })
+                }
+              />
+            </BoxedList>
           </section>
         )}
         <GrimmLinkShelfPanel />
