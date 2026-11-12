@@ -24,6 +24,23 @@
 
 </div>
 
+## 📚 GrimmLink fork
+
+This fork adds [GrimmLink Adapter](https://github.com/0xstillb/grimmlink-adapter) integration and an optional Simple UI for e-readers. [อ่านคู่มือภาษาไทย](docs/grimmlink-th.md)
+
+### Install and connect
+
+1. Download the appropriate installer or Android arm64 APK from the [fork releases](https://github.com/0xstillb/readest/releases/latest). These builds are separate from the upstream Readest downloads below.
+2. Start Grimmory and GrimmLink Adapter, then make sure the reader can reach the adapter over your home network or Tailscale. `localhost` only refers to the reader itself; use the adapter machine's LAN or Tailscale address instead, for example `http://192.168.1.116:8085`.
+3. In Readest, open **Settings → Integrations → GrimmLink**, enter the adapter URL and Grimmory credentials, then choose **Connect**. Select the desired Grimmory shelves and press **Sync**.
+4. Under **Sync Options**, choose the conflict strategy and enable the reading progress, highlights/bookmarks/ratings, reading sessions, and reading status options you need. PDF bookmarks use page numbers; EPUB bookmarks use reading locations.
+
+### Simple UI
+
+Enable **Simple UI Mode** in Library settings. Set the library grid in the usual Readest library options. Turn **Continuous Library scrolling** off for page-by-page navigation: one column shows one book per page, while two or three columns show up to two rows. Turn it on for continuous scrolling. The Simple UI settings also let you choose whether Home shows only Currently Reading or also Recently read, and set cover-title display and bottom-bar icon size. E-ink mode can be used alongside Simple UI.
+
+For connection or sync issues, check the adapter URL, network connection, credentials and selected shelf first. See the [adapter setup guide](https://github.com/0xstillb/grimmlink-adapter) for server installation and diagnostics. Keep a backup of your library before changing between builds signed with different keys.
+
 <p align="center">
   <a href="#features">Features</a> •
   <a href="#planned-features">Planned Features</a> •
