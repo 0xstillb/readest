@@ -52,6 +52,7 @@ import GrimmLinkShelfSyncStatus from '@/components/settings/integrations/GrimmLi
 import useSimpleUIMode from '@/components/simpleui/useSimpleUIMode';
 import useSimpleUIBottomBarIconSize from '@/components/simpleui/useSimpleUIBottomBarIconSize';
 import useSimpleUIHomeDisplay from '@/components/simpleui/useSimpleUIHomeDisplay';
+import useSimpleUILibraryScroll from '@/components/simpleui/useSimpleUILibraryScroll';
 
 interface SettingsMenuProps {
   onPullLibrary: (fullRefresh?: boolean, verbose?: boolean) => void;
@@ -93,6 +94,8 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   } = useSimpleUIBottomBarIconSize();
   const { display: simpleUIHomeDisplay, setDisplay: setSimpleUIHomeDisplay } =
     useSimpleUIHomeDisplay();
+  const { enabled: simpleUILibraryScroll, setEnabled: setSimpleUILibraryScroll } =
+    useSimpleUILibraryScroll();
 
   useEffect(() => {
     if (!isBiometricSupported(appService) || !isPinEnabled) return;
@@ -426,6 +429,11 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
       />
       {simpleUIEnabled && (
         <>
+          <MenuItem
+            label={_('Continuous Library scrolling')}
+            toggled={simpleUILibraryScroll}
+            onClick={() => setSimpleUILibraryScroll(!simpleUILibraryScroll)}
+          />
           <MenuItem label={_('Home display')}>
             <div className='px-3 pb-3 pt-1'>
               <label className='mb-2 block text-xs' htmlFor='simpleui-home-display'>

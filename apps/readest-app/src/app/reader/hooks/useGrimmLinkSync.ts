@@ -28,6 +28,7 @@ import { GrimmLinkSessionTracker } from '@/services/grimmlink/sessions';
 import { GrimmLinkRatingProvider } from '@/services/grimmlink/rating';
 import { GrimmLinkReadStatusProvider } from '@/services/grimmlink/readStatus';
 import { GrimmLinkMetadataProvider } from '@/services/grimmlink/metadataProvider';
+import { mergeNotes } from '@/services/sync/file/merge';
 import { GrimmLinkRequestError } from '@/services/grimmlink/GrimmLinkRequestError';
 import type { SyncDetails } from './useKOSync';
 import { useWindowActiveChanged } from './useWindowActiveChanged';
@@ -179,6 +180,10 @@ export const useGrimmLinkSync = (bookKey: string) => {
   const getProgress = useReaderStore((s) => s.getProgress);
   const getView = useReaderStore((s) => s.getView);
   const getBookData = useBookDataStore((s) => s.getBookData);
+  const metadataReady = useBookDataStore((s) => {
+    const data = s.getBookData(bookKey);
+    return !!data?.book && !!data.config;
+  });
   const updateBooknotes = useBookDataStore((s) => s.updateBooknotes);
   const saveConfig = useBookDataStore((s) => s.saveConfig);
   const getLibraryBook = useLibraryStore((s) => s.getBookByHash);
@@ -567,7 +572,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
   }, [progress, pushProgress, grimmlink.strategy, syncState]);
 
   useEffect(() => {
-    if (!client || !store || !grimmlink.syncMetadata || !linkResolver) {
+    if (!client || !store || !grimmlink.syncMetadata || !linkResolver || !metadataReady) {
       ratingPullKey.current = null;
       return;
     }
@@ -600,7 +605,16 @@ export const useGrimmLinkSync = (bookKey: string) => {
         console.warn('[GrimmLink] rating pull failed', error);
         if (ratingPullKey.current === pullKey) ratingPullKey.current = null;
       });
-  }, [bookKey, client, getBookData, grimmlink, linkResolver, loadCapabilities, store]);
+  }, [
+    bookKey,
+    client,
+    getBookData,
+    grimmlink,
+    linkResolver,
+    loadCapabilities,
+    metadataReady,
+    store,
+  ]);
 
   useEffect(() => {
     if (
@@ -608,6 +622,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
       !store ||
       !grimmlink.syncReadStatus ||
       !linkResolver ||
+      !metadataReady ||
       grimmlink.strategy === 'send'
     ) {
       statusPullKey.current = null;
@@ -665,6 +680,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     grimmlink,
     linkResolver,
     loadCapabilities,
+    metadataReady,
     store,
     updateLibraryBook,
   ]);
@@ -676,12 +692,13 @@ export const useGrimmLinkSync = (bookKey: string) => {
       !replayScheduler ||
       !grimmlink.syncMetadata ||
       !linkResolver ||
+      !metadataReady ||
       metadataPulled.current
     )
       return;
     const data = getBookData(bookKey);
     const book = data?.book;
-    if (!book) return;
+    if (!book || !data?.config) return;
     metadataPulled.current = true;
     void loadCapabilities()
       .then(async (capabilities) => {
@@ -690,7 +707,6 @@ export const useGrimmLinkSync = (bookKey: string) => {
           device: grimmlink.deviceName,
           deviceId: grimmlink.deviceId,
         });
-        const notes = data?.config?.booknotes ?? [];
         const link = await linkResolver.resolveLink(book);
         if (!link) {
           metadataPulled.current = false;
@@ -699,11 +715,16 @@ export const useGrimmLinkSync = (bookKey: string) => {
         // Push local notes first. Pulling first can immediately echo notes that
         // were just mapped from Grimmory back as new local dedupe keys.
         if (grimmlink.strategy !== 'receive') await queueMetadata();
+        const notes = getBookData(bookKey)?.config?.booknotes ?? [];
         await metadata.pull(
           link.bookHash,
           notes,
           async (merged) => {
-            const updated = updateBooknotes(bookKey, merged, 'remote');
+            // Other syncs and local edits can finish while the network request
+            // is in flight. Merge against the live notes, not the snapshot taken
+            // at the start of the pull.
+            const current = getBookData(bookKey)?.config?.booknotes ?? [];
+            const updated = updateBooknotes(bookKey, mergeNotes(current, merged), 'remote');
             if (updated) await saveConfig(envConfig, bookKey, updated, settings);
           },
           (note) => {
@@ -724,6 +745,7 @@ export const useGrimmLinkSync = (bookKey: string) => {
     grimmlink,
     loadCapabilities,
     linkResolver,
+    metadataReady,
     queueMetadata,
     replayScheduler,
     saveConfig,

@@ -58,6 +58,118 @@ const renderItem: React.ComponentProps<typeof BookshelfStream>['renderItem'] = (
   </button>
 );
 describe('mixed bookshelf stream in Chromium', () => {
+  it('keeps the select-mode action bar clear on a centered page', async () => {
+    await page.viewport(390, 800);
+    const { container } = render(
+      <div style={{ width: 390, height: 650 }}>
+        <BookshelfStream
+          pageNavigation
+          fixedPageNavigation
+          hidePageButtons
+          footerHeight={100}
+          sections={[{ ...section('books', 'grid', 3), hideHeading: true }]}
+          autoColumns={false}
+          fixedColumns={1}
+          renderItem={renderItem}
+        />
+      </div>,
+    );
+    await waitFor(() => expect(container.querySelectorAll('[data-book]')).toHaveLength(1));
+    const bounds = container
+      .querySelector<HTMLElement>('[data-virtuoso-scroller]')!
+      .getBoundingClientRect();
+    const card = container.querySelector<HTMLElement>('[data-book]')!.getBoundingClientRect();
+    const topSpace = card.top - bounds.top;
+    const bottomSpace = bounds.bottom - 66 - card.bottom;
+    expect(Math.abs(topSpace - bottomSpace)).toBeLessThan(3);
+  });
+  for (const columns of [1, 2, 3])
+    it(`keeps real ${columns}-column book cards within the phone viewport`, async () => {
+      await page.viewport(390, 800);
+      const noop = () => {};
+      const transfer = async () => true;
+      const { container } = render(
+        <div style={{ width: 390, height: 600 }}>
+          <BookshelfStream
+            pageNavigation
+            fixedPageNavigation
+            hidePageButtons
+            sections={[{ ...section('books', 'grid', 9), hideHeading: true }]}
+            autoColumns={false}
+            fixedColumns={columns}
+            renderItem={(item, mode) => (
+              <BookshelfItem
+                item={item}
+                mode={mode}
+                coverFit='crop'
+                isSelectMode={false}
+                itemSelected={false}
+                transferProgress={null}
+                setLoading={noop}
+                toggleSelection={noop}
+                handleGroupBooks={noop}
+                handleBookDownload={transfer}
+                handleBookUpload={transfer}
+                handleBookDelete={transfer}
+                handleSetSelectMode={noop}
+                handleShowDetailsBook={noop}
+                handleLibraryNavigation={noop}
+                handleUpdateReadingStatus={noop}
+                showTimeRemaining={false}
+              />
+            )}
+          />
+        </div>,
+      );
+      await waitFor(() =>
+        expect(container.querySelectorAll('.book-item')).toHaveLength(
+          columns === 1 ? 1 : columns * 2,
+        ),
+      );
+      const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller]')!;
+      const cards = [...container.querySelectorAll<HTMLElement>('.book-item')];
+      const viewport = scroller.getBoundingClientRect();
+      expect(cards[0]!.getBoundingClientRect().top).toBeGreaterThanOrEqual(viewport.top);
+      expect(cards[cards.length - 1]!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        viewport.bottom,
+      );
+    });
+  for (const columns of [1, 2, 3]) {
+    it(`centers complete Simple UI pages with ${columns} columns`, async () => {
+      await page.viewport(390, 800);
+      const { container } = render(
+        <div style={{ width: 390, height: 650 }}>
+          <BookshelfStream
+            pageNavigation
+            fixedPageNavigation
+            hidePageButtons
+            sections={[{ ...section('books', 'grid', 9), hideHeading: true }]}
+            autoColumns={false}
+            fixedColumns={columns}
+            renderItem={(item) => (
+              <div
+                data-book={'hash' in item ? item.hash : item.id}
+                style={{ width: '100%', aspectRatio: '28 / 41' }}
+              />
+            )}
+          />
+        </div>,
+      );
+      await waitFor(() =>
+        expect(container.querySelectorAll('[data-book]').length).toBe(
+          columns === 1 ? 1 : columns * 2,
+        ),
+      );
+      const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller]')!;
+      const cards = [...container.querySelectorAll<HTMLElement>('[data-book]')];
+      const bounds = scroller.getBoundingClientRect();
+      const top = cards[0]!.getBoundingClientRect().top;
+      const bottom = cards[cards.length - 1]!.getBoundingClientRect().bottom;
+      expect(top).toBeGreaterThan(bounds.top);
+      expect(bottom).toBeLessThanOrEqual(bounds.bottom);
+      expect(Math.abs(top - bounds.top - (bounds.bottom - bottom))).toBeLessThan(3);
+    });
+  }
   it('hides native scrollbars and keeps shelf width stable through overlay initialization', async () => {
     const { container } = render(
       <div style={{ width: 900, height: 600 }}>

@@ -51,9 +51,7 @@ import { getLocalBookFilename } from '@/utils/book';
 import { MIMETYPES, EXTS } from '@/libs/document';
 import { makeSafeFilename } from '@/utils/misc';
 import { isTauriAppPlatform } from '@/services/environment';
-import { GrimmLinkClient } from '@/services/grimmlink/GrimmLinkClient';
-import { GrimmLinkSyncStore } from '@/services/grimmlink/GrimmLinkSyncStore';
-import { queueExplicitGrimmLinkReadStatus } from '@/services/grimmlink/readStatus';
+import { useGrimmLinkLibraryReadStatus } from '@/hooks/useGrimmLinkLibraryReadStatus';
 import { isLocalSendEnabled } from '@/services/localsend/devicePrefs';
 import { splitLibraryOpenIds } from '@/utils/audiobook';
 
@@ -71,6 +69,8 @@ import TaggingModal from './TaggingModal';
 import SetStatusAlert from './SetStatusAlert';
 import { useOpenBook } from '../hooks/useOpenBook';
 import LibrarySearchResults from './LibrarySearchResults';
+import useSimpleUIMode from '@/components/simpleui/useSimpleUIMode';
+import useSimpleUILibraryScroll from '@/components/simpleui/useSimpleUILibraryScroll';
 
 export interface ContentSearchRequest {
   query: string;
@@ -131,7 +131,10 @@ const Bookshelf: React.FC<BookshelfProps> = ({
   const searchParams = useSearchParams();
   const { envConfig, appService } = useEnv();
   const { settings } = useSettingsStore();
+  const queueGrimmLinkReadStatuses = useGrimmLinkLibraryReadStatus();
   const { safeAreaInsets } = useThemeStore();
+  const { enabled: simpleUIEnabled } = useSimpleUIMode();
+  const { enabled: simpleUILibraryScroll } = useSimpleUILibraryScroll();
 
   const groupId = searchParams?.get('group') || '';
   const shelfId = searchParams?.get('shelf') || '';
@@ -739,33 +742,6 @@ const Bookshelf: React.FC<BookshelfProps> = ({
     }
   };
 
-  const queueGrimmLinkReadStatuses = useCallback(
-    async (books: Book[], status: ReadingStatus | undefined) => {
-      const config = settings.grimmlink;
-      if (
-        !appService ||
-        !config.enabled ||
-        !config.syncReadStatus ||
-        !config.serverUrl ||
-        !config.userkey
-      )
-        return;
-      const connectionId = `${config.serverUrl}\u0000${config.username}`;
-      const store = new GrimmLinkSyncStore(appService, connectionId);
-      const client = new GrimmLinkClient(config);
-      for (const book of books) {
-        try {
-          await queueExplicitGrimmLinkReadStatus(book, status, config, store, client);
-        } catch (error) {
-          // The local library update already succeeded. A later explicit change
-          // retries normally; do not let an unavailable server interrupt it.
-          console.warn('[GrimmLink] failed to queue reading status', error);
-        }
-      }
-    },
-    [appService, settings.grimmlink],
-  );
-
   const updateBooksStatus = async (status: ReadingStatus | undefined) => {
     const selectedIds = getSelectedBooks();
     const booksToUpdate: Book[] = [];
@@ -1099,7 +1075,10 @@ const Bookshelf: React.FC<BookshelfProps> = ({
         <div className='min-h-0 flex-1'>
           <BookshelfStream
             scrollKey={searchParams?.toString() ?? ''}
-            pageNavigation={!!settings.globalViewSettings?.isEink}
+            pageNavigation={
+              simpleUIEnabled ? !simpleUILibraryScroll : !!settings.globalViewSettings?.isEink
+            }
+            fixedPageNavigation={simpleUIEnabled && !simpleUILibraryScroll}
             hidePageButtons={settings.hideBookshelfPageButtons}
             navigationBottomInset={
               selectModeActionsHeight ||

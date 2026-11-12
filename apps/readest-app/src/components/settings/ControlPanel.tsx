@@ -381,7 +381,7 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   }, [isColorEink]);
 
   useEffect(() => {
-    if (einkOptimization === settings.einkOptimization) return;
+    if (einkOptimization === (settings.einkOptimization ?? 'auto')) return;
     saveSysSettings(envConfig, 'einkOptimization', einkOptimization);
     // The root attribute is owned by Providers; reloading the setting here
     // still gives the current reader an immediate response.

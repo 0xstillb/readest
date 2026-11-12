@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  forwardRef,
   type ReactNode,
 } from 'react';
 import {
@@ -23,6 +24,7 @@ import type { BookshelfDefinition } from '@/types/bookshelf';
 import { bookshelfName } from '@/services/bookshelves/definitions';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useLibraryPagination } from '../hooks/useLibraryPagination';
+import { useSimpleUILibraryPagination } from '@/components/simpleui/useSimpleUILibraryPagination';
 
 export interface ShelfSection {
   definition: BookshelfDefinition;
@@ -47,6 +49,8 @@ interface StreamProps {
   pageNavigation?: boolean;
   /** Drop the e-ink Previous/Next buttons; keys still page. */
   hidePageButtons?: boolean;
+  /** Simple UI turns two content rows at a time instead of scrolling the full list. */
+  fixedPageNavigation?: boolean;
   navigationBottomInset?: number;
   /** Identifies the shelf view; its scroll state survives remounts (open a book, come back). */
   scrollKey?: string;
@@ -250,7 +254,31 @@ interface StreamContext {
   height: number;
   action?: ReactNode;
   scale: number;
+  fixedPage: boolean;
 }
+const StreamList = forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & { context?: StreamContext }
+>(({ context, style, ...props }, ref) => (
+  <div
+    ref={ref}
+    {...props}
+    style={
+      context?.fixedPage
+        ? {
+            ...style,
+            // Keep space for the select-mode action bar, but do not center
+            // above the normal scrolling-only footer padding.
+            minHeight: `calc(100% - ${Math.max(0, context.height - 34)}px)`,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+          }
+        : style
+    }
+  />
+));
+StreamList.displayName = 'StreamList';
 const StreamItem = ({
   children,
   context,
@@ -267,13 +295,18 @@ const StreamItem = ({
   </div>
 );
 const StreamFooter = ({ context }: { context?: StreamContext }) => (
-  <div style={{ paddingBottom: context?.height || 34 }}>
+  <div
+    style={{
+      paddingBottom: context?.fixedPage ? Math.max(0, context.height - 34) : context?.height || 34,
+    }}
+  >
     {/* Rides the pull-to-refresh rubber band with the shelf rows. */}
     {context?.action && <div className='transform-wrapper'>{context.action}</div>}
   </div>
 );
 const COMPONENTS: Components<StreamRow, StreamContext> = {
   Item: StreamItem,
+  List: StreamList,
   Footer: StreamFooter,
 };
 export default function BookshelfStream({
@@ -288,6 +321,7 @@ export default function BookshelfStream({
   pageDurations,
   scale = 1,
   pageNavigation = false,
+  fixedPageNavigation = false,
   hidePageButtons = false,
   navigationBottomInset = 0,
   scrollKey,
@@ -307,7 +341,6 @@ export default function BookshelfStream({
   );
   const [start, setStart] = useState(true);
   const [end, setEnd] = useState(true);
-  const turnPage = useLibraryPagination(scroller, pageNavigation);
   useEffect(() => {
     const element = root.current;
     if (!element) return;
@@ -328,6 +361,24 @@ export default function BookshelfStream({
     [sections, columns, includeImport],
   );
   const rowKeys = useMemo(() => rows.map((row) => row.key).join('\n'), [rows]);
+  const {
+    pages,
+    currentPageIndex,
+    visibleRows,
+    turnPage: turnFixedPage,
+  } = useSimpleUILibraryPagination(rows, rowKeys, fixedPageNavigation, columns === 1 ? 1 : 2);
+  const turnPage = useLibraryPagination(
+    scroller,
+    pageNavigation,
+    fixedPageNavigation ? turnFixedPage : undefined,
+  );
+  useEffect(() => {
+    if (!scroller || !fixedPageNavigation) return;
+    scroller.style.overflowY = 'hidden';
+    return () => {
+      scroller.style.overflowY = '';
+    };
+  }, [fixedPageNavigation, scroller]);
   const [restoreState] = useState(() => {
     const saved = scrollKey === undefined ? undefined : savedScrollStates.get(scrollKey);
     return saved?.rowKeys === rowKeys ? saved.state : undefined;
@@ -353,8 +404,13 @@ export default function BookshelfStream({
   const [renderedRows, setRenderedRows] = useState<StreamRow[] | null>(null);
   const showAction = renderedRows === rows || rows.length === 0;
   const context = useMemo(
-    () => ({ height: footerHeight, action: showAction ? importAction : undefined, scale }),
-    [footerHeight, importAction, showAction, scale],
+    () => ({
+      height: footerHeight,
+      action: showAction ? importAction : undefined,
+      scale,
+      fixedPage: fixedPageNavigation,
+    }),
+    [footerHeight, importAction, showAction, scale, fixedPageNavigation],
   );
   return (
     <LibraryPageDurationsContext.Provider value={pageDurations || {}}>
@@ -367,9 +423,10 @@ export default function BookshelfStream({
         <div className='min-h-0 flex-1' data-overlayscrollbars-initialize=''>
           <Virtuoso
             ref={virtuoso}
+            key={fixedPageNavigation ? `library-page-${currentPageIndex}` : 'library-stream'}
             restoreStateFrom={restoreState}
             style={scale !== 1 ? { overflowX: 'hidden' } : undefined}
-            data={rows}
+            data={visibleRows}
             overscan={pageNavigation ? Math.max(400, height) : 400}
             defaultItemHeight={200}
             context={context}
@@ -422,6 +479,16 @@ export default function BookshelfStream({
                     />
                   </div>
                 );
+              const pagedGrid = fixedPageNavigation && definition.layout === 'grid';
+              // Leave room for the title, status and page footer; covers keep
+              // their normal aspect ratio and never make the next row peek in.
+              const itemStyle =
+                pagedGrid && height
+                  ? {
+                      maxWidth: `${Math.max(64, (((height - footerHeight) / scale / (columns === 1 ? 1 : 2) - 64) * 28) / 41)}px`,
+                    }
+                  : undefined;
+              const itemClass = clsx('min-w-0', pagedGrid && 'mx-auto w-full');
               return (
                 <HideBookCoversContext.Provider value={definition.hideCovers}>
                   <div
@@ -436,7 +503,11 @@ export default function BookshelfStream({
                     }}
                   >
                     {row.items!.map((item) => (
-                      <div key={`${definition.id}:${itemKey(item)}`} className='min-w-0'>
+                      <div
+                        key={`${definition.id}:${itemKey(item)}`}
+                        className={itemClass}
+                        style={itemStyle}
+                      >
                         {renderItem(
                           item,
                           definition.layout === 'list' ? 'list' : 'grid',
@@ -444,7 +515,11 @@ export default function BookshelfStream({
                         )}
                       </div>
                     ))}
-                    {row.hasImport && <div className='min-w-0'>{importTile}</div>}
+                    {row.hasImport && (
+                      <div className={itemClass} style={itemStyle}>
+                        {importTile}
+                      </div>
+                    )}
                   </div>
                 </HideBookCoversContext.Provider>
               );
@@ -462,7 +537,7 @@ export default function BookshelfStream({
                 type='button'
                 className='btn btn-ghost eink-bordered min-h-11'
                 aria-label={_('Previous page')}
-                disabled={start}
+                disabled={fixedPageNavigation ? currentPageIndex === 0 : start}
                 onClick={() => turnPage(-1)}
               >
                 {_('Previous')}
@@ -471,7 +546,7 @@ export default function BookshelfStream({
                 type='button'
                 className='btn btn-ghost eink-bordered min-h-11'
                 aria-label={_('Next page')}
-                disabled={end}
+                disabled={fixedPageNavigation ? currentPageIndex >= pages.length - 1 : end}
                 onClick={() => turnPage(1)}
               >
                 {_('Next')}

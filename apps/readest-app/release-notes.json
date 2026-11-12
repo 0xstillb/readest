@@ -1,5 +1,14 @@
 {
   "releases": {
+    "0.12.21": {
+      "date": "2026-11-12",
+      "notes": [
+        "Simple UI: Library paging follows the selected grid, keeps complete rows visible, and centers books on the page; continuous scrolling remains optional",
+        "GrimmLink: Pull bookmarks on first open and preserve concurrent local note changes",
+        "GrimmLink: Align integration settings and improve narrow-screen spacing",
+        "Documentation: Add English and Thai setup instructions for this fork"
+      ]
+    },
     "0.12.20": {
       "date": "2026-11-06",
       "notes": [
