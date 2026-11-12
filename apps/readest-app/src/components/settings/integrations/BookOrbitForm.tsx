@@ -230,7 +230,7 @@ const BookOrbitForm: React.FC<BookOrbitFormProps> = ({ onBack }) => {
 
       {isConfigured ? (
         <div className='space-y-5'>
-          <BoxedList insetRows={false}>
+          <BoxedList>
             <SettingsSwitchRow
               label={_('Sync Server Connected')}
               checked={settings.bookorbit.enabled}

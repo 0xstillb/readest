@@ -39,7 +39,7 @@ interface SettingsRowProps {
 
 /**
  * Canonical boxed-list row at `min-h-14 items-center justify-between gap-3
- * px-4`. Every row in a `<BoxedList>` should use this (or one of its
+ * pe-4`. Every row in a `<BoxedList>` should use this (or one of its
  * specialized variants like `<SettingsSwitchRow>`) so the chassis stays
  * uniform across the app. See DESIGN.md §5.
  */
@@ -58,7 +58,7 @@ const SettingsRow: React.FC<SettingsRowProps> = ({
     <Wrapper
       data-setting-id={dataSettingId}
       className={clsx(
-        'flex min-h-14 justify-between gap-3 px-4',
+        'flex min-h-14 justify-between gap-3 pe-4',
         align === 'start' ? 'items-start py-3.5' : 'items-center',
         disabled && 'cursor-not-allowed opacity-50',
         asLabel && !disabled && 'cursor-pointer',
