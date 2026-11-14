@@ -1,5 +1,11 @@
 {
   "releases": {
+    "0.12.23": {
+      "date": "2026-11-14",
+      "notes": [
+        "Android: Add an experimental option to display the current book cover when the reader goes to sleep; behavior depends on device firmware"
+      ]
+    },
     "0.12.22": {
       "date": "2026-11-14",
       "notes": ["Android: Fix update checks and APK downloads from the GrimmLink release feed"]

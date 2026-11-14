@@ -56,6 +56,7 @@ import HardcoverLinkDialog from './hardcover/HardcoverLinkDialog';
 import PageboundLinkDialog from './pagebound/PageboundLinkDialog';
 import ModalPortal from '@/components/ModalPortal';
 import NotebookTransitionAlert from './notebook/NotebookTransitionAlert';
+import SleepCover from './SleepCover';
 
 /**
  * How long the close path waits for the Notion flush before giving up on it.
@@ -475,6 +476,9 @@ const ReaderContent: React.FC<{ ids?: string; settings: SystemSettings }> = ({ i
 
   return (
     <div className='reader-content full-height flex'>
+      {isAndroidApp && settings.sleepCover && (
+        <SleepCover src={bookData.book.metadata?.coverImageUrl || bookData.book.coverImageUrl} />
+      )}
       <SideBar />
       <BooksGrid
         bookKeys={bookKeys}

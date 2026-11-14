@@ -542,6 +542,7 @@ export interface SystemSettings {
   autoCheckUpdates: boolean;
   updateChannel: 'stable' | 'nightly';
   screenWakeLock: boolean;
+  sleepCover?: boolean;
   autohideCursor: boolean;
   screenBrightness: number;
   autoScreenBrightness: boolean;

@@ -94,6 +94,7 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     settings.swipeBrightnessGesture,
   );
   const [screenWakeLock, setScreenWakeLock] = useState(settings.screenWakeLock);
+  const [sleepCover, setSleepCover] = useState(settings.sleepCover ?? false);
   const [autohideCursor, setAutohideCursor] = useState(settings.autohideCursor);
   const [gamepadEnabled, setGamepadEnabled] = useState(settings.gamepadEnabled);
   const [explorerThumbnails, setExplorerThumbnails] = useState(false);
@@ -424,6 +425,11 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     saveSysSettings(envConfig, 'screenWakeLock', screenWakeLock);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenWakeLock]);
+
+  useEffect(() => {
+    if (sleepCover === (settings.sleepCover ?? false)) return;
+    saveSysSettings(envConfig, 'sleepCover', sleepCover);
+  }, [sleepCover, envConfig, settings.sleepCover]);
 
   useEffect(() => {
     if (autohideCursor === settings.autohideCursor) return;
@@ -817,6 +823,14 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           onChange={() => setScreenWakeLock(!screenWakeLock)}
           data-setting-id='settings.control.screenWakeLock'
         />
+        {appService?.isAndroidApp && (
+          <SettingsSwitchRow
+            label={_('Show Book Cover on Sleep')}
+            description={_('Experimental; requires a device that captures the screen before sleep')}
+            checked={sleepCover}
+            onChange={() => setSleepCover(!sleepCover)}
+          />
+        )}
         {!appService?.isMobile && (
           <SettingsSwitchRow
             label={_('Auto-hide Cursor')}
