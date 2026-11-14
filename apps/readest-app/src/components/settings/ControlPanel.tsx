@@ -826,7 +826,9 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
         {appService?.isAndroidApp && (
           <SettingsSwitchRow
             label={_('Show Book Cover on Sleep')}
-            description={_('Experimental; requires a device that captures the screen before sleep')}
+            description={_(
+              'On iReader, select the Readest cover in the device Custom screensaver once',
+            )}
             checked={sleepCover}
             onChange={() => setSleepCover(!sleepCover)}
           />

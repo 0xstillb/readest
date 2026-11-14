@@ -511,6 +511,15 @@ class NativeBridgePlugin(private val activity: Activity): Plugin(activity) {
                         ?: throw IllegalArgumentException("Unsupported cover image")
                 }
                 clearSleepCover()
+                if (bitmap != null && IReaderSleepCover.available()) {
+                    val status = try {
+                        withContext(Dispatchers.IO) { IReaderSleepCover.prepare(activity, bitmap) }
+                    } finally {
+                        bitmap.recycle()
+                    }
+                    invoke.resolve(JSObject().apply { put("status", status) })
+                    return@launch
+                }
                 if (bitmap != null) {
                     val cover = ImageView(activity).apply {
                         setBackgroundColor(Color.WHITE)
@@ -524,7 +533,7 @@ class NativeBridgePlugin(private val activity: Activity): Plugin(activity) {
                     ))
                     sleepCoverView = cover
                 }
-                invoke.resolve()
+                invoke.resolve(JSObject().apply { put("status", if (bitmap == null) "cleared" else "ready") })
             } catch (error: Exception) {
                 if (isActive) {
                     clearSleepCover()

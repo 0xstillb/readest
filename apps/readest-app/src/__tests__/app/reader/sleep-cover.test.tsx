@@ -4,16 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   convert: vi.fn<(src: string) => Promise<string>>(),
-  setCover: vi.fn<(src: string | null) => Promise<void>>(),
+  setCover: vi.fn<(src: string | null) => Promise<{ status: string }>>(),
+  toast: vi.fn(),
 }));
 vi.mock('@/libs/document', () => ({ convertBlobUrlToDataUrl: mocks.convert }));
 vi.mock('@/utils/bridge', () => ({ setSleepCover: mocks.setCover }));
+vi.mock('@/utils/event', () => ({ eventDispatcher: { dispatch: mocks.toast } }));
+vi.mock('@/hooks/useTranslation', () => ({ useTranslation: () => (value: string) => value }));
 import SleepCover from '@/app/reader/components/SleepCover';
 
 beforeEach(() => {
   mocks.convert.mockReset();
   mocks.setCover.mockReset();
-  mocks.setCover.mockResolvedValue(undefined);
+  mocks.setCover.mockResolvedValue({ status: 'ready' });
+  mocks.toast.mockReset();
 });
 afterEach(async () => {
   cleanup();
@@ -55,5 +59,32 @@ describe('SleepCover', () => {
     });
     await waitFor(() => expect(mocks.setCover).toHaveBeenLastCalledWith(null));
     expect(mocks.setCover).not.toHaveBeenCalledWith('data:image/png;base64,bGF0ZQ==');
+  });
+
+  it('explains how to select the cover on first setup', async () => {
+    mocks.convert.mockResolvedValue('data:image/png;base64,YQ==');
+    mocks.setCover.mockResolvedValue({ status: 'setup' });
+    render(<SleepCover src='cover.png' />);
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(
+        'toast',
+        expect.objectContaining({
+          message: expect.stringContaining('Screensaver'),
+        }),
+      ),
+    );
+  });
+
+  it('reports when the cover cannot be prepared', async () => {
+    mocks.convert.mockRejectedValue(new Error('missing'));
+    render(<SleepCover src='cover.png' />);
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(
+        'toast',
+        expect.objectContaining({
+          type: 'error',
+        }),
+      ),
+    );
   });
 });

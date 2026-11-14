@@ -50,7 +50,7 @@ pub(crate) async fn save_image_to_gallery<R: Runtime>(
 pub(crate) async fn set_sleep_cover<R: Runtime>(
     app: AppHandle<R>,
     payload: SetSleepCoverRequest,
-) -> Result<()> {
+) -> Result<SetSleepCoverResponse> {
     app.native_bridge().set_sleep_cover(payload)
 }
 

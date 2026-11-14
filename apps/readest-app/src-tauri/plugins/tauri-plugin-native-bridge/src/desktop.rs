@@ -67,7 +67,10 @@ impl<R: Runtime> NativeBridge<R> {
         Err(crate::Error::UnsupportedPlatformError)
     }
 
-    pub fn set_sleep_cover(&self, _payload: SetSleepCoverRequest) -> crate::Result<()> {
+    pub fn set_sleep_cover(
+        &self,
+        _payload: SetSleepCoverRequest,
+    ) -> crate::Result<SetSleepCoverResponse> {
         Err(crate::Error::UnsupportedPlatformError)
     }
 

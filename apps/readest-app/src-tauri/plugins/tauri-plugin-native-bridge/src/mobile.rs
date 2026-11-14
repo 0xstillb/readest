@@ -58,7 +58,10 @@ impl<R: Runtime> NativeBridge<R> {
 }
 
 impl<R: Runtime> NativeBridge<R> {
-    pub fn set_sleep_cover(&self, payload: SetSleepCoverRequest) -> crate::Result<()> {
+    pub fn set_sleep_cover(
+        &self,
+        payload: SetSleepCoverRequest,
+    ) -> crate::Result<SetSleepCoverResponse> {
         #[cfg(target_os = "android")]
         {
             self.0

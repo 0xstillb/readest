@@ -73,6 +73,11 @@ pub struct SetSleepCoverRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct SetSleepCoverResponse {
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UseBackgroundAudioRequest {
     pub enabled: bool,

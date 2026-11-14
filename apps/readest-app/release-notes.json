@@ -1,5 +1,11 @@
 {
   "releases": {
+    "0.12.25": {
+      "date": "2026-11-14",
+      "notes": [
+        "Android: Prepare the current book cover for iReader Custom screensavers after one-time setup"
+      ]
+    },
     "0.12.24": {
       "date": "2026-11-14",
       "notes": [
