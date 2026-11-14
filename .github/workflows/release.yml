@@ -17,6 +17,7 @@ jobs:
       release_tag: ${{ steps.get-release.outputs.release_tag }}
       release_title: ${{ steps.get-release.outputs.release_title }}
       release_url: ${{ steps.get-release.outputs.release_url }}
+      release_prerelease: ${{ steps.get-release.outputs.release_prerelease }}
       release_note: ${{ steps.get-release-notes.outputs.release_note }}
       release_version: ${{ steps.get-release-notes.outputs.release_version }}
 
@@ -32,14 +33,15 @@ jobs:
         with:
           retries: 3
           script: |
-            const { data } = await github.rest.repos.getLatestRelease({
+            const data = context.payload.release ?? (await github.rest.repos.getLatestRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-            })
+            })).data;
             core.setOutput('release_id', data.id);
             core.setOutput('release_tag', data.tag_name);
             core.setOutput('release_title', data.name);
             core.setOutput('release_url', data.html_url);
+            core.setOutput('release_prerelease', data.prerelease);
       - name: get release notes
         id: get-release-notes
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -69,6 +71,7 @@ jobs:
           release_id: ${{ needs.get-release.outputs.release_id }}
           release_tag: ${{ needs.get-release.outputs.release_tag }}
           release_note: ${{ needs.get-release.outputs.release_note }}
+          release_prerelease: ${{ needs.get-release.outputs.release_prerelease }}
         with:
           retries: 3
           script: |
@@ -88,7 +91,7 @@ jobs:
               release_id: process.env.release_id,
               body: body,
               draft: false,
-              prerelease: false
+              prerelease: process.env.release_prerelease === 'true'
             })
   build-koreader-plugin:
     needs: get-release
