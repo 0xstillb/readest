@@ -33,7 +33,8 @@ export default function SimpleUIHome() {
   const { library } = useLibraryStore();
   const { libraryLoaded } = useLibrary();
   const { isSettingsDialogOpen, settings } = useSettingsStore();
-  const { safeAreaInsets } = useThemeStore();
+  const { safeAreaInsets, statusBarHeight, systemUIVisible } = useThemeStore();
+  const androidTopInset = appService?.isAndroidApp && appService.hasSafeAreaInset;
   const { display } = useSimpleUIHomeDisplay();
   const [now, setNow] = useState(() => new Date());
 
@@ -68,9 +69,18 @@ export default function SimpleUIHome() {
     <main
       className='simpleui-home full-height flex flex-col overflow-hidden bg-base-100 text-base-content'
       data-home-display={display}
-      style={{ '--simpleui-safe-bottom': `${safeAreaInsets?.bottom ?? 0}px` } as CSSProperties}
+      style={
+        {
+          '--simpleui-safe-bottom': `${safeAreaInsets?.bottom ?? 0}px`,
+          ...(androidTopInset && {
+            paddingTop: Math.max(safeAreaInsets?.top ?? 0, systemUIVisible ? statusBarHeight : 0),
+          }),
+        } as CSSProperties
+      }
     >
-      <div className='simpleui-home-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pt-[max(0.5rem,env(safe-area-inset-top))] sm:px-8'>
+      <div
+        className={`simpleui-home-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 sm:px-8 ${androidTopInset ? 'pt-2' : 'pt-[max(0.5rem,env(safe-area-inset-top))]'}`}
+      >
         <header
           ref={dragRegionRef}
           className='flex w-full shrink-0 flex-col items-center py-1 text-center'
