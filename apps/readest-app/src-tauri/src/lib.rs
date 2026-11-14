@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "linux", allow(unused_crate_dependencies))]
+
 #[cfg(target_os = "macos")]
 #[macro_use]
 extern crate cocoa;
