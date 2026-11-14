@@ -18,12 +18,15 @@ import android.os.Environment
 import android.provider.Settings
 import android.provider.DocumentsContract
 import android.view.View
+import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.KeyEvent
 import android.view.RoundedCorner
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.WindowInsetsController
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.pdf.PdfRenderer
@@ -39,6 +42,7 @@ import android.util.Base64
 import android.view.PixelCopy
 import android.view.Gravity
 import android.widget.ImageView
+import android.widget.FrameLayout
 import android.widget.PopupWindow
 import android.graphics.drawable.ColorDrawable
 import android.webkit.WebView
@@ -100,6 +104,11 @@ class SaveImageToGalleryRequestArgs {
     var fileName: String? = null
     var mimeType: String? = null
     var albumName: String? = null
+}
+
+@InvokeArg
+class SetSleepCoverArgs {
+    var dataUrl: String? = null
 }
 
 @InvokeArg
@@ -305,6 +314,10 @@ class NativeBridgePlugin(private val activity: Activity): Plugin(activity) {
     private val pluginScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var pageCoverToken = 0
     private val pageCovers = mutableMapOf<Int, Pair<PopupWindow, Bitmap>>()
+    private var sleepCoverView: ImageView? = null
+    private val sleepCoverFocusListener = ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
+        sleepCoverView?.visibility = if (hasFocus) View.INVISIBLE else View.VISIBLE
+    }
 
     // Held while the LocalSend service runs so multicast discovery
     // announcements are delivered; most Android devices filter multicast
@@ -365,6 +378,9 @@ class NativeBridgePlugin(private val activity: Activity): Plugin(activity) {
     }
 
     override fun onDestroy() {
+        val observer = activity.window.decorView.viewTreeObserver
+        if (observer.isAlive) observer.removeOnWindowFocusChangeListener(sleepCoverFocusListener)
+        clearSleepCover()
         nativePaper?.dispose(); nativePaper = null
         pageCovers.values.forEach { (popup, bitmap) ->
             popup.dismiss()
@@ -422,6 +438,7 @@ class NativeBridgePlugin(private val activity: Activity): Plugin(activity) {
         webViewRef = webView
         webView.setOnTouchListener { _, event -> nativePaper?.touch(event); false }
         super.load(webView)
+        activity.window.decorView.viewTreeObserver.addOnWindowFocusChangeListener(sleepCoverFocusListener)
         inputManager = activity.getSystemService(Context.INPUT_SERVICE) as? InputManager
         gamepadConnected = hasConnectedGamepad()
         inputManager?.registerInputDeviceListener(gamepadInputListener, null)
@@ -440,7 +457,10 @@ class NativeBridgePlugin(private val activity: Activity): Plugin(activity) {
     // Tauri declares Plugin.onResume but never registers the observer that calls it.
     private val lifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(resumed: Activity) {
-            if (resumed === activity) releaseBrightnessOverride()
+            if (resumed === activity) {
+                sleepCoverView?.visibility = View.INVISIBLE
+                releaseBrightnessOverride()
+            }
         }
 
         override fun onActivityCreated(a: Activity, b: Bundle?) {}
@@ -457,6 +477,61 @@ class NativeBridgePlugin(private val activity: Activity): Plugin(activity) {
         val layoutParams = activity.window.attributes
         layoutParams.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         activity.window.attributes = layoutParams
+    }
+
+    private fun clearSleepCover() {
+        sleepCoverView?.let { view ->
+            view.setImageDrawable(null)
+            (view.parent as? ViewGroup)?.removeView(view)
+        }
+        sleepCoverView = null
+    }
+
+    @Command
+    fun set_sleep_cover(invoke: Invoke) {
+        val dataUrl = invoke.parseArgs(SetSleepCoverArgs::class.java).dataUrl
+        pluginScope.launch {
+            try {
+                val bitmap = if (dataUrl == null) null else withContext(Dispatchers.Default) {
+                    require(dataUrl.startsWith("data:image/") && dataUrl.contains(";base64,")) {
+                        "Invalid cover image data"
+                    }
+                    val bytes = Base64.decode(dataUrl.substringAfter(";base64,"), Base64.DEFAULT)
+                    require(bytes.size <= 12 * 1024 * 1024) { "Cover image is too large" }
+                    val dimensions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, dimensions)
+                    val screen = activity.resources.displayMetrics
+                    val maxEdge = maxOf(screen.widthPixels, screen.heightPixels).coerceAtLeast(1)
+                    var sample = 1
+                    while (maxOf(dimensions.outWidth, dimensions.outHeight) / sample > maxEdge * 2) {
+                        sample *= 2
+                    }
+                    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                        ?: throw IllegalArgumentException("Unsupported cover image")
+                }
+                clearSleepCover()
+                if (bitmap != null) {
+                    val cover = ImageView(activity).apply {
+                        setBackgroundColor(Color.WHITE)
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        setImageBitmap(bitmap)
+                        visibility = if (activity.hasWindowFocus()) View.INVISIBLE else View.VISIBLE
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    }
+                    activity.addContentView(cover, FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                    ))
+                    sleepCoverView = cover
+                }
+                invoke.resolve()
+            } catch (error: Exception) {
+                if (isActive) {
+                    clearSleepCover()
+                    invoke.reject("Unable to prepare sleep cover: ${error.message}")
+                }
+            }
+        }
     }
 
     private fun handleIntent(intent: Intent?) {

@@ -1,35 +1,59 @@
 // @vitest-environment happy-dom
-import { cleanup, render } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  convert: vi.fn<(src: string) => Promise<string>>(),
+  setCover: vi.fn<(src: string | null) => Promise<void>>(),
+}));
+vi.mock('@/libs/document', () => ({ convertBlobUrlToDataUrl: mocks.convert }));
+vi.mock('@/utils/bridge', () => ({ setSleepCover: mocks.setCover }));
 import SleepCover from '@/app/reader/components/SleepCover';
 
-afterEach(() => {
+beforeEach(() => {
+  mocks.convert.mockReset();
+  mocks.setCover.mockReset();
+  mocks.setCover.mockResolvedValue(undefined);
+});
+afterEach(async () => {
   cleanup();
-  vi.restoreAllMocks();
+  await act(async () => {});
 });
 
 describe('SleepCover', () => {
-  it('preloads the current cover and restores the reader on visibility', () => {
-    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
-    const { container, rerender } = render(<SleepCover src='cover-one.png' />);
-    const cover = container.firstElementChild as HTMLElement;
-    expect(cover.style.visibility).toBe('hidden');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('cover-one.png');
-
-    hidden.mockReturnValue(true);
-    document.dispatchEvent(new Event('visibilitychange'));
-    expect(cover.style.visibility).toBe('visible');
-
-    hidden.mockReturnValue(false);
-    document.dispatchEvent(new Event('visibilitychange'));
-    expect(cover.style.visibility).toBe('hidden');
-
-    rerender(<SleepCover src='cover-two.png' />);
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('cover-two.png');
+  it('prepares the current image for Android and clears it on close', async () => {
+    mocks.convert.mockResolvedValue('data:image/png;base64,YQ==');
+    const { unmount } = render(<SleepCover src='cover.png' />);
+    await waitFor(() => expect(mocks.setCover).toHaveBeenCalledWith('data:image/png;base64,YQ=='));
+    expect(mocks.convert).toHaveBeenCalledWith('cover.png');
+    unmount();
+    await waitFor(() => expect(mocks.setCover).toHaveBeenLastCalledWith(null));
   });
 
-  it('does not show an empty overlay without a cover', () => {
-    const { container } = render(<SleepCover />);
-    expect(container.firstElementChild).toBeNull();
+  it('tries the shelf thumbnail when the original images cannot be read', async () => {
+    mocks.convert.mockRejectedValueOnce(new Error('offline'));
+    mocks.convert.mockRejectedValueOnce(new Error('missing'));
+    mocks.convert.mockResolvedValueOnce('data:image/png;base64,dGh1bWI=');
+    render(<SleepCover src='remote' fallbackSrc='local' thumbnailSrc='thumbnail' />);
+    await waitFor(() =>
+      expect(mocks.setCover).toHaveBeenCalledWith('data:image/png;base64,dGh1bWI='),
+    );
+    expect(mocks.convert.mock.calls.map(([src]) => src)).toEqual(['remote', 'local', 'thumbnail']);
+  });
+
+  it('does not apply an image that finishes loading after the reader closes', async () => {
+    let finish!: (data: string) => void;
+    mocks.convert.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const { unmount } = render(<SleepCover src='slow.png' />);
+    unmount();
+    await act(async () => {
+      finish('data:image/png;base64,bGF0ZQ==');
+    });
+    await waitFor(() => expect(mocks.setCover).toHaveBeenLastCalledWith(null));
+    expect(mocks.setCover).not.toHaveBeenCalledWith('data:image/png;base64,bGF0ZQ==');
   });
 });

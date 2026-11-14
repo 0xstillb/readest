@@ -67,6 +67,10 @@ impl<R: Runtime> NativeBridge<R> {
         Err(crate::Error::UnsupportedPlatformError)
     }
 
+    pub fn set_sleep_cover(&self, _payload: SetSleepCoverRequest) -> crate::Result<()> {
+        Err(crate::Error::UnsupportedPlatformError)
+    }
+
     pub fn save_image_to_gallery(
         &self,
         _payload: SaveImageToGalleryRequest,

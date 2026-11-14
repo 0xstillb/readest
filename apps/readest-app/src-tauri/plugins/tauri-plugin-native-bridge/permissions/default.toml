@@ -5,6 +5,7 @@ permissions = [
   "allow-auth-with-custom-tab",
   "allow-copy-uri-to-path",
   "allow-save-image-to-gallery",
+  "allow-set-sleep-cover",
   "allow-use-background-audio",
   "allow-set-multicast-lock",
   "allow-install-package",

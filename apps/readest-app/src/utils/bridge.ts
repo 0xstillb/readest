@@ -162,6 +162,10 @@ export async function saveImageToGallery(
   });
 }
 
+export async function setSleepCover(dataUrl: string | null): Promise<void> {
+  await invoke('plugin:native-bridge|set_sleep_cover', { payload: { dataUrl } });
+}
+
 export async function invokeUseBackgroundAudio(request: UseBackgroundAudioRequest): Promise<void> {
   await invoke('plugin:native-bridge|use_background_audio', {
     payload: request,

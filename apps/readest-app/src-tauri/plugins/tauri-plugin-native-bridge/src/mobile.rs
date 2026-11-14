@@ -58,6 +58,20 @@ impl<R: Runtime> NativeBridge<R> {
 }
 
 impl<R: Runtime> NativeBridge<R> {
+    pub fn set_sleep_cover(&self, payload: SetSleepCoverRequest) -> crate::Result<()> {
+        #[cfg(target_os = "android")]
+        {
+            self.0
+                .run_mobile_plugin("set_sleep_cover", payload)
+                .map_err(Into::into)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = payload;
+            Err(crate::Error::UnsupportedPlatformError)
+        }
+    }
+
     pub fn save_image_to_gallery(
         &self,
         payload: SaveImageToGalleryRequest,

@@ -1,37 +1,45 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
+import { convertBlobUrlToDataUrl } from '@/libs/document';
+import { setSleepCover } from '@/utils/bridge';
 
-// Preload the image while the reader is visible. On some e-ink firmwares the
-// last composed frame becomes the sleep screen; timing is device dependent.
-const SleepCover: React.FC<{ src?: string | null }> = ({ src }) => {
-  const coverRef = useRef<HTMLDivElement>(null);
+// Serialize native calls so a slow previous update cannot restore a stale cover
+// after the reader closes or the user switches books.
+let nativeUpdate = Promise.resolve();
+const updateNativeCover = (dataUrl: string | null) => {
+  nativeUpdate = nativeUpdate.catch(() => undefined).then(() => setSleepCover(dataUrl));
+  return nativeUpdate;
+};
 
+const SleepCover: React.FC<{
+  src?: string | null;
+  fallbackSrc?: string | null;
+  thumbnailSrc?: string | null;
+}> = ({ src, fallbackSrc, thumbnailSrc }) => {
   useEffect(() => {
-    const update = () => {
-      if (coverRef.current) {
-        coverRef.current.style.visibility = document.hidden ? 'visible' : 'hidden';
+    let cancelled = false;
+    const prepare = async () => {
+      for (const candidate of [src, fallbackSrc, thumbnailSrc]) {
+        if (cancelled) return;
+        if (!candidate) continue;
+        try {
+          const dataUrl = await convertBlobUrlToDataUrl(candidate);
+          if (!cancelled) await updateNativeCover(dataUrl);
+          return;
+        } catch (error) {
+          console.info('Could not prepare sleep cover:', error);
+        }
       }
+      if (!cancelled) await updateNativeCover(null);
     };
-    document.addEventListener('visibilitychange', update);
-    return () => document.removeEventListener('visibilitychange', update);
-  }, []);
-
-  if (!src) return null;
-  return (
-    <div
-      ref={coverRef}
-      aria-hidden='true'
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 2147483647,
-        visibility: 'hidden',
-        pointerEvents: 'none',
-        background: 'white',
-      }}
-    >
-      <img src={src} alt='' style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-    </div>
-  );
+    void prepare().catch((error) => console.info('Could not update sleep cover:', error));
+    return () => {
+      cancelled = true;
+      void updateNativeCover(null).catch((error) =>
+        console.info('Could not clear sleep cover:', error),
+      );
+    };
+  }, [src, fallbackSrc, thumbnailSrc]);
+  return null;
 };
 
 export default SleepCover;

@@ -47,6 +47,14 @@ pub(crate) async fn save_image_to_gallery<R: Runtime>(
 }
 
 #[command]
+pub(crate) async fn set_sleep_cover<R: Runtime>(
+    app: AppHandle<R>,
+    payload: SetSleepCoverRequest,
+) -> Result<()> {
+    app.native_bridge().set_sleep_cover(payload)
+}
+
+#[command]
 pub(crate) async fn use_background_audio<R: Runtime>(
     app: AppHandle<R>,
     payload: UseBackgroundAudioRequest,

@@ -91,8 +91,11 @@ const ReaderContent: React.FC<{ ids?: string; settings: SystemSettings }> = ({ i
   const [pageboundLinkBookKey, setPageboundLinkBookKey] = useState<string | null>(null);
   // What the render reads from the book data: which books are loaded, not their configs, which
   // change on every page turn.
-  useBookDataStore((s) => s.getBookData(bookKeys?.[0] ?? '')?.book);
+  const primaryBook = useBookDataStore((s) => s.getBookData(bookKeys?.[0] ?? '')?.book);
   useBookDataStore((s) => s.getBookData(bookKeys?.[0] ?? '')?.bookDoc);
+  const coverThumbnail = useLibraryStore((s) =>
+    primaryBook ? s.coverThumbnails?.get(primaryBook.hash) : undefined,
+  );
   useBookDataStore((s) => (audiobookBookKey ? s.getBookData(audiobookBookKey)?.bookDoc : null));
   const [shareDialogState, setShareDialogState] = useState<{
     book: Book;
@@ -477,7 +480,15 @@ const ReaderContent: React.FC<{ ids?: string; settings: SystemSettings }> = ({ i
   return (
     <div className='reader-content full-height flex'>
       {isAndroidApp && settings.sleepCover && (
-        <SleepCover src={bookData.book.metadata?.coverImageUrl || bookData.book.coverImageUrl} />
+        <SleepCover
+          src={bookData.book.metadata?.coverImageUrl}
+          fallbackSrc={bookData.book.coverImageUrl}
+          thumbnailSrc={
+            coverThumbnail?.coverHash === (bookData.book.coverHash ?? null)
+              ? coverThumbnail?.url
+              : null
+          }
+        />
       )}
       <SideBar />
       <BooksGrid

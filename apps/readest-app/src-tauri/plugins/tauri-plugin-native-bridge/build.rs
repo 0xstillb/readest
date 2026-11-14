@@ -4,6 +4,7 @@ const COMMANDS: &[&str] = &[
     "copy_uri_to_path",
     "render_pdf_cover",
     "save_image_to_gallery",
+    "set_sleep_cover",
     "use_background_audio",
     "install_package",
     "set_system_ui_visibility",

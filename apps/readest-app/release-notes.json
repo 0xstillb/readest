@@ -1,5 +1,11 @@
 {
   "releases": {
+    "0.12.24": {
+      "date": "2026-11-14",
+      "notes": [
+        "Android: Experiment with showing a prepared native book cover when the reader loses focus; sleep-screen compatibility depends on device firmware"
+      ]
+    },
     "0.12.23": {
       "date": "2026-11-14",
       "notes": [

@@ -68,6 +68,12 @@ pub struct SaveImageToGalleryResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SetSleepCoverRequest {
+    pub data_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UseBackgroundAudioRequest {
     pub enabled: bool,
 }
