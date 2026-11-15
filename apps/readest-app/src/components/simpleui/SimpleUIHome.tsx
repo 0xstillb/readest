@@ -20,6 +20,7 @@ import WindowButtons from '@/components/WindowButtons';
 import SimpleUIBottomBar from './SimpleUIBottomBar';
 import useSimpleUIHomeDisplay from './useSimpleUIHomeDisplay';
 import useSimpleUIClockAppearance from './useSimpleUIClockAppearance';
+import SimpleUIHomeToolbar from './SimpleUIHomeToolbar';
 
 const progressPercent = (book: Book) => {
   const [current, total] = book.progress ?? [0, 0];
@@ -39,6 +40,7 @@ export default function SimpleUIHome() {
   const { display } = useSimpleUIHomeDisplay();
   const { appearance: clockAppearance } = useSimpleUIClockAppearance();
   const [now, setNow] = useState(() => new Date());
+  const [toolbarVisible, setToolbarVisible] = useState(false);
 
   useTheme({ systemUIVisible: true, appThemeColor: 'base-100' });
   useUICSS();
@@ -83,6 +85,11 @@ export default function SimpleUIHome() {
         } as CSSProperties
       }
     >
+      {toolbarVisible && (
+        <div id='simpleui-home-toolbar' className='relative z-40 w-full shrink-0'>
+          <SimpleUIHomeToolbar />
+        </div>
+      )}
       <div
         className={`simpleui-home-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 sm:px-8 ${androidTopInset ? 'pt-2' : 'pt-[max(0.5rem,env(safe-area-inset-top))]'}`}
       >
@@ -90,21 +97,30 @@ export default function SimpleUIHome() {
           ref={dragRegionRef}
           className='flex w-full shrink-0 flex-col items-center py-1 text-center'
         >
-          <time className='simpleui-clock tabular-nums'>
-            {new Intl.DateTimeFormat(undefined, {
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false,
-            }).format(now)}
-          </time>
-          <div className='simpleui-clock-date text-lg font-semibold sm:text-xl'>
-            {new Intl.DateTimeFormat(undefined, {
-              weekday: 'short',
-              month: 'short',
-              day: '2-digit',
-              year: 'numeric',
-            }).format(now)}
-          </div>
+          <button
+            type='button'
+            className='flex w-full cursor-pointer flex-col items-center bg-transparent text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
+            aria-label={toolbarVisible ? _('Hide toolbar') : _('Show toolbar')}
+            aria-expanded={toolbarVisible}
+            aria-controls='simpleui-home-toolbar'
+            onClick={() => setToolbarVisible((visible) => !visible)}
+          >
+            <time className='simpleui-clock tabular-nums'>
+              {new Intl.DateTimeFormat(undefined, {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              }).format(now)}
+            </time>
+            <span className='simpleui-clock-date text-lg font-semibold sm:text-xl'>
+              {new Intl.DateTimeFormat(undefined, {
+                weekday: 'short',
+                month: 'short',
+                day: '2-digit',
+                year: 'numeric',
+              }).format(now)}
+            </span>
+          </button>
         </header>
         {appService?.hasWindowBar && (
           <WindowButtons

@@ -2404,6 +2404,8 @@
   "Currently Reading": "กำลังอ่านอยู่",
   "Home display": "การแสดงผลหน้า Home",
   "Home Clock and Date": "นาฬิกาและวันที่หน้า Home",
+  "Show toolbar": "แสดงแถบเครื่องมือ",
+  "Hide toolbar": "ซ่อนแถบเครื่องมือ",
   "Clock size": "ขนาดนาฬิกา",
   "Date size": "ขนาดวันที่",
   "Clock and date spacing": "ระยะห่างนาฬิกากับวันที่",

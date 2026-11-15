@@ -114,6 +114,7 @@ import { Toast } from '@/components/Toast';
 import { createBookGroups, findGroupById, getBreadcrumbs } from './utils/libraryUtils';
 import Spinner from '@/components/Spinner';
 import LibraryHeader from './components/LibraryHeader';
+import { takeHomeLibraryAction } from '@/components/simpleui/homeLibraryAction';
 import Bookshelf from './components/Bookshelf';
 import ImportMenuPopup from './components/ImportMenuPopup';
 import GroupHeader from './components/GroupHeader';
@@ -1946,6 +1947,55 @@ const LibraryPageContent = ({ searchParams }: { searchParams: ReadonlyURLSearchP
     setIsSelectNone(false);
     handleLibraryNavigation(group);
   };
+
+  // The Simple UI home toolbar hands Library-only actions to this page once
+  // the library is ready. Consume before dispatch so remounts cannot repeat an
+  // import or sync, and never trust an arbitrary URL to trigger an action.
+  const runHomeActionRef = useRef<() => void>(() => {});
+  runHomeActionRef.current = () => {
+    const pending = takeHomeLibraryAction();
+    if (!pending) return;
+    switch (pending.action) {
+      case 'import-files':
+        void handleImportBooksFromFiles();
+        break;
+      case 'import-directory':
+        void handleImportBooksFromDirectory();
+        break;
+      case 'import-pasted-text':
+        setShowImportPastedText(true);
+        break;
+      case 'import-web':
+        setShowWebSources(true);
+        break;
+      case 'import-novel':
+        setShowImportNovel(true);
+        break;
+      case 'feeds':
+        handleShowFeeds();
+        break;
+      case 'catalogs':
+        handleShowOPDSDialog();
+        break;
+      case 'select':
+        handleSetSelectMode(true);
+        break;
+      case 'sync':
+        void pullLibrary(pending.fullRefresh, pending.verbose);
+        break;
+    }
+  };
+  useEffect(() => {
+    if (
+      appService &&
+      libraryLoaded &&
+      !checkOpenWithBooks &&
+      !checkLastOpenBooks &&
+      !checkPendingLaunchLink
+    ) {
+      runHomeActionRef.current();
+    }
+  }, [appService, libraryLoaded, checkOpenWithBooks, checkLastOpenBooks, checkPendingLaunchLink]);
 
   if (
     !appService ||

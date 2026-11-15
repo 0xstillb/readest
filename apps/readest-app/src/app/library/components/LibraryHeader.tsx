@@ -34,6 +34,8 @@ import LibrarySearchOptionsMenu from './LibrarySearchOptionsMenu';
 import ViewMenu from './ViewMenu';
 
 interface LibraryHeaderProps {
+  /** The Home page already reserves the status-bar inset around this header. */
+  embeddedInHome?: boolean;
   isSelectMode: boolean;
   isSelectAll: boolean;
   onPullLibrary: () => void;
@@ -57,6 +59,7 @@ interface LibraryHeaderProps {
 }
 
 const LibraryHeader: React.FC<LibraryHeaderProps> = ({
+  embeddedInHome = false,
   isSelectMode,
   isSelectAll,
   onPullLibrary,
@@ -152,9 +155,10 @@ const LibraryHeader: React.FC<LibraryHeaderProps> = ({
         isTrafficLightVisible ? 'pl-16' : 'pl-0 sm:pl-2',
       )}
       style={{
-        marginTop: appService?.hasSafeAreaInset
-          ? `max(${insets.top}px, ${systemUIVisible ? statusBarHeight : 0}px)`
-          : '0px',
+        marginTop:
+          !embeddedInHome && appService?.hasSafeAreaInset
+            ? `max(${insets.top}px, ${systemUIVisible ? statusBarHeight : 0}px)`
+            : '0px',
         // Keep the trailing buttons clear of iPhone Duo's side status strip /
         // camera cutout (#6307); bases match pl-0 / pr-4. Only with a side
         // inset, so responsive sm:pl-2 / sm:pr-6 keep applying otherwise.

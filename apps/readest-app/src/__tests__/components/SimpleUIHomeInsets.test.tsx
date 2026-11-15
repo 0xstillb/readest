@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -25,6 +25,9 @@ vi.mock('@/components/simpleui/useSimpleUIHomeDisplay', () => ({
   default: () => ({ display: 'both' }),
 }));
 vi.mock('@/components/simpleui/SimpleUIBottomBar', () => ({ default: () => null }));
+vi.mock('@/components/simpleui/SimpleUIHomeToolbar', () => ({
+  default: () => <button type='button'>Toolbar action</button>,
+}));
 vi.mock('@/components/settings/SettingsDialog', () => ({ default: () => null }));
 vi.mock('@/components/BookCover', () => ({ default: () => null }));
 vi.mock('@/components/WindowButtons', () => ({ default: () => null }));
@@ -81,5 +84,19 @@ describe('Simple UI home top inset', () => {
     expect(style?.getPropertyValue('--simpleui-clock-scale')).toBe('1.4');
     expect(style?.getPropertyValue('--simpleui-date-scale')).toBe('0.8');
     expect(style?.getPropertyValue('--simpleui-clock-date-gap')).toBe('12px');
+  });
+
+  it('toggles the toolbar from the clock without toggling on toolbar actions', () => {
+    render(<SimpleUIHome />);
+    expect(screen.queryByText('Toolbar action')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show toolbar' }));
+    expect(screen.getByText('Toolbar action')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Hide toolbar' }).getAttribute('aria-expanded')).toBe(
+      'true',
+    );
+    fireEvent.click(screen.getByText('Toolbar action'));
+    expect(screen.getByText('Toolbar action')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide toolbar' }));
+    expect(screen.queryByText('Toolbar action')).toBeNull();
   });
 });
