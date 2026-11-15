@@ -382,6 +382,12 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           border-radius: 0.7rem;
           border: 0 !important;
           box-shadow:
+            0 0 0 1px var(--color-base-content),
+            4px 4px 0 0 var(--color-base-content);
+        }
+        html:not([data-eink='true']) .simpleui-cover-frame,
+        html:not([data-eink='true']) #simpleui-library .bookitem-main {
+          box-shadow:
             1px 2px 2px rgba(0, 0, 0, 0.32),
             3px 8px 10px rgba(0, 0, 0, 0.20),
             7px 17px 22px rgba(0, 0, 0, 0.09);
@@ -437,23 +443,24 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           border: 0 !important;
           box-shadow: none !important;
         }
-        /* Keep SimpleUI covers consistent across normal and e-ink modes. */
-        html[data-eink='true'] .simpleui-cover-frame,
-        html[data-eink='true'] #simpleui-library .bookitem-main {
-          border: 0 !important;
-          box-shadow:
-            1px 2px 2px rgba(0, 0, 0, 0.32),
-            3px 8px 10px rgba(0, 0, 0, 0.20),
-            7px 17px 22px rgba(0, 0, 0, 0.09) !important;
-        }
         /* A black shadow disappears against dark themes; add a soft rim. */
-        html[data-theme$='-dark'] .simpleui-cover-frame,
-        html[data-theme$='-dark'] #simpleui-library .bookitem-main {
+        html:not([data-eink='true'])[data-theme$='-dark'] .simpleui-cover-frame,
+        html:not([data-eink='true'])[data-theme$='-dark'] #simpleui-library .bookitem-main {
           box-shadow:
             0 0 0 1px rgba(255, 255, 255, 0.25),
             1px 2px 3px rgba(0, 0, 0, 0.7),
             4px 9px 16px rgba(0, 0, 0, 0.6),
             0 0 14px rgba(255, 255, 255, 0.12) !important;
+        }
+        /* E-ink needs a sharp, solid offset in both light and dark themes. */
+        html[data-eink='true'] .simpleui-cover-frame,
+        html[data-eink='true'] #simpleui-library .bookitem-main,
+        html[data-eink='true'][data-theme$='-dark'] .simpleui-cover-frame,
+        html[data-eink='true'][data-theme$='-dark'] #simpleui-library .bookitem-main {
+          border: 0 !important;
+          box-shadow:
+            0 0 0 1px var(--color-base-content),
+            4px 4px 0 0 var(--color-base-content) !important;
         }
       `}</style>
     </>

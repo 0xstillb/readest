@@ -1191,14 +1191,13 @@
     border: 1px solid var(--color-base-content) !important;
   }
 
-  /* SimpleUI keeps cover styling consistent when e-ink mode is enabled. */
+  /* SimpleUI uses a sharp, solid shadow for e-ink displays. */
   html[data-eink='true'] #simpleui-library .bookitem-main,
   html[data-eink='true'] .simpleui-home .simpleui-cover-frame {
     border: 0 !important;
     box-shadow:
-      1px 2px 2px rgba(0, 0, 0, 0.32),
-      3px 8px 10px rgba(0, 0, 0, 0.2),
-      7px 17px 22px rgba(0, 0, 0, 0.09) !important;
+      0 0 0 1px var(--color-base-content),
+      4px 4px 0 0 var(--color-base-content) !important;
   }
   html[data-eink='true'] #simpleui-library .bookitem-main .fallback-cover {
     border: 0 !important;
