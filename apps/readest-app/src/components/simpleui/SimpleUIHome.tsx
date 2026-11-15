@@ -50,20 +50,27 @@ export default function SimpleUIHome() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const activeBooks = useMemo(
-    () =>
-      library
-        .filter(
-          (book) =>
-            !book.deletedAt && (book.readingStatus === 'reading' || progressPercent(book) > 0),
-        )
-        .sort(
-          (a, b) =>
-            Number(b.readingStatus === 'reading') - Number(a.readingStatus === 'reading') ||
-            b.updatedAt - a.updatedAt,
-        ),
-    [library],
-  );
+  const activeBooks = useMemo(() => {
+    const lastOpened = settings.lastOpenBooks ?? [];
+    return library
+      .filter(
+        (book) =>
+          !book.deletedAt &&
+          (lastOpened.includes(book.hash) ||
+            book.readingStatus === 'reading' ||
+            ((book.progress?.[0] ?? 0) > 0 && (book.progress?.[1] ?? 0) > 0)),
+      )
+      .sort((a, b) => {
+        const indexA = lastOpened.indexOf(a.hash);
+        const indexB = lastOpened.indexOf(b.hash);
+        return (
+          (indexA < 0 ? Number.MAX_SAFE_INTEGER : indexA) -
+            (indexB < 0 ? Number.MAX_SAFE_INTEGER : indexB) ||
+          Number(b.readingStatus === 'reading') - Number(a.readingStatus === 'reading') ||
+          b.updatedAt - a.updatedAt
+        );
+      });
+  }, [library, settings.lastOpenBooks]);
   const currentBook = activeBooks[0];
   const recentBooks = activeBooks.slice(currentBook ? 1 : 0, (currentBook ? 1 : 0) + 4);
 

@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  library: [] as Array<Record<string, unknown>>,
+  lastOpenBooks: [] as string[],
   appService: { isAndroidApp: true, hasSafeAreaInset: true },
   theme: {
     safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
@@ -16,9 +18,12 @@ vi.mock('@/hooks/useLibrary', () => ({ useLibrary: () => ({ libraryLoaded: true 
 vi.mock('@/hooks/useTheme', () => ({ useTheme: () => ({}) }));
 vi.mock('@/hooks/useTranslation', () => ({ useTranslation: () => (text: string) => text }));
 vi.mock('@/hooks/useUICSS', () => ({ useUICSS: () => {} }));
-vi.mock('@/store/libraryStore', () => ({ useLibraryStore: () => ({ library: [] }) }));
+vi.mock('@/store/libraryStore', () => ({ useLibraryStore: () => ({ library: mocks.library }) }));
 vi.mock('@/store/settingsStore', () => ({
-  useSettingsStore: () => ({ settings: {}, isSettingsDialogOpen: false }),
+  useSettingsStore: () => ({
+    settings: { lastOpenBooks: mocks.lastOpenBooks },
+    isSettingsDialogOpen: false,
+  }),
 }));
 vi.mock('@/store/themeStore', () => ({ useThemeStore: () => mocks.theme }));
 vi.mock('@/components/simpleui/useSimpleUIHomeDisplay', () => ({
@@ -37,6 +42,8 @@ import SimpleUIHome from '@/components/simpleui/SimpleUIHome';
 
 beforeEach(() => {
   window.localStorage.clear();
+  mocks.library = [];
+  mocks.lastOpenBooks = [];
   mocks.appService = { isAndroidApp: true, hasSafeAreaInset: true };
   mocks.theme = {
     safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
@@ -98,5 +105,30 @@ describe('Simple UI home top inset', () => {
     expect(screen.getByText('Toolbar action')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Hide toolbar' }));
     expect(screen.queryByText('Toolbar action')).toBeNull();
+  });
+
+  it('shows a book whose real progress rounds down to zero percent', () => {
+    mocks.library = [{ hash: 'long', title: 'Long book', progress: [1, 1000], updatedAt: 1 }];
+    render(<SimpleUIHome />);
+    expect(screen.getByText('Long book')).toBeTruthy();
+    expect(screen.getByText('Continue Reading')).toBeTruthy();
+  });
+
+  it('prefers the most recently opened book even before progress is saved', () => {
+    mocks.library = [
+      {
+        hash: 'older',
+        title: 'Older book',
+        readingStatus: 'reading',
+        progress: [5, 100],
+        updatedAt: 100,
+      },
+      { hash: 'latest', title: 'Latest book', progress: [0, 0], updatedAt: 1 },
+    ];
+    mocks.lastOpenBooks = ['latest'];
+    const { container } = render(<SimpleUIHome />);
+    expect(container.querySelector('.simpleui-current-reading')?.textContent).toContain(
+      'Latest book',
+    );
   });
 });
