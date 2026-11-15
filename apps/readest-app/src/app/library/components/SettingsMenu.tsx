@@ -52,6 +52,9 @@ import GrimmLinkShelfSyncStatus from '@/components/settings/integrations/GrimmLi
 import useSimpleUIMode from '@/components/simpleui/useSimpleUIMode';
 import useSimpleUIBottomBarIconSize from '@/components/simpleui/useSimpleUIBottomBarIconSize';
 import useSimpleUIHomeDisplay from '@/components/simpleui/useSimpleUIHomeDisplay';
+import useSimpleUIClockAppearance, {
+  CLOCK_APPEARANCE_LIMITS,
+} from '@/components/simpleui/useSimpleUIClockAppearance';
 import useSimpleUILibraryScroll from '@/components/simpleui/useSimpleUILibraryScroll';
 
 interface SettingsMenuProps {
@@ -94,6 +97,11 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   } = useSimpleUIBottomBarIconSize();
   const { display: simpleUIHomeDisplay, setDisplay: setSimpleUIHomeDisplay } =
     useSimpleUIHomeDisplay();
+  const {
+    appearance: clockAppearance,
+    setAppearance: setClockAppearance,
+    resetAppearance,
+  } = useSimpleUIClockAppearance();
   const { enabled: simpleUILibraryScroll, setEnabled: setSimpleUILibraryScroll } =
     useSimpleUILibraryScroll();
 
@@ -451,6 +459,50 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
                 <option value='current'>{_('Currently Reading only')}</option>
                 <option value='both'>{_('Currently Reading and Recently read')}</option>
               </select>
+            </div>
+          </MenuItem>
+          <MenuItem label={_('Home Clock and Date')}>
+            <div className='space-y-4 px-3 pb-3 pt-1'>
+              {(
+                [
+                  { key: 'clockSize', label: _('Clock size'), unit: '%' },
+                  { key: 'dateSize', label: _('Date size'), unit: '%' },
+                  { key: 'gap', label: _('Clock and date spacing'), unit: 'px' },
+                ] as const
+              ).map(({ key, label, unit }) => (
+                <div key={key}>
+                  <div className='mb-2 flex items-center justify-between text-xs'>
+                    <label htmlFor={`simpleui-clock-${key}`}>{label}</label>
+                    <output htmlFor={`simpleui-clock-${key}`}>
+                      {clockAppearance[key]}
+                      {unit}
+                    </output>
+                  </div>
+                  <input
+                    id={`simpleui-clock-${key}`}
+                    type='range'
+                    min={CLOCK_APPEARANCE_LIMITS[key].min}
+                    max={CLOCK_APPEARANCE_LIMITS[key].max}
+                    step={CLOCK_APPEARANCE_LIMITS[key].step}
+                    value={clockAppearance[key]}
+                    onChange={(event) => setClockAppearance(key, Number(event.currentTarget.value))}
+                    className='range range-sm w-full'
+                  />
+                  <div className='mt-1 flex justify-between text-[10px] text-base-content/60'>
+                    <span>
+                      {CLOCK_APPEARANCE_LIMITS[key].min}
+                      {unit}
+                    </span>
+                    <span>
+                      {CLOCK_APPEARANCE_LIMITS[key].max}
+                      {unit}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              <button type='button' className='btn btn-sm w-full' onClick={resetAppearance}>
+                {_('Reset')}
+              </button>
             </div>
           </MenuItem>
           <MenuItem label={_('Bottom Bar Icon Size')}>

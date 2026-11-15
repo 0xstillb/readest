@@ -19,6 +19,7 @@ import BookCover from '@/components/BookCover';
 import WindowButtons from '@/components/WindowButtons';
 import SimpleUIBottomBar from './SimpleUIBottomBar';
 import useSimpleUIHomeDisplay from './useSimpleUIHomeDisplay';
+import useSimpleUIClockAppearance from './useSimpleUIClockAppearance';
 
 const progressPercent = (book: Book) => {
   const [current, total] = book.progress ?? [0, 0];
@@ -36,6 +37,7 @@ export default function SimpleUIHome() {
   const { safeAreaInsets, statusBarHeight, systemUIVisible } = useThemeStore();
   const androidTopInset = appService?.isAndroidApp && appService.hasSafeAreaInset;
   const { display } = useSimpleUIHomeDisplay();
+  const { appearance: clockAppearance } = useSimpleUIClockAppearance();
   const [now, setNow] = useState(() => new Date());
 
   useTheme({ systemUIVisible: true, appThemeColor: 'base-100' });
@@ -72,6 +74,9 @@ export default function SimpleUIHome() {
       style={
         {
           '--simpleui-safe-bottom': `${safeAreaInsets?.bottom ?? 0}px`,
+          '--simpleui-clock-scale': clockAppearance.clockSize / 100,
+          '--simpleui-date-scale': clockAppearance.dateSize / 100,
+          '--simpleui-clock-date-gap': `${clockAppearance.gap}px`,
           ...(androidTopInset && {
             paddingTop: Math.max(safeAreaInsets?.top ?? 0, systemUIVisible ? statusBarHeight : 0),
           }),
@@ -92,7 +97,7 @@ export default function SimpleUIHome() {
               hour12: false,
             }).format(now)}
           </time>
-          <div className='mt-0 text-lg font-semibold sm:text-xl'>
+          <div className='simpleui-clock-date text-lg font-semibold sm:text-xl'>
             {new Intl.DateTimeFormat(undefined, {
               weekday: 'short',
               month: 'short',

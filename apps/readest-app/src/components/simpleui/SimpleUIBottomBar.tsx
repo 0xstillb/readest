@@ -220,9 +220,21 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
         .simpleui-clock {
           font-family: 'Sunday Market', sans-serif;
           font-weight: 400;
-          font-size: clamp(3.5rem, 10dvh, 7rem);
+          font-size: min(calc(clamp(3.5rem, 10dvh, 7rem) * var(--simpleui-clock-scale, 1)), 40vw);
           line-height: 1;
           letter-spacing: 0.06em;
+        }
+        .simpleui-home .simpleui-clock-date {
+          font-size: calc(1.125rem * var(--simpleui-date-scale, 1));
+          line-height: calc(1.75rem * var(--simpleui-date-scale, 1));
+          margin-top: var(--simpleui-clock-date-gap, 0px);
+          max-width: 100%;
+          overflow-wrap: anywhere;
+        }
+        @media (min-width: 640px) {
+          .simpleui-home .simpleui-clock-date {
+            font-size: calc(1.25rem * var(--simpleui-date-scale, 1));
+          }
         }
         /* The home page scrolls its own content, so it has to clear the dock
            and the bottom inset the same way the library does. */
@@ -348,7 +360,7 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
         }
         @media (max-height: 760px) {
           .simpleui-clock {
-            font-size: clamp(3rem, 10dvh, 5.25rem);
+            font-size: min(calc(clamp(3rem, 10dvh, 5.25rem) * var(--simpleui-clock-scale, 1)), 40vw);
           }
           .simpleui-current-copy > div:first-child {
             margin-bottom: 0.25rem !important;

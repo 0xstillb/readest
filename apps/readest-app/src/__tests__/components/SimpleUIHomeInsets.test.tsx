@@ -33,6 +33,7 @@ vi.mock('@/utils/nav', () => ({ navigateToReader: () => {} }));
 import SimpleUIHome from '@/components/simpleui/SimpleUIHome';
 
 beforeEach(() => {
+  window.localStorage.clear();
   mocks.appService = { isAndroidApp: true, hasSafeAreaInset: true };
   mocks.theme = {
     safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
@@ -68,5 +69,17 @@ describe('Simple UI home top inset', () => {
     expect(container.querySelector('.simpleui-home-content')?.className).toContain(
       'pt-[max(0.5rem,env(safe-area-inset-top))]',
     );
+  });
+
+  it('applies saved clock, date, and spacing settings to home', () => {
+    window.localStorage.setItem(
+      'readest.simpleui.clockAppearance',
+      JSON.stringify({ clockSize: 140, dateSize: 80, gap: 12 }),
+    );
+    const { container } = render(<SimpleUIHome />);
+    const style = container.querySelector('main')?.style;
+    expect(style?.getPropertyValue('--simpleui-clock-scale')).toBe('1.4');
+    expect(style?.getPropertyValue('--simpleui-date-scale')).toBe('0.8');
+    expect(style?.getPropertyValue('--simpleui-clock-date-gap')).toBe('12px');
   });
 });
