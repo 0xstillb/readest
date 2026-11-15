@@ -358,6 +358,23 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           flex: 1 0 auto;
           align-content: center;
         }
+        /* Share the available height between the current and recent covers. */
+        .simpleui-home[data-home-display='both'][data-has-recent='true'] {
+          --simpleui-current-cover-width: min(32vw, 22dvh, 15rem);
+        }
+        .simpleui-home[data-home-display='both'][data-has-recent='true'] .simpleui-current-reading {
+          grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+        }
+        .simpleui-home[data-home-display='both'][data-has-recent='true'] .simpleui-current-copy > h1 {
+          display: -webkit-box;
+          overflow: hidden;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 3;
+        }
+        .simpleui-home[data-home-display='both'][data-has-recent='true'] .simpleui-recent-grid button {
+          width: min(100%, 12dvh);
+          justify-self: center;
+        }
         @media (max-height: 760px) {
           .simpleui-clock {
             font-size: min(calc(clamp(3rem, 10dvh, 5.25rem) * var(--simpleui-clock-scale, 1)), 40vw);
@@ -404,6 +421,14 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
           }
           .simpleui-home .simpleui-current-copy {
             width: min(100%, 32rem);
+          }
+          .simpleui-home[data-home-display='both'][data-has-recent='true'] .simpleui-current-reading {
+            grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+            column-gap: 0.75rem;
+            justify-items: stretch;
+          }
+          .simpleui-home[data-home-display='both'][data-has-recent='true'] .simpleui-current-cover {
+            width: min(100%, var(--simpleui-current-cover-width));
           }
         }
         @media (min-width: 441px) and (max-width: 540px) {

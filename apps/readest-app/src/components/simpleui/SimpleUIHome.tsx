@@ -80,6 +80,7 @@ export default function SimpleUIHome() {
     <main
       className='simpleui-home full-height flex flex-col overflow-hidden bg-base-100 text-base-content'
       data-home-display={display}
+      data-has-recent={recentBooks.length > 0}
       style={
         {
           '--simpleui-safe-bottom': `${safeAreaInsets?.bottom ?? 0}px`,
@@ -206,7 +207,7 @@ export default function SimpleUIHome() {
         )}
 
         {display === 'both' && recentBooks.length > 0 && (
-          <section className='mx-auto mt-2 w-full max-w-3xl shrink-0 pb-5'>
+          <section className='simpleui-recent-reading mx-auto mt-2 w-full max-w-3xl shrink-0 pb-5'>
             <div className='mb-2 flex shrink-0 items-center'>
               <h2 className='text-base font-bold'>{_('Recently read')}</h2>
             </div>
