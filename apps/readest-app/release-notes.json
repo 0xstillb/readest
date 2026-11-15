@@ -1,5 +1,12 @@
 {
   "releases": {
+    "0.12.30": {
+      "date": "2026-11-15",
+      "notes": [
+        "Simple UI: Fix Continue Reading button contrast in E-ink mode",
+        "Simple UI: Improve cover separation in dark themes"
+      ]
+    },
     "0.12.29": {
       "date": "2026-11-15",
       "notes": [

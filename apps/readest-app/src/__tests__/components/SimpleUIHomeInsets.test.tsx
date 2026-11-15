@@ -112,6 +112,9 @@ describe('Simple UI home top inset', () => {
     render(<SimpleUIHome />);
     expect(screen.getByText('Long book')).toBeTruthy();
     expect(screen.getByText('Continue Reading')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Continue Reading' }).className).toContain(
+      'eink-contrast',
+    );
   });
 
   it('prefers the most recently opened book even before progress is saved', () => {

@@ -180,7 +180,7 @@ export default function SimpleUIHome() {
               <button
                 type='button'
                 onClick={() => openBook(currentBook)}
-                className='simpleui-continue-reading mt-4 flex w-full cursor-pointer items-center justify-between text-left text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
+                className='simpleui-continue-reading eink-contrast mt-4 flex w-full cursor-pointer items-center justify-between text-left text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current'
               >
                 <span>{_('Continue Reading')}</span>
                 <svg

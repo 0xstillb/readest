@@ -446,6 +446,15 @@ export default function SimpleUIBottomBar({ active }: { active: 'home' | 'librar
             3px 8px 10px rgba(0, 0, 0, 0.20),
             7px 17px 22px rgba(0, 0, 0, 0.09) !important;
         }
+        /* A black shadow disappears against dark themes; add a soft rim. */
+        html[data-theme$='-dark'] .simpleui-cover-frame,
+        html[data-theme$='-dark'] #simpleui-library .bookitem-main {
+          box-shadow:
+            0 0 0 1px rgba(255, 255, 255, 0.25),
+            1px 2px 3px rgba(0, 0, 0, 0.7),
+            4px 9px 16px rgba(0, 0, 0, 0.6),
+            0 0 14px rgba(255, 255, 255, 0.12) !important;
+        }
       `}</style>
     </>
   );
